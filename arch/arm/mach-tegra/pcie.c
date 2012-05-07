@@ -330,12 +330,15 @@ struct tegra_pcie_info {
 	struct tegra_pci_platform_data *plat_data;
 };
 
+// Riemer 07-05-2012: Not used at this very moment?
+#if 0
 #define pmc_writel(value, reg) \
 	__raw_writel(value, (u32)reg_pmc_base + (reg))
 #define pmc_readl(reg) \
 	__raw_readl((u32)reg_pmc_base + (reg))
 
 static void __iomem *reg_pmc_base = IO_ADDRESS(TEGRA_PMC_BASE);
+#endif
 
 static struct tegra_pcie_info tegra_pcie = {
 	.res_mmio = {
@@ -832,6 +835,8 @@ static void tegra_pcie_enable_controller(void)
 	return;
 }
 
+// Riemer 07-05-2012: Not used at this very moment?
+#if 0
 static void tegra_pcie_xclk_clamp(bool clamp)
 {
 	u32 reg;
@@ -843,6 +848,7 @@ static void tegra_pcie_xclk_clamp(bool clamp)
 
 	pmc_writel(reg, PMC_SCRATCH42);
 }
+#endif
 
 static int tegra_pci_enable_regulators(void)
 {
@@ -1176,7 +1182,8 @@ static void __init tegra_pcie_add_port(int index, u32 offset, u32 reset_reg)
 	memset(pp->res, 0, sizeof(pp->res));
 }
 
-static int tegra_pcie_init(void)
+// Riemer 07-05-2012: Added __init
+static int __init tegra_pcie_init(void)
 {
 	int err = 0;
 	int port;
@@ -1206,7 +1213,8 @@ static int tegra_pcie_init(void)
 	return err;
 }
 
-static int tegra_pci_probe(struct platform_device *pdev)
+// Riemer 07-05-2012: Added __init
+static int __init tegra_pci_probe(struct platform_device *pdev)
 {
 	tegra_pcie.plat_data = pdev->dev.platform_data;
 	dev_dbg(&pdev->dev, "PCIE.C: %s : _port_status[0] %d\n",
@@ -1235,7 +1243,8 @@ static int tegra_pci_remove(struct platform_device *pdev)
 }
 
 static struct platform_driver tegra_pci_driver = {
-	.probe   = tegra_pci_probe,
+// Riemer 07-05-2012: Removes probe
+//	.probe   = tegra_pci_probe,
 	.remove  = tegra_pci_remove,
 #ifdef CONFIG_PM
 	.suspend = tegra_pci_suspend,
@@ -1249,7 +1258,9 @@ static struct platform_driver tegra_pci_driver = {
 
 static int __init tegra_pci_init_driver(void)
 {
-	return platform_driver_register(&tegra_pci_driver);
+	// Riemer 07-05-2012: Instead of *_register use *_probe
+	//return platform_driver_register(&tegra_pci_driver);
+	return platform_driver_probe( &tegra_pci_driver, tegra_pci_probe);
 }
 
 static void __exit tegra_pci_exit_driver(void)
