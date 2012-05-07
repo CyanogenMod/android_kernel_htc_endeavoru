@@ -612,7 +612,8 @@ static void enterprise_gyro_diag_init(void)
 
 }
 
-static void enterprise_mpuirq_init(void)
+// Riemer 07-05-2012: Added __init
+static void __init enterprise_mpuirq_init(void)
 {
 	int ret = 0;
 
