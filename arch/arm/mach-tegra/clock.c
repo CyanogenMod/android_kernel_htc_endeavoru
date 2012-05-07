@@ -158,6 +158,9 @@ unsigned long clk_get_rate(struct clk *c)
 	unsigned long flags;
 	unsigned long rate;
 
+	if (!c)
+		return -EINVAL;
+
 	clk_lock_save(c, &flags);
 
 	rate = clk_get_rate_locked(c);
@@ -338,6 +341,9 @@ int clk_set_parent_locked(struct clk *c, struct clk *parent)
 	unsigned long new_rate;
 	unsigned long old_rate;
 	bool disable = false;
+
+	if (!c || !parent)
+		return -EINVAL;
 
 	if (!c->ops || !c->ops->set_parent) {
 		ret = -ENOSYS;
