@@ -439,6 +439,11 @@ config TOUCHSCREEN_SYNAPTICS_3k
 	  To compile this driver as a module, choose M here: the
 	  module will be called synaptics_3k.
 
+config TOUCHSCREEN_SYNAPTICS_SWEEP2WAKE
+        tristate "Sweep2Wake for SYNAPTICS_3k based touchscreens"
+        depends on TOUCHSCREEN_SYNAPTICS_3k
+        default n
+
 config TOUCHSCREEN_UCB1400
 	tristate "Philips UCB1400 touchscreen"
 	depends on AC97_BUS
