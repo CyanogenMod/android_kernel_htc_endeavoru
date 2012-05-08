@@ -604,5 +604,11 @@ config ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
 	help
 	  Append PMIC status bits to end of /proc/last_kmsg for
 	  checking the boot / reset reason in detail
+
+config CMDLINE_OPTIONS
+	bool "Enable cmdline options command parsing"
+	default n
+	help
+	  This enables the parsing of cmdline options.
 endif
 
