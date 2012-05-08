@@ -1725,23 +1725,23 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 				//left->right
 				if ((ts->finger_count == 1) && (scr_suspended == true) && (s2w_switch > 0)) {
 					prevx = 30;
-					nextx = 175;
+					nextx = 200;
 					if ((barrier[0] == true) ||
 					   ((finger_data[i][0] > prevx) &&
 					    (finger_data[i][0] < nextx) &&
-					    (finger_data[i][1] > 1290))) {
+					    (finger_data[i][1] > 1280))) {
 						prevx = nextx;
 						nextx = 470;
 						barrier[0] = true;
 						if ((barrier[1] == true) ||
 						   ((finger_data[i][0] > prevx) &&
 						    (finger_data[i][0] < nextx) &&
-						    (finger_data[i][1] > 1290))) {
+						    (finger_data[i][1] > 1280))) {
 							prevx = nextx;
 							barrier[1] = true;
 							if ((finger_data[i][0] > prevx) &&
-							    (finger_data[i][1] > 1290)) {
-								if (finger_data[i][0] > 600) {
+							    (finger_data[i][1] > 1280)) {
+								if (finger_data[i][0] > 545) {
 									if (exec_count) {
 										printk(KERN_INFO "[sweep2wake]: ON");
 										sweep2wake_pwrtrigger();
@@ -1756,23 +1756,23 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 				} else if ((ts->finger_count == 1) && (scr_suspended == false) && (s2w_switch > 0)) {
 					scr_on_touch=true;
 					prevx = 700;
-					nextx = 570;
+					nextx = 545;
 					if ((barrier[0] == true) ||
 					   ((finger_data[i][0] < prevx) &&
 					    (finger_data[i][0] > nextx) &&
-					    ( finger_data[i][1] > 1290))) {
+					    ( finger_data[i][1] > 1280))) {
 						prevx = nextx;
 						nextx = 290;
 						barrier[0] = true;
 						if ((barrier[1] == true) ||
 						   ((finger_data[i][0] < prevx) &&
 						    (finger_data[i][0] > nextx) &&
-						    (finger_data[i][1] > 1290))) {
+						    (finger_data[i][1] > 1280))) {
 							prevx = nextx;
 							barrier[1] = true;
 							if ((finger_data[i][0] < prevx) &&
-							    (finger_data[i][1] > 1290)) {
-								if (finger_data[i][0] < 165) {
+							    (finger_data[i][1] > 1280)) {
+								if (finger_data[i][0] < 200) {
 									if (exec_count) {
 										printk(KERN_INFO "[sweep2wake]: OFF");
 										sweep2wake_pwrtrigger();
