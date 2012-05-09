@@ -1662,7 +1662,6 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 							}
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2WAKE
-							printk(KERN_INFO "[sweep2wake]: X %i, Y %i", finger_data[i][0], finger_data[i][1]);
 							//left->right
 							if ((ts->finger_count == 1) && (scr_suspended == true) && (s2w_switch > 0)) {
 								prevx = 30;
