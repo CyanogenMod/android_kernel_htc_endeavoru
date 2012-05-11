@@ -102,6 +102,6 @@ static inline int nct1008_thermal_set_shutdown_temp(struct nct1008_data *data,
 { return -EINVAL; }
 #endif
 
-struct nct1008_data *get_pwr_data();
+struct nct1008_data *get_pwr_data(void);
 
 #endif /* _LINUX_NCT1008_H */
