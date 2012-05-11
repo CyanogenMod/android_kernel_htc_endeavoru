@@ -57,7 +57,7 @@ static struct regulator *v_lcmio_1v8 = NULL;
 
 static struct regulator *enterprise_hdmi_reg = NULL;
 static struct regulator *enterprise_hdmi_pll = NULL;
-static struct regulator *enterprise_hdmi_vddio = NULL;
+/*static struct regulator *enterprise_hdmi_vddio = NULL;*/
 #endif
 
 #define LCM_TE			TEGRA_GPIO_PJ1
@@ -90,22 +90,27 @@ static struct gpio panel_init_gpios[] = {
     {MHL_3V3_EN,    GPIOF_OUT_INIT_HIGH,    "mhl_3v3_en"},
 };
 
+#if 0
 static struct gpio enterprise_gpios[] = {
 	{MHL_1V2_EN,	GPIOF_OUT_INIT_LOW,	"mhl_1v2_en"},
 	{MHL_3V3_EN,	GPIOF_OUT_INIT_LOW,	"mhl_3v3_en"},
 };
+#endif
 
-static atomic_t sd_brightness = ATOMIC_INIT(255);
+//Riemer 11-may-2012: Commented, as the result is not used.
+//static atomic_t sd_brightness = ATOMIC_INIT(255);
 
 /*global varible for work around*/
 static bool g_display_on = true;
 
+#if 0
 static void mhl_gpio_switch(int on)
 {
 	int i = 0;
 	for(i = 0 ; i < ARRAY_SIZE(enterprise_gpios) ; i++)
 		gpio_set_value(enterprise_gpios[i].gpio, on);
 }
+#endif
 
 #define BACKLIGHT_MAX 255
 
@@ -147,7 +152,8 @@ static unsigned char shrink_pwm(int val)
 
 static int enterprise_backlight_notify(struct device *unused, int brightness)
 {
-	int cur_sd_brightness = atomic_read(&sd_brightness);
+	//Riemer 11-may-2012: Commented, as the result is not used.
+	//int cur_sd_brightness = atomic_read(&sd_brightness);
 
 	if (brightness > 0)
 		brightness = shrink_pwm(brightness);
@@ -277,10 +283,12 @@ static struct resource enterprise_disp2_resources[] = {
 	},
 };
 
+#if 0
 static struct tegra_dc_sd_settings enterprise_sd_settings = {
 	.enable = 0, /* Normal mode operation */
 	.bl_device = &enterprise_disp1_backlight_device,
 };
+#endif
 
 static struct tegra_fb_data enterprise_hdmi_fb_data = {
 	.win		= 0,
@@ -495,7 +503,7 @@ static u8 init_cmd[] = {0xB9,0xFF,0x83,0x92};
 static u8 eq_cmd[] = {0xD5,0x00,0x00,0x02};
 static u8 ptbf_cmd[] = {0xBF,0x05,0x60,0x02};
 static u8 pwm_freq_hx[] = {0xC9,0x1F,0x01};
-static u8 porch[] = {0x3B,0x03,0x03,0x07,0x02,0x02};
+/*static u8 porch[] = {0x3B,0x03,0x03,0x07,0x02,0x02};*/
 static u8 flash_issue[] = {0xC6,0x35,0x00,0x00,0x04};
 
 static struct tegra_dsi_cmd osc_off_cmd[]= {
@@ -2731,9 +2739,10 @@ struct early_suspend enterprise_panel_onchg_suspender;
 
 static void enterprise_panel_early_suspend(struct early_suspend *h)
 {
-	DISP_INFO_IN();
-
 	struct backlight_device *bl = platform_get_drvdata(&enterprise_disp1_backlight_device);
+	
+	DISP_INFO_IN();
+	
 	if (bl && bl->props.bkl_on) {
 		bl->props.bkl_on = 0;
 		del_timer_sync(&bkl_timer);
@@ -2751,9 +2760,10 @@ static void enterprise_panel_early_suspend(struct early_suspend *h)
 
 static void enterprise_panel_late_resume(struct early_suspend *h)
 {
+	unsigned i;
+
 	DISP_INFO_IN();
 
-	unsigned i;
 	for (i = 0; i < num_registered_fb; i++)
 		fb_blank(registered_fb[i], FB_BLANK_UNBLANK);
 
@@ -2764,9 +2774,10 @@ static void enterprise_panel_late_resume(struct early_suspend *h)
 #ifdef CONFIG_HTC_ONMODE_CHARGING
 static void enterprise_panel_onchg_suspend(struct early_suspend *h)
 {
+	struct backlight_device *bl = platform_get_drvdata(&enterprise_disp1_backlight_device);
+
 	DISP_INFO_IN();
 
-	struct backlight_device *bl = platform_get_drvdata(&enterprise_disp1_backlight_device);
 	if (bl && bl->props.bkl_on) {
 		bl->props.bkl_on = 0;
 		del_timer_sync(&bkl_timer);
@@ -2783,7 +2794,6 @@ static void enterprise_panel_onchg_suspend(struct early_suspend *h)
 static void enterprise_panel_onchg_resume(struct early_suspend *h)
 {
 	DISP_INFO_IN();
-	unsigned i;
 
 	fb_blank(registered_fb[0], FB_BLANK_UNBLANK);
 
@@ -2797,6 +2807,8 @@ int __init enterprise_panel_init(void)
 {
 	int err;
 	struct resource __maybe_unused *res;
+	int i;
+	int pin_count;
 
 
 	if (board_mfg_mode() == 5 && !(board_zchg_mode() & 0x1)) {
@@ -2816,13 +2828,13 @@ int __init enterprise_panel_init(void)
 		DISP_ERR("gpio request failed\n");
 		goto failed;
 	}
-	int i = 0;
-	int pin_count = ARRAY_SIZE(panel_init_gpios);
+
+	pin_count = ARRAY_SIZE(panel_init_gpios);
 	for (i = 0; i < pin_count; i++) {
 		tegra_gpio_enable(panel_init_gpios[i].gpio);
 	}
 
-	DISP_INFO_LN("panel id 0x%08x\n", g_panel_id);
+	DISP_INFO_LN("panel id 0x%lx\n", g_panel_id);
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	enterprise_panel_early_suspender.suspend = enterprise_panel_early_suspend;
@@ -3001,7 +3013,7 @@ int __init enterprise_panel_init(void)
 				ARRAY_SIZE(enterprise_bl_devices));
 	INIT_WORK(&bkl_work, bkl_do_work);
 	bkl_wq = create_workqueue("bkl_wq");
-	setup_timer(&bkl_timer, bkl_update, NULL);
+	setup_timer(&bkl_timer, bkl_update, 0);
 
 failed:
 	DISP_INFO_OUT();
