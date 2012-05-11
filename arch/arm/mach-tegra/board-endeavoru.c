@@ -102,7 +102,7 @@
 
 #define PMC_WAKE_STATUS         0x14
 #define POWER_WAKEUP_ENR 7
-extern global_wakeup_state;
+extern int global_wakeup_state;
 extern int resume_from_deep_suspend;
 /* TI 128x Bluetooth begin */
 #include <linux/ti_wilink_st.h>
@@ -151,7 +151,7 @@ static struct tegra_thermal_data thermal_data = {
 #define BOOT_DEBUG_LOG_LEAVE(fn) \
 	printk(KERN_NOTICE "[BOOT_LOG] Leaving %s\n", fn);
 
-static int enrkey_wakeup()
+static int enrkey_wakeup(void)
 {
 	if (resume_from_deep_suspend) {
 		unsigned long status =
@@ -218,10 +218,9 @@ int __init A_PROJECT_keys_init(void)
 
 static int mhl_sii_power(int on)
 {
-	pr_info("[DISP]%s(%d) IN\n", __func__, __LINE__);
-
 	int rc = 0;
-	int err = 0;
+	
+	pr_info("[DISP]%s(%d) IN\n", __func__, __LINE__);
 
 	switch (on) {
 		case 0:
@@ -507,6 +506,7 @@ static struct resource enterprise_bcm4329_rfkill_resources[] = {
 	},
 };
 
+// TODO unused?
 static struct platform_device enterprise_bcm4329_rfkill_device = {
 	.name = "bcm4329_rfkill",
 	.id		= -1,
@@ -686,6 +686,7 @@ static struct usb_ether_platform_data rndis_pdata = {
 	.vendorDescr = USB_MANUFACTURER_NAME,
 };
 
+//TODO unused? Should probably be added as device
 static struct platform_device rndis_device = {
 	.name   = "rndis",
 	.id     = -1,
@@ -698,46 +699,46 @@ static struct platform_device rndis_device = {
 static struct tegra_i2c_platform_data enterprise_i2c1_platform_data = {
 	.adapter_nr	= 0,
 	.bus_count	= 1,
-	.bus_clk_rate	= { 384000, 0 },
-	.scl_gpio		= {TEGRA_GPIO_PC4, 0},
-	.sda_gpio		= {TEGRA_GPIO_PC5, 0},
+	.bus_clk_rate	= { 384000 },
+	.scl_gpio		= {TEGRA_GPIO_PC4 },
+	.sda_gpio		= {TEGRA_GPIO_PC5 },
 	.arb_recovery = arb_lost_recovery,
 };
 
 static struct tegra_i2c_platform_data enterprise_i2c2_platform_data = {
 	.adapter_nr	= 1,
 	.bus_count	= 1,
-	.bus_clk_rate	= { 384000, 0 },
+	.bus_clk_rate	= { 384000 },
 	.is_clkon_always = true,
-	.scl_gpio		= {TEGRA_GPIO_PT5, 0},
-	.sda_gpio		= {TEGRA_GPIO_PT6, 0},
+	.scl_gpio		= {TEGRA_GPIO_PT5 },
+	.sda_gpio		= {TEGRA_GPIO_PT6 },
 	.arb_recovery = arb_lost_recovery,
 };
 
 static struct tegra_i2c_platform_data enterprise_i2c3_platform_data = {
 	.adapter_nr	= 2,
 	.bus_count	= 1,
-	.bus_clk_rate	= { 384000, 0 },
-	.scl_gpio		= {TEGRA_GPIO_PBB1, 0},
-	.sda_gpio		= {TEGRA_GPIO_PBB2, 0},
+	.bus_clk_rate	= { 384000 },
+	.scl_gpio		= {TEGRA_GPIO_PBB1 },
+	.sda_gpio		= {TEGRA_GPIO_PBB2 },
 	.arb_recovery = arb_lost_recovery,
 };
 
 static struct tegra_i2c_platform_data enterprise_i2c4_platform_data = {
 	.adapter_nr	= 3,
 	.bus_count	= 1,
-	.bus_clk_rate	= { 100000, 0 },
-	.scl_gpio		= {TEGRA_GPIO_PV4, 0},
-	.sda_gpio		= {TEGRA_GPIO_PV5, 0},
+	.bus_clk_rate	= { 100000 },
+	.scl_gpio		= {TEGRA_GPIO_PV4 },
+	.sda_gpio		= {TEGRA_GPIO_PV5 },
 	.arb_recovery = arb_lost_recovery,
 };
 
 static struct tegra_i2c_platform_data enterprise_i2c5_platform_data = {
 	.adapter_nr	= 4,
 	.bus_count	= 1,
-	.bus_clk_rate	= { 100000, 0 },
-	.scl_gpio		= {TEGRA_GPIO_PZ6, 0},
-	.sda_gpio		= {TEGRA_GPIO_PZ7, 0},
+	.bus_clk_rate	= { 100000 },
+	.scl_gpio		= {TEGRA_GPIO_PZ6 },
+	.sda_gpio		= {TEGRA_GPIO_PZ7 },
 	.arb_recovery = arb_lost_recovery,
 };
 
@@ -829,6 +830,7 @@ static struct htc_headset_microp_platform_data htc_headset_microp_data = {
 	.adc_remote		= {0, 33, 38, 85, 95, 180},
 };
 
+//TODO unused?
 static struct platform_device htc_headset_microp = {
 	.name	= "HTC_HEADSET_MICROP",
 	.id	= -1,
@@ -939,6 +941,7 @@ static struct htc_headset_misc_platform_data htc_headset_misc_data = {
 */
 };
 
+//TODO unused?
 static struct platform_device htc_headset_misc = {
 	.name	= "HTC_HEADSET_MISC",
 	.id	= -1,
@@ -1121,6 +1124,9 @@ static void __init enterprise_uart_init(void)
 {
 	int i;
 	struct clk *c;
+#ifdef CONFIG_BT_CTS_WAKEUP
+	int board_id;
+#endif
 
 	for (i = 0; i < ARRAY_SIZE(uart_parent_clk); ++i) {
 		c = tegra_get_clock_by_name(uart_parent_clk[i].name);
@@ -1141,7 +1147,7 @@ static void __init enterprise_uart_init(void)
 	tegra_uarte_device.dev.platform_data = &enterprise_uart_pdata;
 
 #ifdef CONFIG_BT_CTS_WAKEUP
-	int board_id = htc_get_pcbid_info();
+	board_id = htc_get_pcbid_info();
 
 	enterprise_bt_uart_pdata = enterprise_uart_pdata;
 	if (board_id >= PROJECT_PHASE_XC) {// XC
@@ -1941,6 +1947,7 @@ static void enterprise_cable_detect_init(void)
 	platform_device_register(&cable_detect_device);
 }
 
+//TODO can be removed I assume
 static void enterprise_gps_init(void)
 {
 	//tegra_gpio_enable(TEGRA_GPIO_PE4);
@@ -2012,7 +2019,8 @@ static struct platform_device tegra_baseband_power_device = {
 
 static void enterprise_modem_init(void)
 {
-	struct board_info board_info;
+	int ret;
+//	struct board_info board_info;
 //	int w_disable_gpio;
 
 
@@ -2065,7 +2073,7 @@ static void enterprise_modem_init(void)
 #if 1		
 		// TEGRA_GPIO_PI5
 		printk(KERN_INFO"%s: gpio config for sim_det#.", __func__);
-                int ret;
+
 		ret = gpio_request(TEGRA_GPIO_PI5, "sim_det#");
 		if (ret < 0)
 			pr_err("[FLT] %s: gpio_request failed for gpio %s\n",
@@ -2127,7 +2135,7 @@ static void gpio_o_l(int gpio, char* name)
 	gpio_export(gpio, true);
 }
 
-
+//TODO unused?
 static void modem_not_init(void)
 {
 	pr_info("%s: disable gpio\n", __func__);
@@ -2267,7 +2275,8 @@ static void enr_u_basic_gpio_setup(void)
 static void __init tegra_enterprise_init(void)
 {
 	int board_id = 0;
-	struct kobject *properties_kobj;  	
+	struct kobject *properties_kobj;
+	struct proc_dir_entry *proc;
 
 	tegra_thermal_init(&thermal_data);
 	BOOT_DEBUG_LOG_ENTER("<machine>.init_machine");
@@ -2318,7 +2327,7 @@ static void __init tegra_enterprise_init(void)
 	enterprise_sensors_init();
 	if (platform_device_register(&enr_reset_keys_device))
 		printk(KERN_WARNING "%s: register reset key fail\n", __func__);
-        properties_kobj = kobject_create_and_add("board_properties", NULL);
+	properties_kobj = kobject_create_and_add("board_properties", NULL);
 	if (properties_kobj) {
 		if (htc_get_pcbid_info() >= PROJECT_PHASE_XC) {
 			sysfs_create_group(properties_kobj, &Aproj_properties_attr_group_XC);
@@ -2340,7 +2349,6 @@ static void __init tegra_enterprise_init(void)
 #if defined(CONFIG_CABLE_DETECT_ACCESSORY)
 	enterprise_cable_detect_init();
 #endif
-	struct proc_dir_entry* proc;
 	proc = create_proc_read_entry("emmc", 0, NULL, emmc_partition_read_proc, NULL);
 	if (proc) {
 		printk(KERN_ALERT "[mtd] mount /proc/emmc successfully\n");
