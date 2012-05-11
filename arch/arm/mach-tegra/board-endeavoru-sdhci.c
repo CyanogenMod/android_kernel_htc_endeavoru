@@ -45,13 +45,13 @@ static void (*wifi_status_cb)(int card_present, void *dev_id);
 static void *wifi_status_cb_devid;
 static int enterprise_wifi_status_register(void (*callback)(int , void *), void *);
 
-static int enterprise_wifi_reset(int on);
+//static int enterprise_wifi_reset(int on);
 /* HTC_WIFI_START */
 //static int enterprise_wifi_power(int on);
 //static int enterprise_wifi_set_carddetect(int val);
 int enterprise_wifi_power(int on);
 int enterprise_wifi_set_carddetect(int val);
-int enterprise_wifi_status(struct device *dev);
+unsigned int enterprise_wifi_status(struct device *dev);
 static int enterprise_wifi_cd;		/* WIFI virtual 'card detect' status */
 /* HTC_WIFI_END */
 
@@ -65,6 +65,7 @@ static struct wl12xx_platform_data enterprise_wlan_data __initdata = {
 };
 /* HTC_WIFI_END */
 
+#if 0
 static struct wifi_platform_data enterprise_wifi_control = {
 	.set_power      = enterprise_wifi_power,
 	.set_reset      = enterprise_wifi_reset,
@@ -80,6 +81,7 @@ static struct resource wifi_resource[] = {
 	},
 };
 
+
 static struct platform_device enterprise_wifi_device = {
 	.name           = "bcm4329_wlan",
 	.id             = 1,
@@ -89,6 +91,7 @@ static struct platform_device enterprise_wifi_device = {
 		.platform_data = &enterprise_wifi_control,
 	},
 };
+#endif
 
 static int emmc_suspend_gpiocfg(void)
 {
@@ -143,6 +146,7 @@ static struct resource sdhci_resource3[] = {
 	},
 };
 
+#if 0
 static struct embedded_sdio_data embedded_sdio_data0 = {
 	.cccr   = {
 		.sdio_vsn       = 2,
@@ -159,7 +163,6 @@ static struct embedded_sdio_data embedded_sdio_data0 = {
 };
 
 // No uSD
-#if 0
 static struct tegra_sdhci_platform_data tegra_sdhci_platform_data0 = {
 	.mmc_data = {
 		.register_status_notify	= enterprise_wifi_status_register,
@@ -247,7 +250,7 @@ static int enterprise_wifi_status_register(
 }
 
 /* HTC_WIFI_START */
-int enterprise_wifi_status(struct device *dev)
+unsigned int enterprise_wifi_status(struct device *dev)
 {
 	return enterprise_wifi_cd;
 }
@@ -297,11 +300,13 @@ int enterprise_wifi_power(int on)
 EXPORT_SYMBOL(enterprise_wifi_power);
 /* HTC_WIFI_END */
 
+#if 0
 static int enterprise_wifi_reset(int on)
 {
 	pr_debug("%s: do nothing\n", __func__);
 	return 0;
 }
+#endif
 
 static int __init enterprise_wifi_init(void)
 {
@@ -392,7 +397,7 @@ EXPORT_SYMBOL(blue_pincfg_uartc_suspend);
 void blue_pincfg_uartc_gpio_request(void) {
 
         /* BT_EN GPIO-U.00 O(L) */
-        long err = 0;
+        int err = 0;
 
 	/* UART3_CTS_N GPIO-A.01 */
         err = gpio_request(TEGRA_GPIO_PA1, "bt");
