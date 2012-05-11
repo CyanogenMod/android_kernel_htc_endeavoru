@@ -405,49 +405,61 @@ static int gpio_config_state(int cnf, int oe, int out, int pupd)
 
 void gpio_dump(void)
 {
-    int b, p, i;
-    unsigned long flags;
+	int b, p, i;
+	struct tegra_gpio_bank *bank;
+	const char** expected_gpio;
+	unsigned int gpio;
+	char port[2];
+	int gpio_cnf;
+	int gpio_out;
+	int gpio_oe;
+	enum tegra_pingroup ball;
+	int reg;
+	int tristate;
+	int io_enable;
+	char* reg_gpio_config;
+#if defined(CONFIG_MACH_VERTEXF)
+	int projectPhase;
+#endif
 
-    for (b = 0; b < ARRAY_SIZE(tegra_gpio_banks); b++) {
-	struct tegra_gpio_bank *bank = &tegra_gpio_banks[b];
+	for (b = 0; b < ARRAY_SIZE(tegra_gpio_banks); b++) {
+		bank = &tegra_gpio_banks[b];
 
-		const char** expected_gpio = enr_td_suspend_gpio_config_xc;
+		expected_gpio = enr_td_suspend_gpio_config_xc;
 
 #if defined(CONFIG_MACH_VERTEXF)
-			int projectPhase = htc_get_pcbid_info();
+		projectPhase = htc_get_pcbid_info();
 
-			if (projectPhase == PROJECT_PHASE_XA) /* EVT XA */
-				expected_gpio = quo_suspend_gpio_config_xa;
-			else if (projectPhase == PROJECT_PHASE_XB)
-				expected_gpio = quo_suspend_gpio_config_xb;
-			else if (projectPhase == PROJECT_PHASE_XC)
-				expected_gpio = quo_suspend_gpio_config_xc;
-			else if (projectPhase >= PROJECT_PHASE_XD)
-				expected_gpio = quo_suspend_gpio_config_xd;
+		if (projectPhase == PROJECT_PHASE_XA) /* EVT XA */
+			expected_gpio = quo_suspend_gpio_config_xa;
+		else if (projectPhase == PROJECT_PHASE_XB)
+			expected_gpio = quo_suspend_gpio_config_xb;
+		else if (projectPhase == PROJECT_PHASE_XC)
+			expected_gpio = quo_suspend_gpio_config_xc;
+		else if (projectPhase >= PROJECT_PHASE_XD)
+			expected_gpio = quo_suspend_gpio_config_xd;
 
 #endif
 
 		for (p = 0; p < ARRAY_SIZE(bank->oe); p++) {
-			unsigned int gpio = (b<<5) | (p<<3);
-			char port[2];
+			gpio = (b<<5) | (p<<3);
+			
 			if((b*4+p) < 26)
 				sprintf(port, "%c", (b*4+p)+'A');
 			else
 				sprintf(port, "%c%c", ((b*4+p)%26)+'A', ((b*4+p)%26)+'A');
 
-			int gpio_cnf = __raw_readl(GPIO_CNF(gpio));
-			int gpio_out = __raw_readl(GPIO_OUT(gpio));
-			int gpio_oe = __raw_readl(GPIO_OE(gpio));
-
-			int i;
+			gpio_cnf = __raw_readl(GPIO_CNF(gpio));
+			gpio_out = __raw_readl(GPIO_OUT(gpio));
+			gpio_oe = __raw_readl(GPIO_OE(gpio));
 
 			for (i = 0; i < 8; i++) {
-				enum tegra_pingroup ball = gpio_to_pingroup[gpio+i];
-				int reg = tegra_pinmux_get_pullupdown(ball);
-				int tristate = tegra_pinmux_get_tristate(ball);
-				int io_enable = tegra_pinmux_get_io(ball);
+				ball = gpio_to_pingroup[gpio+i];
+				reg = tegra_pinmux_get_pullupdown(ball);
+				tristate = tegra_pinmux_get_tristate(ball);
+				io_enable = tegra_pinmux_get_io(ball);
 
-				char* reg_gpio_config = GPIO_STATE[gpio_config_state(gpio_cnf, gpio_oe, gpio_out, reg %3)];
+				reg_gpio_config = GPIO_STATE[gpio_config_state(gpio_cnf, gpio_oe, gpio_out, reg %3)];
 				printk("%s%d %s", port, i, reg_gpio_config);
 
 				if(gpio+i < TEGRA_GPIO_INVALID){
@@ -481,13 +493,14 @@ static int tegra_gpio_suspend(void)
 	unsigned long flags;
 	int b;
 	int p;
+	unsigned int gpio;
 
 	local_irq_save(flags);
 	for (b = 0; b < ARRAY_SIZE(tegra_gpio_banks); b++) {
 		struct tegra_gpio_bank *bank = &tegra_gpio_banks[b];
 
 		for (p = 0; p < ARRAY_SIZE(bank->oe); p++) {
-			unsigned int gpio = (b<<5) | (p<<3);
+			gpio = (b<<5) | (p<<3);
 			bank->cnf[p] = __raw_readl(GPIO_CNF(gpio));
 			bank->out[p] = __raw_readl(GPIO_OUT(gpio));
 			bank->oe[p] = __raw_readl(GPIO_OE(gpio));
@@ -565,10 +578,11 @@ static int __init tegra_gpio_init(void)
 	struct tegra_gpio_bank *bank;
 	int i;
 	int j;
+	int gpio;
 
 	for (i = 0; i < ARRAY_SIZE(tegra_gpio_banks); i++) {
 		for (j = 0; j < 4; j++) {
-			int gpio = tegra_gpio_compose(i, j, 0);
+			gpio = tegra_gpio_compose(i, j, 0);
 			__raw_writel(0x00, GPIO_INT_ENB(gpio));
 			__raw_writel(0x00, GPIO_INT_STA(gpio));
 		}
@@ -608,9 +622,10 @@ postcore_initcall(tegra_gpio_init);
 void __init tegra_gpio_config(struct tegra_gpio_table *table, int num)
 {
 	int i;
+	int gpio;
 
 	for (i = 0; i < num; i++) {
-		int gpio = table[i].gpio;
+		gpio = table[i].gpio;
 
 		if (table[i].enable)
 			tegra_gpio_enable(gpio);
@@ -628,11 +643,12 @@ static int dbg_gpio_show(struct seq_file *s, void *unused)
 {
 	int i;
 	int j;
+	int gpio;
 
 	seq_printf(s, "Bank:Port CNF OE OUT IN INT_STA INT_ENB INT_LVL\n");
 	for (i = 0; i < ARRAY_SIZE(tegra_gpio_banks); i++) {
 		for (j = 0; j < 4; j++) {
-			int gpio = tegra_gpio_compose(i, j, 0);
+			gpio = tegra_gpio_compose(i, j, 0);
 			seq_printf(s,
 				"%d:%d %02x %02x %02x %02x %02x %02x %06x\n",
 				i, j,
@@ -655,11 +671,19 @@ static int htc_dbg_gpio_show(struct seq_file *s, void *unused)
 	int i;
 	int j;
 	int b;
+	int gpio, gpio_cnf, gpio_out, gpio_oe;
+	char port[2];
+	char msg[100];
+	enum tegra_pingroup pin;
+	int mux;
+	int reg;
+	int tristate;
+	int io_enable;
+	char buf[10];
 
 	for (i = 0; i < ARRAY_SIZE(tegra_gpio_banks); i++) {
 		for (j = 0; j < 4; j++) {
-			int gpio, gpio_cnf, gpio_out, gpio_oe;
-			char port[2];
+			
 			if ((i*4+j) < 26)
 				sprintf(port, "%c", (i*4+j)+'A');
 			else
@@ -670,12 +694,11 @@ static int htc_dbg_gpio_show(struct seq_file *s, void *unused)
 			gpio_out = __raw_readl(GPIO_OUT(gpio));
 			gpio_oe  = __raw_readl(GPIO_OE(gpio));
 			for (b = 0; b < 8; b++) {
-				char msg[100];
-				enum tegra_pingroup pin = gpio_to_pingroup[gpio+b];
-				int mux = tegra_pinmux_get_func(pin);
-				int reg = tegra_pinmux_get_pullupdown(pin);
-				int tristate = tegra_pinmux_get_tristate(pin);
-				int io_enable = tegra_pinmux_get_io(pin);
+				pin = gpio_to_pingroup[gpio+b];
+				mux = tegra_pinmux_get_func(pin);
+				reg = tegra_pinmux_get_pullupdown(pin);
+				tristate = tegra_pinmux_get_tristate(pin);
+				io_enable = tegra_pinmux_get_io(pin);
 
 				sprintf(msg, "%s%d", port, b);
 
@@ -710,7 +733,6 @@ static int htc_dbg_gpio_show(struct seq_file *s, void *unused)
 					}
 				} else if((gpio_cnf & 0x01) ==  0) {
 
-					char buf[10];
 					sprintf(buf, MSG_DEL "A" MSG_DEL "SFIO%d", mux);
 					strcat(msg, buf);
 					// TODO display function name
