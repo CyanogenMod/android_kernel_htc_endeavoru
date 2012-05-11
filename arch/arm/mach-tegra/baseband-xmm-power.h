@@ -34,8 +34,6 @@
 
 #define BB_XMM_OEM1
 
-#define pr_debug pr_info
-
 #endif
 
 #define VENDOR_ID         0x1519
