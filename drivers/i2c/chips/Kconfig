@@ -1,0 +1,86 @@
+#
+# Miscellaneous I2C chip drivers configuration
+#
+# *** DEPRECATED! Do not add new entries! See Makefile ***
+#
+
+menu "Miscellaneous I2C Chip support"
+
+
+config SENSORS_BMA250
+	tristate "BMA250 acceleration sensor support"
+	depends on I2C=y
+	help
+	  BMA250 G-sensor Driver implemented by HTC.
+
+config SENSORS_PANASONIC_GYRO
+	tristate "PANASONIC GYRO sensor support"
+	depends on I2C=y
+	help
+	  PANASONIC GYR Driver implemented by HTC.
+
+config SENSORS_AKM8975_PANA_GYRO
+        tristate "AKM8973 Compass Driver for Pana Gyro"
+        depends on I2C
+        help
+         AKM8975 Compass Driver implemented by HTC.
+
+
+config SENSORS_NFC_PN544
+	tristate "PN544 NFC sensor support"
+	depends on I2C=y
+	help
+	  PN544 NFC Driver implemented.
+
+config SENSORS_BMA250
+	tristate "BMA250 acceleration sensor support"
+	depends on I2C=y
+	help
+	  BMA250 G-sensor Driver implemented by HTC.
+
+config SENSORS_ONLY_BMA250
+	tristate "BMA250 acceleration sensor support"
+	depends on I2C=y
+	help
+	  BMA250 ONLY G-sensor Driver implemented by HTC.
+
+config SENSORS_CAPSENSE_SAR
+	tristate "CapSense SAR Driver"
+	depends on I2C
+	help
+	CapSense SAR Sensor Driver implemented by HTC.
+
+config SENSORS_CAPSENSE_HSNR
+	tristate "Capsnese Holding Sensor"
+	depends on I2C
+	help
+	CapSense Holding Sensor Driver implemented by HTC.
+
+config INPUT_ISL29028
+        tristate "ISL29028 proximity and light sensor"
+        help
+          Say Y here to enable the ISL29028 Short Distance Proximity
+          Sensor with Ambient Light Sensor.
+
+config INPUT_CAPELLA_CM3628
+	tristate "CM3628 proximity and light sensor"
+	default n
+	help
+	  Say Y here to enable the CM3628 Short Distance Proximity
+	  Sensor with Ambient Light Sensor.
+
+config INPUT_CAPELLA_CM3629
+	tristate "CM3629 proximity and light sensor"
+	default n
+	help
+	  Say Y here to enable the CM3629 Short Distance Proximity
+	  Sensor with Ambient Light Sensor.
+
+config INPUT_ISL29028_CM3628
+	tristate "ISL29028(EVM) or CM3628(EVT) proximity and light sensor"
+	default n
+	help
+	  Say Y here to enable the CM3628 Short Distance Proximity
+	  Sensor with Ambient Light Sensor.
+
+endmenu

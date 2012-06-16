@@ -1,0 +1,10 @@
+config HTC_POWER_SUPPLY
+	bool "HTC Power Supply"
+	default n
+	help
+	  Use HTC Power Supply for a fake-able battery.
+
+config PM_R_DEBUG
+	bool "Print [R] when suspend"
+	help
+	  Print [R] when suspend

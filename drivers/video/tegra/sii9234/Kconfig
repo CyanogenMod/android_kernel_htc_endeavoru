@@ -1,0 +1,16 @@
+#
+# Miscellaneous I2C chip drivers configuration
+#
+# *** DEPRECATED! Do not add new entries! See Makefile ***
+#
+
+menu "Miscellaneous I2C Chip support II"
+
+config TEGRA_HDMI_MHL_SUPERDEMO
+       depends on TEGRA_HDMI_MHL
+       bool "MHL SUPERDEMO"
+       default y
+       ---help---
+         Support for SCRATCHPAD event output through MHL SiI9234
+
+endmenu
