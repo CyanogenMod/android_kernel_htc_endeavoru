@@ -1,0 +1,2 @@
+htc-kernel-endeavoru-vanilla
+============================
