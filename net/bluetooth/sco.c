@@ -196,13 +196,10 @@ static int sco_connect(struct sock *sk)
 		type = ESCO_LINK;
 	else {
 		type = SCO_LINK;
-        pkt_type &= SCO_ESCO_MASK;
-    }        
+		pkt_type &= SCO_ESCO_MASK;
+	}
 
-/* BlueTi Start */
-	hcon = hci_connect(hdev, type, pkt_type, dst, BT_ADDR_BREDR, BT_SECURITY_LOW, HCI_AT_NO_BONDING);
-/* BlueTi End */
-
+	hcon = hci_connect(hdev, type, pkt_type, dst, BT_SECURITY_LOW, HCI_AT_NO_BONDING);
 	if (IS_ERR(hcon)) {
 		err = PTR_ERR(hcon);
 		goto done;
@@ -531,15 +528,18 @@ static int sco_sock_connect(struct socket *sock, struct sockaddr *addr, int alen
 		err = -EINVAL;
 		goto done;
 	}
+
 	if (sk->sk_state != BT_OPEN && sk->sk_state != BT_BOUND) {
 		err = -EBADFD;
 		goto done;
 	}
+
 	/* Set destination address and psm */
 	bacpy(&bt_sk(sk)->dst, &sa.sco_bdaddr);
 	sco_pi(sk)->pkt_type = sa.sco_pkt_type;
 
-	if ((err = sco_connect(sk)))
+	err = sco_connect(sk);
+	if (err)
 		goto done;
 
 	err = bt_sock_wait_state(sk, BT_CONNECTED,

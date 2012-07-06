@@ -9,7 +9,6 @@
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
 
-static int acl_conn_index = 0;
 static struct class *bt_class;
 
 struct dentry *bt_debugfs;
@@ -24,8 +23,6 @@ static inline char *link_typetostr(int type)
 		return "SCO";
 	case ESCO_LINK:
 		return "eSCO";
-	case LE_LINK:
-		return "LE";
 	default:
 		return "UNKNOWN";
 	}
@@ -94,8 +91,7 @@ static void add_conn(struct work_struct *work)
 	struct hci_conn *conn = container_of(work, struct hci_conn, work_add);
 	struct hci_dev *hdev = conn->hdev;
 
-	acl_conn_index++;
-	dev_set_name(&conn->dev, "%s:%d:%d", hdev->name, conn->handle, acl_conn_index);
+	dev_set_name(&conn->dev, "%s:%d", hdev->name, conn->handle);
 
 	dev_set_drvdata(&conn->dev, conn);
 
@@ -281,19 +277,13 @@ static ssize_t show_idle_timeout(struct device *dev, struct device_attribute *at
 static ssize_t store_idle_timeout(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hci_dev *hdev = dev_get_drvdata(dev);
-#if 0 /* CHEN */	
 	unsigned int val;
 	int rv;
 
 	rv = kstrtouint(buf, 0, &val);
 	if (rv < 0)
 		return rv;
-#else
-	unsigned long val;
 
-	if (strict_strtoul(buf, 0, &val) < 0)
-		return -EINVAL;
-#endif
 	if (val != 0 && (val < 500 || val > 3600000))
 		return -EINVAL;
 
@@ -311,22 +301,13 @@ static ssize_t show_sniff_max_interval(struct device *dev, struct device_attribu
 static ssize_t store_sniff_max_interval(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hci_dev *hdev = dev_get_drvdata(dev);
-#if 0 /* CHEN */	
 	u16 val;
 	int rv;
 
 	rv = kstrtou16(buf, 0, &val);
 	if (rv < 0)
 		return rv;
-#else
-	unsigned long val;
 
-	if (strict_strtoul(buf, 0, &val) < 0)
-		return -EINVAL;
-
-	if (val < 0x0002 || val > 0xFFFE || val % 2)
-		return -EINVAL;
-#endif
 	if (val == 0 || val % 2 || val < hdev->sniff_min_interval)
 		return -EINVAL;
 
@@ -344,23 +325,13 @@ static ssize_t show_sniff_min_interval(struct device *dev, struct device_attribu
 static ssize_t store_sniff_min_interval(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hci_dev *hdev = dev_get_drvdata(dev);
-#if 0 /* CHEN */
 	u16 val;
 	int rv;
 
 	rv = kstrtou16(buf, 0, &val);
 	if (rv < 0)
 		return rv;
-#else
-	unsigned long val;
 
-	if (strict_strtoul(buf, 0, &val) < 0)
-		return -EINVAL;
-
-	if (val < 0x0002 || val > 0xFFFE || val % 2)
-		return -EINVAL;
-
-#endif
 	if (val == 0 || val % 2 || val > hdev->sniff_max_interval)
 		return -EINVAL;
 
@@ -462,12 +433,17 @@ static const struct file_operations inquiry_cache_fops = {
 static int blacklist_show(struct seq_file *f, void *p)
 {
 	struct hci_dev *hdev = f->private;
-	struct bdaddr_list *b;
+	struct list_head *l;
 
 	hci_dev_lock_bh(hdev);
 
-	list_for_each_entry(b, &hdev->blacklist, list)
+	list_for_each(l, &hdev->blacklist) {
+		struct bdaddr_list *b;
+
+		b = list_entry(l, struct bdaddr_list, list);
+
 		seq_printf(f, "%s\n", batostr(&b->bdaddr));
+	}
 
 	hci_dev_unlock_bh(hdev);
 
@@ -506,12 +482,17 @@ static void print_bt_uuid(struct seq_file *f, u8 *uuid)
 static int uuids_show(struct seq_file *f, void *p)
 {
 	struct hci_dev *hdev = f->private;
-	struct bt_uuid *uuid;
+	struct list_head *l;
 
 	hci_dev_lock_bh(hdev);
 
-	list_for_each_entry(uuid, &hdev->uuids, list)
+	list_for_each(l, &hdev->uuids) {
+		struct bt_uuid *uuid;
+
+		uuid = list_entry(l, struct bt_uuid, list);
+
 		print_bt_uuid(f, uuid->uuid);
+	}
 
 	hci_dev_unlock_bh(hdev);
 
@@ -559,28 +540,22 @@ static int auto_accept_delay_get(void *data, u64 *val)
 DEFINE_SIMPLE_ATTRIBUTE(auto_accept_delay_fops, auto_accept_delay_get,
 					auto_accept_delay_set, "%llu\n");
 
-void hci_init_sysfs(struct hci_dev *hdev)
-{
-	struct device *dev = &hdev->dev;
-
-	dev->type = &bt_host;
-	dev->class = bt_class;
-
-	dev_set_drvdata(dev, hdev);
-	device_initialize(dev);
-}
-
-int hci_add_sysfs(struct hci_dev *hdev)
+int hci_register_sysfs(struct hci_dev *hdev)
 {
 	struct device *dev = &hdev->dev;
 	int err;
 
 	BT_DBG("%p name %s bus %d", hdev, hdev->name, hdev->bus);
 
+	dev->type = &bt_host;
+	dev->class = bt_class;
 	dev->parent = hdev->parent;
+
 	dev_set_name(dev, "%s", hdev->name);
 
-	err = device_add(dev);
+	dev_set_drvdata(dev, hdev);
+
+	err = device_register(dev);
 	if (err < 0)
 		return err;
 
@@ -604,7 +579,7 @@ int hci_add_sysfs(struct hci_dev *hdev)
 	return 0;
 }
 
-void hci_del_sysfs(struct hci_dev *hdev)
+void hci_unregister_sysfs(struct hci_dev *hdev)
 {
 	BT_DBG("%p name %s bus %d", hdev, hdev->name, hdev->bus);
 

@@ -333,7 +333,7 @@ static int l2cap_sock_getsockopt_old(struct socket *sock, int optname, char __us
 		opts.mode     = chan->mode;
 		opts.fcs      = chan->fcs;
 		opts.max_tx   = chan->max_tx;
-		opts.txwin_size = chan->tx_win;
+		opts.txwin_size = (__u16)chan->tx_win;
 
 		len = min_t(unsigned int, len, sizeof(opts));
 		if (copy_to_user(optval, (char *) &opts, len))
@@ -358,10 +358,10 @@ static int l2cap_sock_getsockopt_old(struct socket *sock, int optname, char __us
 			break;
 		}
 
-		if (test_bit(FLAG_ROLE_SWITCH, &chan->flags))
+		if (chan->role_switch)
 			opt |= L2CAP_LM_MASTER;
 
-		if (test_bit(FLAG_FORCE_RELIABLE, &chan->flags))
+		if (chan->force_reliable)
 			opt |= L2CAP_LM_RELIABLE;
 
 		if (put_user(opt, (u32 __user *) optval))
@@ -448,8 +448,7 @@ static int l2cap_sock_getsockopt(struct socket *sock, int level, int optname, ch
 		break;
 
 	case BT_FLUSHABLE:
-		if (put_user(test_bit(FLAG_FLUSHABLE, &chan->flags),
-						(u32 __user *) optval))
+		if (put_user(chan->flushable, (u32 __user *) optval))
 			err = -EFAULT;
 
 		break;
@@ -461,22 +460,12 @@ static int l2cap_sock_getsockopt(struct socket *sock, int level, int optname, ch
 			break;
 		}
 
-		pwr.force_active = test_bit(FLAG_FORCE_ACTIVE, &chan->flags);
+		pwr.force_active = chan->force_active;
 
 		len = min_t(unsigned int, len, sizeof(pwr));
 		if (copy_to_user(optval, (char *) &pwr, len))
 			err = -EFAULT;
 
-		break;
-
-	case BT_CHANNEL_POLICY:
-		if (!enable_hs) {
-			err = -ENOPROTOOPT;
-			break;
-		}
-
-		if (put_user(chan->chan_policy, (u32 __user *) optval))
-			err = -EFAULT;
 		break;
 
 	default:
@@ -513,7 +502,7 @@ static int l2cap_sock_setsockopt_old(struct socket *sock, int optname, char __us
 		opts.mode     = chan->mode;
 		opts.fcs      = chan->fcs;
 		opts.max_tx   = chan->max_tx;
-		opts.txwin_size = chan->tx_win;
+		opts.txwin_size = (__u16)chan->tx_win;
 
 		len = min_t(unsigned int, sizeof(opts), optlen);
 		if (copy_from_user((char *) &opts, optval, len)) {
@@ -521,7 +510,7 @@ static int l2cap_sock_setsockopt_old(struct socket *sock, int optname, char __us
 			break;
 		}
 
-		if (opts.txwin_size > L2CAP_DEFAULT_EXT_WINDOW) {
+		if (opts.txwin_size > L2CAP_DEFAULT_TX_WINDOW) {
 			err = -EINVAL;
 			break;
 		}
@@ -545,7 +534,7 @@ static int l2cap_sock_setsockopt_old(struct socket *sock, int optname, char __us
 		chan->omtu = opts.omtu;
 		chan->fcs  = opts.fcs;
 		chan->max_tx = opts.max_tx;
-		chan->tx_win = opts.txwin_size;
+		chan->tx_win = (__u8)opts.txwin_size;
 		break;
 
 	case L2CAP_LM:
@@ -561,15 +550,8 @@ static int l2cap_sock_setsockopt_old(struct socket *sock, int optname, char __us
 		if (opt & L2CAP_LM_SECURE)
 			chan->sec_level = BT_SECURITY_HIGH;
 
-		if (opt & L2CAP_LM_MASTER)
-			set_bit(FLAG_ROLE_SWITCH, &chan->flags);
-		else
-			clear_bit(FLAG_ROLE_SWITCH, &chan->flags);
-
-		if (opt & L2CAP_LM_RELIABLE)
-			set_bit(FLAG_FORCE_RELIABLE, &chan->flags);
-		else
-			clear_bit(FLAG_FORCE_RELIABLE, &chan->flags);
+		chan->role_switch    = (opt & L2CAP_LM_MASTER);
+		chan->force_reliable = (opt & L2CAP_LM_RELIABLE);
 		break;
 
 	default:
@@ -581,12 +563,7 @@ static int l2cap_sock_setsockopt_old(struct socket *sock, int optname, char __us
 	return err;
 }
 
-
-
 static int l2cap_sock_setsockopt(struct socket *sock, int level, int optname, char __user *optval, unsigned int optlen)
-
-
-
 {
 	struct sock *sk = sock->sk;
 	struct l2cap_chan *chan = l2cap_pi(sk)->chan;
@@ -680,10 +657,7 @@ static int l2cap_sock_setsockopt(struct socket *sock, int level, int optname, ch
 			}
 		}
 
-		if (opt)
-			set_bit(FLAG_FLUSHABLE, &chan->flags);
-		else
-			clear_bit(FLAG_FLUSHABLE, &chan->flags);
+		chan->flushable = opt;
 		break;
 
 	case BT_POWER:
@@ -700,52 +674,9 @@ static int l2cap_sock_setsockopt(struct socket *sock, int level, int optname, ch
 			err = -EFAULT;
 			break;
 		}
-
-		if (pwr.force_active)
-			set_bit(FLAG_FORCE_ACTIVE, &chan->flags);
-		else
-			clear_bit(FLAG_FORCE_ACTIVE, &chan->flags);
+		chan->force_active = pwr.force_active;
 		break;
 
-	case BT_CHANNEL_POLICY:
-		if (!enable_hs) {
-			err = -ENOPROTOOPT;
-			break;
-		}
-
-		if (get_user(opt, (u32 __user *) optval)) {
-			err = -EFAULT;
-			break;
-		}
-
-		if (opt > BT_CHANNEL_POLICY_AMP_PREFERRED) {
-			err = -EINVAL;
-			break;
-		}
-
-		if (chan->mode != L2CAP_MODE_ERTM &&
-				chan->mode != L2CAP_MODE_STREAMING) {
-			err = -EOPNOTSUPP;
-			break;
-		}
-
-		chan->chan_policy = (u8) opt;
-		break;
-/* BlueTi Start */
-	case BT_ADDR_TYPE:
-		if (get_user(opt, (u32 __user *) optval)) {
-			err = -EFAULT;
-			break;
-		}
-
-		if (opt > BT_ADDR_LE_RANDOM) {
-			err = -EINVAL;
-			BT_ERR("Invalid address type(%02X)",opt);
-			break;
-		}
-		chan->addr_type = opt;
-		break;
-/* BlueTi End */
 	default:
 		err = -ENOPROTOOPT;
 		break;
@@ -777,7 +708,7 @@ static int l2cap_sock_sendmsg(struct kiocb *iocb, struct socket *sock, struct ms
 		return -ENOTCONN;
 	}
 
-	err = l2cap_chan_send(chan, msg, len, sk->sk_priority);
+	err = l2cap_chan_send(chan, msg, len);
 
 	release_sock(sk);
 	return err;
@@ -999,9 +930,11 @@ static void l2cap_sock_init(struct sock *sk, struct sock *parent)
 		chan->fcs  = pchan->fcs;
 		chan->max_tx = pchan->max_tx;
 		chan->tx_win = pchan->tx_win;
-		chan->tx_win_max = pchan->tx_win_max;
 		chan->sec_level = pchan->sec_level;
-		chan->flags = pchan->flags;
+		chan->role_switch = pchan->role_switch;
+		chan->force_reliable = pchan->force_reliable;
+		chan->flushable = pchan->flushable;
+		chan->force_active = pchan->force_active;
 
 		security_sk_clone(parent, sk);
 	} else {
@@ -1030,10 +963,12 @@ static void l2cap_sock_init(struct sock *sk, struct sock *parent)
 		chan->max_tx = L2CAP_DEFAULT_MAX_TX;
 		chan->fcs  = L2CAP_FCS_CRC16;
 		chan->tx_win = L2CAP_DEFAULT_TX_WINDOW;
-		chan->tx_win_max = L2CAP_DEFAULT_TX_WINDOW;
 		chan->sec_level = BT_SECURITY_LOW;
-		chan->flags = 0;
-		set_bit(FLAG_FORCE_ACTIVE, &chan->flags);
+		chan->role_switch = 0;
+		chan->force_reliable = 0;
+		chan->flushable = BT_FLUSHABLE_OFF;
+		chan->force_active = BT_POWER_FORCE_ACTIVE_ON;
+
 	}
 
 	/* Default config options */
@@ -1080,10 +1015,8 @@ static struct sock *l2cap_sock_alloc(struct net *net, struct socket *sock, int p
 	return sk;
 }
 
-
 static int l2cap_sock_create(struct net *net, struct socket *sock, int protocol,
 			     int kern)
-
 {
 	struct sock *sk;
 
@@ -1095,9 +1028,7 @@ static int l2cap_sock_create(struct net *net, struct socket *sock, int protocol,
 			sock->type != SOCK_DGRAM && sock->type != SOCK_RAW)
 		return -ESOCKTNOSUPPORT;
 
-
 	if (sock->type == SOCK_RAW && !kern && !capable(CAP_NET_RAW))
-
 		return -EPERM;
 
 	sock->ops = &l2cap_sock_ops;

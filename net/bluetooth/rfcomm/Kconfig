@@ -10,7 +10,8 @@ config BT_RFCOMM
 	  compile it as module (rfcomm).
 
 config BT_RFCOMM_TTY
-	tristate "RFCOMM TTY support"
+	bool "RFCOMM TTY support"
+	depends on BT_RFCOMM
 	help
 	  This option enables TTY emulation support for RFCOMM channels.
 

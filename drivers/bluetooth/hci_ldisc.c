@@ -222,6 +222,8 @@ static int hci_uart_send_frame(struct sk_buff *skb)
 
 	hu = (struct hci_uart *) hdev->driver_data;
 
+	BT_DBG("%s: type %d len %d", hdev->name, bt_cb(skb)->pkt_type, skb->len);
+
 	hu->proto->enqueue(hu, skb);
 
 	hci_uart_tx_wakeup(hu);
