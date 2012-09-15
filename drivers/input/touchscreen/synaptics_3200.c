@@ -159,12 +159,14 @@ extern void sweep2wake_setdev(struct input_dev * input_device) {
 EXPORT_SYMBOL(sweep2wake_setdev);
 
 static void sweep2wake_presspwr(struct work_struct * sweep2wake_presspwr_work) {
+	mutex_trylock(&pwrkeyworklock);
 	input_event(sweep2wake_pwrdev, EV_KEY, KEY_POWER, 1);
 	input_event(sweep2wake_pwrdev, EV_SYN, 0, 0);
 	msleep(100);
 	input_event(sweep2wake_pwrdev, EV_KEY, KEY_POWER, 0);
 	input_event(sweep2wake_pwrdev, EV_SYN, 0, 0);
 	msleep(100);
+	mutex_unlock(&pwrkeyworklock);
 	return;
 }
 static DECLARE_WORK(sweep2wake_presspwr_work, sweep2wake_presspwr);
@@ -172,7 +174,6 @@ static DECLARE_WORK(sweep2wake_presspwr_work, sweep2wake_presspwr);
 void sweep2wake_pwrtrigger(void) {
 	if (mutex_trylock(&pwrkeyworklock)) {
 		schedule_work(&sweep2wake_presspwr_work);
-		mutex_unlock(&pwrkeyworklock);
 	}
 	return;
 }
@@ -753,7 +754,7 @@ static int synaptics_input_register(struct synaptics_ts_data *ts)
 		printk(KERN_ERR "[TP] TOUCH_ERR: %s: Failed to allocate mt slots\n", __func__);
 		return ret;
 	}
-	set_bit(ABS_MT_TOOL_TYPE, ts->input_dev->absbit);
+//	set_bit(ABS_MT_TOOL_TYPE, ts->input_dev->absbit);
 
 	printk(KERN_INFO "[TP] input_set_abs_params: mix_x %d, max_x %d, min_y %d, max_y %d\n",
 		ts->layout[0], ts->layout[1], ts->layout[2], ts->layout[3]);
@@ -774,7 +775,7 @@ static int synaptics_input_register(struct synaptics_ts_data *ts)
 	input_set_abs_params(ts->input_dev, ABS_MT_POSITION,
 		0, ((1 << 31) | (ts->layout[1] << 16) | ts->layout[3]), 0, 0);
 
-	input_set_abs_params(ts->input_dev, ABS_MT_TOOL_TYPE, 0, 1, 0, 0);
+//	input_set_abs_params(ts->input_dev, ABS_MT_TOOL_TYPE, 0, 1, 0, 0);
 
 	return input_register_device(ts->input_dev);
 }
@@ -2569,6 +2570,7 @@ static int synaptics_ts_suspend(struct i2c_client *client, pm_message_t mesg)
 	if (s2w_switch == 0) {
 		if (ret && ts->use_irq) /* if work was pending disable-count is now 2 */
 			enable_irq(client->irq);
+	}
 #endif
 
 	ts->pre_finger_data[0][0] = 0;
@@ -2598,10 +2600,12 @@ static int synaptics_ts_suspend(struct i2c_client *client, pm_message_t mesg)
 	if (ret < 0)
 		i2c_syn_error_handler(ts, 0, "w:0", __func__);
         printk("[TP] disable palm supression\n");
-#ifdef SYN_SUSPEND_RESUME_POWEROFF
+
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2WAKE
 	if (s2w_switch == 0) {
 #endif
+
+#ifdef SYN_SUSPEND_RESUME_POWEROFF
 		if (ts->power)
 			ts->power(0);
 		else 
@@ -2640,7 +2644,7 @@ static int synaptics_ts_resume(struct i2c_client *client)
 			get_address_base(ts, 0x01, CONTROL_BASE), 0x01); /* sleep */
 		if (ret < 0)
 			i2c_syn_error_handler(ts, 1, "sleep", __func__);
-		msleep(100);
+		msleep(150);
 		ret = 0;
 		//screen on, disable_irq_wake
 		scr_suspended = false;
@@ -2650,12 +2654,12 @@ static int synaptics_ts_resume(struct i2c_client *client)
 
 	printk(KERN_INFO "[TP] %s: enter\n", __func__);
 
+	if (ts->power)
+		ts->power(11);
+
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2WAKE
 	if (s2w_switch == 0) {
 #endif
-		if (ts->power)
-			ts->power(11);
-
 #ifdef SYN_SUSPEND_RESUME_POWEROFF
 		if (ts->power) {
 			ts->power(1);

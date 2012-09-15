@@ -254,7 +254,3 @@ obj-${CONFIG_MACH_ENDEAVORTD}         += nand_partitions.o
 
 # Add ramdump from NV patches
 obj-y                                   += nvdumper.o
-obj-y 					+= htc_util.o
-obj-y 					+= pokecpu.o
-
-obj-y                                   += tegra_sleep_stats.o

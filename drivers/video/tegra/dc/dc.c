@@ -992,12 +992,26 @@ static void tegra_dc_clear_bandwidth(struct tegra_dc *dc)
 static void tegra_dc_program_bandwidth(struct tegra_dc *dc)
 {
 	unsigned i;
+	bool yuvp = false;
 
 	if (dc->emc_clk_rate != dc->new_emc_clk_rate) {
 		/* going from 0 to non-zero */
 		if (!dc->emc_clk_rate && !tegra_is_clk_enabled(dc->emc_clk))
 			clk_enable(dc->emc_clk);
 		dc->emc_clk_rate = dc->new_emc_clk_rate;
+		/*FIXME:For low resolution video the bandwidth will too low.
+			Set lower bound when emc_clk_rate too tlow.
+		*/
+		if (dc->out->video_min_bw && dc->ndev->id == 0) {
+			for (i = 0; i < DC_N_WINDOWS; i++) {
+				struct tegra_dc_win *w = &dc->windows[i];
+				yuvp |= tegra_dc_is_yuv_planar(w->fmt);
+			}
+
+			if (yuvp)
+				dc->emc_clk_rate = max(dc->out->video_min_bw,dc->emc_clk_rate);
+		}
+
 		clk_set_rate(dc->emc_clk, dc->emc_clk_rate);
 	}
 
@@ -2044,11 +2058,6 @@ static void tegra_dc_underflow_handler(struct tegra_dc *dc)
 	int i;
 	static int underflow_cnt = 0;
 
-	val = tegra_dc_readl(dc, DC_DISP_DISP_MISC_CONTROL);
-	val ^= 0x2;
-	tegra_dc_writel(dc, val, DC_DISP_DISP_MISC_CONTROL);
-
-
 	dc->stats.underflows++;
 	if (dc->underflow_mask & WIN_A_UF_INT)
 		dc->stats.underflows_a += tegra_dc_underflow_count(dc,
@@ -2061,9 +2070,9 @@ static void tegra_dc_underflow_handler(struct tegra_dc *dc)
 			DC_WINBUF_CD_UFLOW_STATUS);
 
 	if (underflow_cnt < UNDERFLOW_MAXLOG) {
-		printk(KERN_ERR "[DISP] dc underflow: %llu a: %llu b: %llu c: %llu emc_rate %d UF_LINE_FLUSH 0x%8x\n",
+		printk(KERN_ERR "[DISP] dc underflow: %llu a: %llu b: %llu c: %llu emc_rate %d\n",
 			dc->stats.underflows,dc->stats.underflows_a, dc->stats.underflows_b
-			, dc->stats.underflows_c, dc->emc_clk_rate,val);
+			, dc->stats.underflows_c, dc->emc_clk_rate);
 		underflow_cnt++;
 	}
 
@@ -2075,6 +2084,13 @@ static void tegra_dc_underflow_handler(struct tegra_dc *dc)
 #ifdef CONFIG_ARCH_TEGRA_2x_SOC
 			if (dc->windows[i].underflows > 4)
 				schedule_work(&dc->reset_work);
+#endif
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
+			if (dc->windows[i].underflows > 4) {
+				val = tegra_dc_readl(dc, DC_DISP_DISP_MISC_CONTROL);
+				val |= UF_LINE_FLUSH;
+				tegra_dc_writel(dc, val, DC_DISP_DISP_MISC_CONTROL);
+			}
 #endif
 		} else {
 			dc->windows[i].underflows = 0;
@@ -2205,6 +2221,8 @@ static irqreturn_t tegra_dc_irq(int irq, void *ptr)
 		schedule_delayed_work(&dc->underflow_work,
 			msecs_to_jiffies(1));
 	}
+	else
+		tegra_dc_writel(dc, 0, DC_DISP_DISP_MISC_CONTROL);
 
 	if (dc->out->flags & TEGRA_DC_OUT_ONE_SHOT_MODE)
 		tegra_dc_one_shot_irq(dc, status);
@@ -2359,7 +2377,9 @@ static void tegra_dc_init(struct tegra_dc *dc)
 	tegra_dc_writel(dc, 0x0001c700, DC_CMD_INT_POLARITY);
 	tegra_dc_writel(dc, 0x00202020, DC_DISP_MEM_HIGH_PRIORITY);
 	tegra_dc_writel(dc, 0x00010101, DC_DISP_MEM_HIGH_PRIORITY_TIMER);
-
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
+	tegra_dc_writel(dc, 0x00000000, DC_DISP_DISP_MISC_CONTROL);
+#endif
 	/* enable interrupts for vblank, frame_end and underflows */
 	tegra_dc_writel(dc, (FRAME_END_INT | V_BLANK_INT | ALL_UF_INT),
 		DC_CMD_INT_ENABLE);

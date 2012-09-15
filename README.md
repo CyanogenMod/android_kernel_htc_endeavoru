@@ -1,2 +1,2 @@
-htc-kernel-endeavoru-vanilla
+HTC-Kernel-EndeavorU-Vanilla
 ============================

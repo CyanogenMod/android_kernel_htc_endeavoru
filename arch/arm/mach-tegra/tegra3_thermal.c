@@ -35,7 +35,7 @@
 
 #define MAX_ZONES (16)
 #define THROTTLE_TEMP 85000
-#define LAST_THROTTLE_TEMP 88000
+#define LAST_THROTTLE_TEMP 95000
 
 struct tegra_thermal {
 	struct tegra_thermal_device *device;
@@ -109,7 +109,7 @@ static int tegra_thermal_zone_unbind(struct thermal_zone_device *thermal,
 }
 
 static int tegra_thermal_zone_get_temp(struct thermal_zone_device *thz,
-						unsigned long *temp)
+						long *temp)
 {
 	struct tegra_thermal *thermal = thz->devdata;
 	thermal->device->get_temp(thermal->device->data, temp);
@@ -133,7 +133,7 @@ static int tegra_thermal_zone_get_trip_type(
 
 static int tegra_thermal_zone_get_trip_temp(struct thermal_zone_device *thz,
 						int trip,
-						unsigned long *temp) {
+						long *temp) {
 	struct tegra_thermal *thermal = thz->devdata;
 
 	/* Support only Thermal Throttling (1 trip) for now */
@@ -160,10 +160,10 @@ static struct thermal_zone_device_ops tegra_thermal_zone_ops = {
 static void tegra_therm_throttle(bool enable)
 {
 	if (throttle_enb != enable) {
-		mutex_lock(&thermal_state.mutex);
+		//mutex_lock(&thermal_state.mutex);
 		tegra_throttling_enable(enable);
 		throttle_enb = enable;
-		mutex_unlock(&thermal_state.mutex);
+		//mutex_unlock(&thermal_state.mutex);
 	}
 }
 #endif
@@ -193,8 +193,8 @@ void tegra_thermal_alert(void *data)
 
 #ifdef CONFIG_TEGRA_THERMAL_SYSFS
 	if (thermal->thz) {
-		if (!thermal->thz->passive) {
-			printk(KERN_INFO "[TMS] throttle start");
+    if (!thermal->thz->passive) {
+      printk(KERN_INFO "[TMS] throttle start");
 			thermal_zone_device_update(thermal->thz);
 		}
 	}
@@ -261,12 +261,12 @@ void tegra_thermal_alert(void *data)
 #endif
 
 	/* Thorttle second chance */
-	throttle_temp = edp2tj(thermal, THROTTLE_TEMP);
-	last_throttle_temp = edp2tj(thermal, LAST_THROTTLE_TEMP);
+	throttle_temp = THROTTLE_TEMP;
+	last_throttle_temp = LAST_THROTTLE_TEMP;
 	if (temp_tj >= throttle_temp && temp_tj < last_throttle_temp)
-		hi_limit_edp_tj = last_throttle_temp;
+	hi_limit_edp_tj = last_throttle_temp;
 	else if (temp_tj >= last_throttle_temp)
-		lo_limit_edp_tj = last_throttle_temp;
+	lo_limit_edp_tj = last_throttle_temp;
 
 	/* Get smallest window size */
 	lo_limit_tj = max(lo_limit_throttle_tj, lo_limit_edp_tj);

@@ -32,7 +32,7 @@ static bool tegra_dvfs_cpu_disabled;
 static bool tegra_dvfs_core_disabled;
 
 static const int cpu_millivolts[MAX_DVFS_FREQS] = {
-	800, 825, 850, 875, 900, 912, 975, 1000, 1025, 1050, 1075, 1100, 1125, 1150, 1175, 1200, 1212, 1237};
+	800, 825, 850, 875, 900, 912, 975, 1000, 1025, 1050, 1075, 1100, 1125, 1150, 1165, 1185, 1200, 1237};
 
 static const int core_millivolts[MAX_DVFS_FREQS] = {
 	950, 1000, 1050, 1100, 1150, 1200, 1250, 1300};
@@ -134,7 +134,7 @@ static struct dvfs_relationship tegra3_dvfs_relationships[] = {
 	}
 
 static struct dvfs cpu_dvfs_table[] = {
-	/* Cpu voltages (mV):	      800, 825, 850, 875,  900,  912,  975, 1000, 1025, 1050, 1075, 1100, 1125, 1150, 1175, 1200, 1212, 1237 */
+	/* Cpu voltages (mV):	      800, 825, 850, 875,  900,  912,  975, 1000, 1025, 1050, 1075, 1100, 1125, 1150, 1165, 1185, 1200, 1237 */
 	CPU_DVFS("cpu_g",  0, 0, MHZ,   1,   1, 684, 684,  817,  817, 1026, 1102, 1149, 1187, 1225, 1282, 1300),
 	CPU_DVFS("cpu_g",  0, 1, MHZ,   1,   1, 807, 807,  948,  948, 1117, 1171, 1206, 1300),
 	CPU_DVFS("cpu_g",  0, 2, MHZ,   1,   1, 883, 883, 1039, 1039, 1178, 1206, 1300),

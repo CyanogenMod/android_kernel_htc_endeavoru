@@ -53,7 +53,7 @@
 #define INITIAL_STATE		TEGRA_HP_DISABLED
 #define UP2G0_DELAY_MS		200
 #define UP2Gn_DELAY_MS		1000
-#define DOWN_DELAY_MS		2000
+#define DOWN_DELAY_MS		1000
 
 #define CPU_HOTPLUG_TAG "[CPUHP]"
 
@@ -213,13 +213,11 @@ module_param_cb(auto_hotplug, &tegra_hp_state_ops, &hp_state, 0644);
 
 static unsigned int NwNs_Threshold[] = {19, 30, 19, 11, 19, 11, 0, 11};
 static unsigned int TwTs_Threshold[] = {140, 0, 140, 190, 140, 190, 0, 190};
-extern unsigned int get_rq_info(void);
 
 static unsigned int NwNs[8] = {19, 30, 19, 11, 19, 11, 0, 11};
 module_param_array(NwNs, uint, NULL, 0644);
 static unsigned int TwTs[8] = {140, 0, 140, 190, 140, 190, 0, 190};
 module_param_array(TwTs, uint, NULL, 0644);
-extern unsigned int set_rq_poll_ms(unsigned int poll_ms);
 
 static int mp_policy = 0;
 
@@ -237,7 +235,6 @@ static int mp_policy_set(const char *arg, const struct kernel_param *kp)
 		if (mp_policy > 0) {
 			memcpy(NwNs_Threshold, NwNs, sizeof(unsigned int)*8);
 			memcpy(TwTs_Threshold, TwTs, sizeof(unsigned int)*8);
-			set_rq_poll_ms(9);
 		} else {
 			mp_policy = 0;
 			pr_info(CPU_HOTPLUG_TAG" mp_policy is off\n");
@@ -436,6 +433,26 @@ static void tegra_auto_cpuplug_work_func(struct work_struct *work)
 				up = false;
 				hp_stats_update(cpu, false);
 			} else if (!is_lp_cluster() && !no_lp) {
+
+				/* For some reason this sometimes results in a null
+				   pointer dereference. Set the clocks again if this
+				   case occurs.
+				   start show-p1984, 2012.05.13
+				 */
+				if (!cpu_clk) {
+					printk(KERN_INFO "[cpu-tegra3]: re setting cpu_clk");
+					cpu_clk = clk_get_sys(NULL, "cpu");
+				}
+				if (!cpu_lp_clk) {
+					printk(KERN_INFO "[cpu-tegra3]: re setting cpu_lp_clk");
+					cpu_lp_clk = clk_get_sys(NULL, "cpu_lp");
+				}
+				if (IS_ERR(cpu_clk) || IS_ERR(cpu_lp_clk)) {
+					printk(KERN_INFO "[cpu-tegra3]: Error, cpu_clk/cpu_lp_lck not set");
+					break;
+				}
+				/* end show-p1984, 2012.05.13 */
+
 				if (!clk_set_parent(cpu_clk, cpu_lp_clk)) {
 					hp_stats_update(CONFIG_NR_CPUS, true);
 					hp_stats_update(0, false);
@@ -490,7 +507,6 @@ static int mp_decision(void)
 	}
 	total_time += this_time;
 
-	rq_depth = get_rq_info();
 	nr_cpu_online = num_online_cpus();
 
 	if (nr_cpu_online) {

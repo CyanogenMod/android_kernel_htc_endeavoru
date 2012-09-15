@@ -60,6 +60,13 @@
 #include <mach/dma.h>
 #include <mach/clk.h>
 
+#define A2DP_TUNING_SUPPORTED
+#define CONFIG_BT_CTS_WAKEUP
+
+#ifdef A2DP_TUNING_SUPPORTED
+#include <linux/pm_qos_params.h>
+#endif
+
 #define TX_EMPTY_STATUS (UART_LSR_TEMT | UART_LSR_THRE)
 
 #define BYTES_TO_ALIGN(x) ((unsigned long)(ALIGN((x), sizeof(u32))) - \
@@ -103,6 +110,10 @@ const int dma_req_sel[] = {
 #define TEGRA_UART_TX_TRIG_8B  0x10
 #define TEGRA_UART_TX_TRIG_4B  0x20
 #define TEGRA_UART_TX_TRIG_1B  0x30
+
+#ifdef A2DP_TUNING_SUPPORTED
+#define A2DP_CPU_FREQ_MIN 102000
+#endif
 
 #ifdef CONFIG_SHARK_TD_WORKSHOP
 #include <linux/gpio.h>
@@ -201,6 +212,69 @@ struct tegra_uart_port {
 	struct tegra_uart_bt	bt;
 #endif
 };
+
+#ifdef A2DP_TUNING_SUPPORTED
+static struct pm_qos_request_list a2dp_cpu_minfreq_req;
+
+static unsigned char a2dp_tuning_state;
+
+#define SERIAL_HS_CREATE_DEVICE_ATTR(_name)		\
+	struct device_attribute dev_attr_##_name = {	\
+		.attr = {				\
+			.name = __stringify(_name),	\
+			.mode = 0644 },			\
+		.show = NULL,				\
+		.store = NULL,				\
+	}
+
+#define SERIAL_HS_SET_DEVICE_ATTR(_name, _mode, _show, _store)	\
+	do {							\
+		dev_attr_##_name.attr.mode = 0644;		\
+		dev_attr_##_name.show = _show;			\
+		dev_attr_##_name.store = _store;		\
+	} while(0)
+
+static SERIAL_HS_CREATE_DEVICE_ATTR(a2dp_tuning);
+
+static struct attribute *serial_hs_attributes[] = {
+	&dev_attr_a2dp_tuning.attr,
+	NULL
+};
+
+static struct attribute_group serial_hs_attribute_group = {
+	.attrs = serial_hs_attributes
+};
+
+static ssize_t show_a2dp_tuning(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+        return sprintf(buf, "%d\n", a2dp_tuning_state);
+}
+
+static ssize_t store_a2dp_tuning(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+        char in_char[] = "0";
+
+        sscanf(buf, "%1s", in_char);
+
+        if (strcmp(in_char, "0") == 0) {
+                a2dp_tuning_state = 0;
+        }
+        else if (strcmp(in_char, "1") == 0) {
+                a2dp_tuning_state = 1;
+        }
+        if (1 == a2dp_tuning_state) {
+                pm_qos_update_request(&a2dp_cpu_minfreq_req, (s32)A2DP_CPU_FREQ_MIN);
+                pr_info("pm_qos_update_request - A2DP_CPU_FREQ_MIN");
+        }
+        else if (0 == a2dp_tuning_state) {
+                pm_qos_update_request(&a2dp_cpu_minfreq_req, (s32)PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE);
+                pr_info("pm_qos_update_request - PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE");
+        }
+	return 1;
+}
+#endif
 
 #ifdef MUX_UART_DEBUG
 static void
@@ -2189,6 +2263,20 @@ static int tegra_uart_probe(struct platform_device *pdev)
 	}
 #endif
 
+#ifdef A2DP_TUNING_SUPPORTED
+	if (t->uart_bt) {
+		int result;
+		result = sysfs_create_group(&pdev->dev.kobj,
+			&serial_hs_attribute_group);
+		if (result)
+			printk(KERN_ERR "%s reg attr fail!!",
+				__func__);
+
+		SERIAL_HS_SET_DEVICE_ATTR(a2dp_tuning,
+			0644, show_a2dp_tuning,
+			store_a2dp_tuning);
+	}
+#endif
 	resource = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (unlikely(!resource)) {
 		ret = -ENXIO;
@@ -2369,6 +2457,9 @@ static int __init tegra_uart_init(void)
 		return ret;
 	}
 
+#ifdef A2DP_TUNING_SUPPORTED
+	pm_qos_add_request(&a2dp_cpu_minfreq_req, PM_QOS_CPU_FREQ_MIN, (s32)PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE);
+#endif
 	pr_info("Initialized tegra uart driver\n");
 	return 0;
 }

@@ -80,10 +80,7 @@
 #include "wakeups-t3.h"
 #include "pm.h"
 #include "htc-gpio.h"
-#include <mach/htc_util.h>
 #include <media/rawchip/rawchip.h>
-
-#include "pokecpu.h"
 
 #include "touch.h"
 #ifdef CONFIG_TEGRA_HAPTIC2
@@ -110,15 +107,10 @@ extern int resume_from_deep_suspend;
 
 extern unsigned engineer_id;
 
-#ifdef CONFIG_CPU_FREQ_GOV_ONDEMAND_2_PHASE
-int set_two_phase_freq(int cpufreq);
-#endif
-
-
 /* All units are in millicelsius */
 static struct tegra_thermal_data thermal_data = {
 	.temp_throttle = 85000,
-	.temp_shutdown = 90000,
+	.temp_shutdown = 100000,
 	.temp_offset = TDIODE_OFFSET, /* temps based on tdiode */
 #ifdef CONFIG_TEGRA_EDP_LIMITS
 	.edp_offset = TDIODE_OFFSET,  /* edp based on tdiode */
@@ -127,7 +119,7 @@ static struct tegra_thermal_data thermal_data = {
 #ifdef CONFIG_TEGRA_THERMAL_SYSFS
 	.tc1 = 2,
 	.tc2 = 1,
-	.passive_delay = 500,
+	.passive_delay = 200,
 #else
 	.hysteresis_throttle = 1000,
 #endif
@@ -590,7 +582,7 @@ static __initdata struct tegra_clk_init_table enterprise_clk_init_table[] = {
 	{ "pll_m",	NULL,		0,		false},
 	{ "hda",	"pll_p",	108000000,	false},
 	{ "hda2codec_2x","pll_p",	48000000,	false},
-	{ "pwm",	"pll_p",	108000000,		false},
+	{ "pwm",	"pll_p",	5100000,		false},
 	{ "blink",	"clk_32k",	32768,		true},
 	{ "pll_a",	NULL,		564480000,	false},
 	{ "pll_a_out0",	NULL,		11289600,	false},
@@ -2303,9 +2295,6 @@ static void __init tegra_enterprise_init(void)
 	enterprise_regulator_init();
 	enterprise_sdhci_init();
 	headset_uart_init();
-#ifdef CONFIG_CPU_FREQ_GOV_ONDEMAND_2_PHASE
-		set_two_phase_freq(1000000);
-#endif
 
 #ifdef CONFIG_TEGRA_EDP_LIMITS
 	enterprise_edp_init();
@@ -2395,17 +2384,6 @@ static void __init tegra_enterprise_reserve(void)
 }
 
 MACHINE_START(ENDEAVORU, "endeavoru")
-	.boot_params    = 0x80000100,
-	.map_io         = tegra_map_common_io,
-	.reserve        = tegra_enterprise_reserve,
-	.init_early	= tegra_init_early,
-	.init_irq       = tegra_init_irq,
-	.timer          = &tegra_timer,
-	.init_machine   = tegra_enterprise_init,
-MACHINE_END
-
-/* XXX for transition period only, will be removed soon */
-MACHINE_START(TEGRA_ENTERPRISE, "endeavoru")
 	.boot_params    = 0x80000100,
 	.map_io         = tegra_map_common_io,
 	.reserve        = tegra_enterprise_reserve,
