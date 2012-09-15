@@ -76,6 +76,9 @@ obj-$(CONFIG_CPU_FREQ)                  += cpu-tegra.o
 ifeq ($(CONFIG_TEGRA_AUTO_HOTPLUG),y)
 obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += cpu-tegra3.o
 endif
+ifeq ($(CONFIG_TEGRA_MPDECISION),y)
+obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += tegra_mpdecision.o
+endif
 obj-$(CONFIG_TEGRA_PCI)                 += pcie.o
 obj-$(CONFIG_USB_SUPPORT)               += usb_phy.o
 ifeq ($(CONFIG_CPU_IDLE),y)
@@ -254,3 +257,7 @@ obj-${CONFIG_MACH_ENDEAVORTD}         += nand_partitions.o
 
 # Add ramdump from NV patches
 obj-y                                   += nvdumper.o
+
+ifeq ($(CONFIG_TEGRA_MPDECISION),y)
+obj-$(CONFIG_ARCH_TEGRA_3x_SOC)         += tegra_sleep_stats.o
+endif
