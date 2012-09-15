@@ -49,6 +49,16 @@
 #define TEGRA_PMC_VIRT		(TEGRA_PMC_BASE - IO_APB_PHYS + IO_APB_VIRT)
 #define TEGRA_CLK_RESET_VIRT	(TEGRA_CLK_RESET_BASE - IO_PPSB_PHYS + IO_PPSB_VIRT)
 
+#if defined(__GNUC__) && \	
+	defined(__GNUC_MINOR__) && \	
+	defined(__GNUC_PATCHLEVEL__) && \	
+	((__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)) \	
+		>= 40502	
+#define USE_ARCH_EXTENSION_SEC 1	
+#else	
+#define USE_ARCH_EXTENSION_SEC 0	
+#endif
+
 /*
  * tegra_pen_lock
  *
@@ -467,6 +477,9 @@ ENTRY(tegra_generic_smc)
 	mov	r3, #0
 	mov	r4, #0
 	dsb
+#if USE_ARCH_EXTENSION_SEC
+  .arch_extension sec
+#endif
 	smc	#0
 	adr	r3, __tegra_smc_stack
 	ldmia	r3, {r4-r12, pc}

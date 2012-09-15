@@ -356,6 +356,7 @@ struct tegra_dc_out {
 
 	int power_wakeup;
 	int performance_tuning;
+	int video_min_bw;
 
 	int	(*enable)(void);
 	int	(*postpoweron)(void);

@@ -18,11 +18,13 @@
  */
 
 #include <linux/gpio.h>
+#include <linux/delay.h>
 #include <linux/irq.h>
 #include <linux/rtc.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include <linux/regulator/consumer.h>
+
 
 #include <mach/htc_headset_mgr.h>
 #include <mach/htc_headset_gpio.h>
@@ -47,7 +49,7 @@ static DECLARE_DELAYED_WORK(cancel_button_work, cancel_button_work_func);
 static struct htc_headset_gpio_info *hi;
 unsigned long last_key_jiffies = 0;
 unsigned long unstable_jiffies = 0.02 * HZ;
-unsigned long irq_delay = 0.002 * HZ;
+unsigned long irq_delay = 0.010 * HZ;
 
 static int hs_gpio_hpin_state(void)
 {
@@ -115,29 +117,51 @@ static void hs_key_irq_enable_func(struct work_struct *work)
 
 static void cancel_button_work_func(struct work_struct *work)
 {
+        int counter = 10, ret = 0;
 	HS_DBG();
-	cancel_delayed_work(&button_gpio_work);
+
+	ret = cancel_delayed_work(&button_gpio_work);
+
+	if (ret)
+            HS_LOG("cancel_delayed_work &button_gpio_work ok");
+
+	while(counter--)
+	{
+		if(queue_delayed_work(button_wq, &button_gpio_work, unstable_jiffies))
+		{
+		    HS_LOG("queue_delayed_work &button_gpio_work ok");
+		    break;
+		}
+		msleep(2);
+	}
+
+	queue_delayed_work(button_wq, &hs_key_irq_enable, irq_delay);
 }
 
 static irqreturn_t button_irq_handler(int irq, void *dev_id)
 {
 	unsigned int irq_mask = IRQF_TRIGGER_HIGH | IRQF_TRIGGER_LOW;
+	int ret = 0;
 
 	HS_DBG();
 
-	if(time_before_eq(jiffies, last_key_jiffies+unstable_jiffies) && last_key_jiffies != 0) {
-		queue_delayed_work(button_wq, &cancel_button_work, HS_JIFFIES_ZERO);
-		HS_LOG("The KEY event is unstable,remove debounce.");
-	}
-
 	disable_irq_nosync(hi->key_irq);
-	queue_delayed_work(button_wq, &hs_key_irq_enable, irq_delay);
 
 	hi->key_irq_type ^= irq_mask;
 	irq_set_irq_type(hi->key_irq, hi->key_irq_type);
 
 	wake_lock_timeout(&hi->hs_wake_lock, HS_WAKE_LOCK_TIMEOUT);
-	queue_delayed_work(button_wq, &button_gpio_work, unstable_jiffies);
+
+	ret = queue_delayed_work(button_wq, &button_gpio_work, unstable_jiffies);
+
+	if(!ret)
+	{
+	    queue_delayed_work(button_wq, &cancel_button_work, HS_JIFFIES_ZERO);
+	    HS_LOG("The KEY event is unstable,remove debounce.");
+	}
+	else
+	    queue_delayed_work(button_wq, &hs_key_irq_enable, irq_delay);
+
 	last_key_jiffies = jiffies;
 
 	return IRQ_HANDLED;

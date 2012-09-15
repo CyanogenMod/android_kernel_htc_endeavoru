@@ -303,9 +303,6 @@
 #define ROUND_DIVIDER_DOWN	1
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
-#define EARLY_SUSPEND_MIN_CPU_FREQ_IDX	0
-#define ACTIVE_MIN_CPU_FREQ_IDX		1
-
 /*
  * SCLK_ADJUST_DELAY is timeout to delay lowering SCLK
  * after display off/suspend. SCLK is kept at 40Mhz for the specified
@@ -354,8 +351,6 @@ static struct cpufreq_frequency_table *selected_cpufreq_table;
 #define SKIPPER_ENGAGE_RATE		 800000000
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
-#define EARLY_SUSPEND_MIN_CPU_FREQ_IDX	0
-#define ACTIVE_MIN_CPU_FREQ_IDX		1
 #define SCLK_MIN_FREQ			12000000
 static struct cpufreq_frequency_table *selected_cpufreq_table;
 #else
@@ -4473,7 +4468,7 @@ static struct cpufreq_frequency_table freq_table_1p5GHz[] = {
 	{ 0,  51000 },
 	{ 1,  102000 },
 	{ 2,  204000 },
-	{ 3,  340000 },
+	{ 3,  306000 },
 	{ 4,  475000 },
 	{ 5,  640000 },
 	{ 6,  760000 },
@@ -4532,8 +4527,6 @@ static int clip_cpu_rate_limits(
 		return ret;
 	}
 	cpu_clk_g->max_rate = freq_table[idx].frequency * 1000;
-	cpu_clk_lp->min_rate =
-		freq_table[ACTIVE_MIN_CPU_FREQ_IDX].frequency * 1000;
 	if (cpu_clk_g->max_rate < cpu_clk_lp->max_rate) {
 		pr_err("%s: G CPU max rate %lu is below LP CPU max rate %lu",
 		       __func__, cpu_clk_g->max_rate, cpu_clk_lp->max_rate);
@@ -4550,8 +4543,6 @@ static int clip_cpu_rate_limits(
 		return ret;
 	}
 	cpu_clk_lp->max_rate = freq_table[idx].frequency * 1000;
-	cpu_clk_lp->min_rate =
-		freq_table[ACTIVE_MIN_CPU_FREQ_IDX].frequency * 1000;
 	cpu_clk_g->min_rate = freq_table[idx-1].frequency * 1000;
 	data->suspend_index = idx;
 	return 0;
@@ -4864,21 +4855,14 @@ static struct early_suspend tegra3_clk_early_suspender;
 
 static void tegra3_clk_early_suspend(struct early_suspend *h)
 {
-	struct clk *cpu_clk_lp = &tegra_clk_virtual_cpu_lp;
-
 	mutex_lock(&early_suspend_lock);
 	schedule_delayed_work(&delayed_adjust, msecs_to_jiffies(SCLK_ADJUST_DELAY));
-
-	cpu_clk_lp->min_rate =
-		selected_cpufreq_table[EARLY_SUSPEND_MIN_CPU_FREQ_IDX]
-		.frequency * 1000;
 	mutex_unlock(&early_suspend_lock);
 }
 
 static void tegra3_clk_late_resume(struct early_suspend *h)
 {
 	struct clk *clk_wake = tegra_get_clock_by_name("wake.sclk");
-	struct clk *cpu_clk_lp = &tegra_clk_virtual_cpu_lp;
 
 	mutex_lock(&early_suspend_lock);
 
@@ -4889,9 +4873,6 @@ static void tegra3_clk_late_resume(struct early_suspend *h)
 	if (clk_wake)
 		clk_enable(clk_wake);
 
-	cpu_clk_lp->min_rate =
-		selected_cpufreq_table[ACTIVE_MIN_CPU_FREQ_IDX]
-		.frequency * 1000;
 	mutex_unlock(&early_suspend_lock);
 }
 #endif

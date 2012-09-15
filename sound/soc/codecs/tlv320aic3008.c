@@ -60,7 +60,7 @@
 #define AUD_DBG(fmt, ...) do { } while (0)
 #endif
 
-#define AUD_CPU_FREQ_MIN 102000
+//#define AUD_CPU_FREQ_MIN 51000
 
 /* for quattro --- */
 int64_t pwr_up_time;
@@ -102,7 +102,7 @@ static const struct snd_soc_dapm_route intercon[] = { };
 static int aic3008_set_config(int config_tbl, int idx, int en);
 static void aic3008_powerdown(void);
 static void aic3008_powerup(void);
-void aic3008_votecpuminfreq(bool bflag);
+//void aic3008_votecpuminfreq(bool bflag);
 
 /*****************************************************************************/
 /* Specific SPI read/write command for AIC3008                               */
@@ -477,7 +477,7 @@ bool aic3008_IsSoundPlayBack(int idx)
     else
         return false;
 }
-void aic3008_votecpuminfreq(bool bflag)
+/*void aic3008_votecpuminfreq(bool bflag)
 {
     static bool boldCPUMinReq = false;
     if (bflag == boldCPUMinReq)
@@ -497,7 +497,7 @@ void aic3008_votecpuminfreq(bool bflag)
     }
 
     return;
-}
+}*/
 
 void aic3008_CodecInit()
 {
@@ -869,10 +869,10 @@ static void aic3008_rx_config(int mode)
 
 	aic3008_config(&aic3008_downlink[mode][1], aic3008_downlink[mode][0].data);
 
-    if (aic3008_IsSoundPlayBack(mode))
+/*    if (aic3008_IsSoundPlayBack(mode))
         aic3008_votecpuminfreq(true);
     else
-        aic3008_votecpuminfreq(false);
+        aic3008_votecpuminfreq(false);*/
 }
 
 static void aic3008_powerdown(void)

@@ -1,3 +1,5 @@
+menu "CPU Frequency scaling"
+
 config CPU_FREQ
 	bool "CPU Frequency scaling"
 	help
@@ -17,19 +19,6 @@ if CPU_FREQ
 
 config CPU_FREQ_TABLE
 	tristate
-
-config CPU_FREQ_DEBUG
-	bool "Enable CPUfreq debugging"
-	help
-	  Say Y here to enable CPUfreq subsystem (including drivers)
-	  debugging. You will need to activate it via the kernel
-	  command line by passing
-	     cpufreq.debug=<value>
-
-	  To get <value>, add 
-	       1 to activate CPUfreq core debugging,
-	       2 to activate CPUfreq drivers debugging, and
-	       4 to activate CPUfreq governor debugging
 
 config CPU_FREQ_STAT
 	tristate "CPU frequency translation statistics"
@@ -177,17 +166,22 @@ config CPU_FREQ_GOV_ONDEMAND
 
 	  If in doubt, say N.
 
-config CPU_FREQ_GOV_ONDEMAND_2_PHASE
-	tristate "'2-phase' power-efficiency ondemand algorithm"
-	depends on CPU_FREQ_GOV_ONDEMAND
-	help
-	  '2-phase' - This driver adds a new algo to save power
-
 config CPU_FREQ_GOV_INTERACTIVE
 	tristate "'interactive' cpufreq policy governor"
 	help
 	  'interactive' - This driver adds a dynamic cpufreq policy governor
 	  designed for latency-sensitive workloads.
+
+	  This governor attempts to reduce the latency of clock
+	  increases so that the system is more responsive to
+	  interactive workloads.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called cpufreq_interactive.
+
+	  For details, take a look at linux/Documentation/cpu-freq.
+
+	  If in doubt, say N.
 
 config CPU_FREQ_GOV_CONSERVATIVE
 	tristate "'conservative' cpufreq governor"
@@ -212,4 +206,5 @@ config CPU_FREQ_GOV_CONSERVATIVE
 
 	  If in doubt, say N.
 
-endif	# CPU_FREQ
+endif
+endmenu

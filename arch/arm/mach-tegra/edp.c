@@ -23,10 +23,11 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <mach/edp.h>
-
+#include <linux/module.h>
 #include "fuse.h"
 
 static const struct tegra_edp_limits *edp_limits;
+static struct tegra_edp_limits *default_table;
 static int edp_limits_size;
 
 static const unsigned int *system_edp_limits;
@@ -120,7 +121,7 @@ static char __initdata tegra_edp_map[] = {
 	0x23, 0x55, 0x8c, 0x82, 0x64, 0x50, 0x04, 0x32,
 	0x14, 0x91, 0x87, 0x87, 0x87, 0x04, 0x32, 0x2d,
 	0x96, 0x8c, 0x8c, 0x8c, 0x04, 0x32, 0x3c, 0x96,
-	0x8c, 0x8c, 0x8c, 0x04, 0x32, 0x46, 0x96, 0x8c,
+	0x8c, 0x8c, 0x8c, 0x04, 0x32, 0x41, 0x96, 0x8c,
 	0x8c, 0x8c, 0x04, 0x32, 0x4b, 0x82, 0x78, 0x78,
 	0x78, 0x04, 0x32, 0x55, 0x82, 0x78, 0x78, 0x78,
 	0x04, 0x2f, 0x14, 0x91, 0x87, 0x87, 0x87, 0x04,
@@ -252,6 +253,15 @@ static struct tegra_edp_limits edp_default_limits[] = {
 	{85, {1000000, 1000000, 1000000, 1000000} },
 };
 
+static struct tegra_edp_limits edp_power_limits[] = {
+	{20, {1450000, 1350000, 1350000, 1350000} },
+	{45, {1500000, 1400000, 1400000, 1400000} },
+	{60, {1200000, 1000000,  880000,  760000} },
+	{65, {1000000,  880000,  760000,  640000} },
+	{75, { 880000,  640000,  640000,  640000} },
+	{85, { 880000,  640000,  640000,  640000} },
+};
+
 
 
 /*
@@ -263,6 +273,7 @@ void __init tegra_init_cpu_edp_limits(unsigned int regulator_mA)
 	int cpu_speedo_id = tegra_cpu_speedo_id();
 	int i, j;
 	struct tegra_edp_limits *e;
+	struct tegra_edp_limits *f;
 	struct tegra_edp_entry *t = (struct tegra_edp_entry *)tegra_edp_map;
 	int tsize = sizeof(tegra_edp_map)/sizeof(struct tegra_edp_entry);
 
@@ -303,11 +314,18 @@ void __init tegra_init_cpu_edp_limits(unsigned int regulator_mA)
 		e[j].freq_limits[1] = (unsigned int)t[i+j].freq_limits[1] * 10000;
 		e[j].freq_limits[2] = (unsigned int)t[i+j].freq_limits[2] * 10000;
 		e[j].freq_limits[3] = (unsigned int)t[i+j].freq_limits[3] * 10000;
-	}
+        }
+
+	f = kmalloc(sizeof(struct tegra_edp_limits) * edp_limits_size,
+                    GFP_KERNEL);
+	BUG_ON(!f);
+
+	memcpy(f, e, sizeof(struct tegra_edp_limits) * edp_limits_size);
 
 	if (edp_limits != edp_default_limits)
 		kfree(edp_limits);
 
+	default_table = f;
 	edp_limits = e;
 }
 
@@ -447,4 +465,44 @@ static int __init tegra_edp_debugfs_init(void)
 }
 
 late_initcall(tegra_edp_debugfs_init);
+
 #endif /* CONFIG_DEBUG_FS */
+
+static int edp_ap_limit = 0;
+
+static int edp_ap_limit_set(const char *arg, const struct kernel_param *kp)
+{
+	int edp_ap_limit_ori = edp_ap_limit;
+	int ret = param_set_int(arg, kp);
+
+	if (ret == 0) {
+		if (edp_ap_limit_ori != edp_ap_limit) {
+			pr_info("EDP table is changed (%d)", edp_ap_limit);
+			switch (edp_ap_limit) {
+			case 0:
+			default:
+				memcpy((void *)edp_limits, default_table, sizeof(struct tegra_edp_limits) * edp_limits_size);
+				break;
+			case 1:
+				memcpy((void *)edp_limits, edp_power_limits, sizeof(struct tegra_edp_limits) * edp_limits_size);
+				break;
+			}
+		}
+	} else {
+		pr_warn(" %s: unable to set edp_ap_limit %s\n", __func__, arg);
+	}
+
+	return 0;
+}
+
+static int edp_ap_limit_get(char *buffer, const struct kernel_param *kp)
+{
+        return param_get_int(buffer, kp);
+}
+
+static struct kernel_param_ops tegra_edp_ap_limit_ops = {
+        .set = edp_ap_limit_set,
+        .get = edp_ap_limit_get,
+};
+
+module_param_cb(edp_ap_limit, &tegra_edp_ap_limit_ops, &edp_ap_limit, 0644);

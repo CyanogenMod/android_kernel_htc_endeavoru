@@ -56,6 +56,10 @@ config BT_SCO
 	  SCO link provides voice transport over Bluetooth.  SCO support is
 	  required for voice applications like Headset and Audio.
 
+config BT_CTS_WAKEUP
+	bool "BT CTS Wakeup"
+	help
+	  BT_CTS wakeup mechanism. Wakeup CPU while BT HS sends data.
 endif
 
 source "net/bluetooth/rfcomm/Kconfig"
