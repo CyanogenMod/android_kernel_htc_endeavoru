@@ -15,9 +15,10 @@
 
 #include "base.h"
 
-static struct workqueue_struct *cpuplug_wq;
+#ifndef CONFIG_TEGRA_MPDECISION
 static struct work_struct cpuplug_work;
-
+static struct workqueue_struct *cpuplug_wq;
+#endif
 static struct sysdev_class_attribute *cpu_sysdev_class_attrs[];
 
 struct sysdev_class cpu_sysdev_class = {
@@ -29,7 +30,7 @@ EXPORT_SYMBOL(cpu_sysdev_class);
 static DEFINE_PER_CPU(struct sys_device *, cpu_sys_devices);
 
 #ifdef CONFIG_HOTPLUG_CPU
-
+#ifndef CONFIG_TEGRA_MPDECISION
 static int target_number_of_online_cpus = 0;
 static int cpu_on_mdelay = 0;
 
@@ -101,7 +102,7 @@ static ssize_t store_cpu_on_mdelay(struct sysdev_class *class,
 static SYSDEV_CLASS_ATTR(cpu_on, 0644, show_cpu_on, store_cpu_on);
 static SYSDEV_CLASS_ATTR(cpu_on_mdelay, 0644,
 		show_cpu_on_mdelay, store_cpu_on_mdelay);
-
+#endif
 static ssize_t show_online(struct sys_device *dev, struct sysdev_attribute *attr,
 			   char *buf)
 {
@@ -333,13 +334,13 @@ int __init cpu_dev_init(void)
 	if (!err)
 		err = sched_create_sysfs_power_savings_entries(&cpu_sysdev_class);
 #endif
-
+#ifndef CONFIG_TEGRA_MPDECISION
 	cpuplug_wq = alloc_workqueue(
-                "cpu-plug", WQ_UNBOUND | WQ_RESCUER | WQ_FREEZABLE, 1);
-        if (!cpuplug_wq)
-                return -ENOMEM;
-        INIT_WORK(&cpuplug_work, tegra_cpuplug_work_func);
-
+				 "cpu-plug", WQ_UNBOUND | WQ_RESCUER | WQ_FREEZABLE, 1);
+	if (!cpuplug_wq)
+		return -ENOMEM;
+	INIT_WORK(&cpuplug_work, tegra_cpuplug_work_func);
+#endif
 	return err;
 }
 
@@ -353,7 +354,9 @@ static struct sysdev_class_attribute *cpu_sysdev_class_attrs[] = {
 	&cpu_attrs[2].attr,
 	&attr_kernel_max,
 	&attr_offline,
+#ifndef CONFIG_TEGRA_MPDECISION
 	&attr_cpu_on,
 	&attr_cpu_on_mdelay,
+#endif
 	NULL
 };
