@@ -367,6 +367,8 @@ static struct clk *cpu_sclk;
 static bool detach_shared_bus;
 module_param(detach_shared_bus, bool, 0644);
 
+bool lock_wake_clock = false;
+
 /**
 * Structure defining the fields for USB UTMI clocks Parameters.
 */
@@ -4856,8 +4858,10 @@ static struct early_suspend tegra3_clk_early_suspender;
 static void tegra3_clk_early_suspend(struct early_suspend *h)
 {
 	mutex_lock(&early_suspend_lock);
-	schedule_delayed_work(&delayed_adjust, msecs_to_jiffies(SCLK_ADJUST_DELAY));
-	mutex_unlock(&early_suspend_lock);
+        if (!lock_wake_clock) {
+                schedule_delayed_work(&delayed_adjust, msecs_to_jiffies(SCLK_ADJUST_DELAY));
+        }
+        mutex_unlock(&early_suspend_lock);
 }
 
 static void tegra3_clk_late_resume(struct early_suspend *h)
@@ -4865,15 +4869,15 @@ static void tegra3_clk_late_resume(struct early_suspend *h)
 	struct clk *clk_wake = tegra_get_clock_by_name("wake.sclk");
 
 	mutex_lock(&early_suspend_lock);
+        if (!lock_wake_clock) {
+                if (clk_wake && (clk_wake->refcnt >= 1))
+		        clk_disable(clk_wake);
+                cancel_delayed_work(&delayed_adjust);
 
-	if (clk_wake && (clk_wake->refcnt >= 1))
-		clk_disable(clk_wake);
-	cancel_delayed_work(&delayed_adjust);
-
-	if (clk_wake)
-		clk_enable(clk_wake);
-
-	mutex_unlock(&early_suspend_lock);
+                if (clk_wake)
+		        clk_enable(clk_wake);
+        }
+        mutex_unlock(&early_suspend_lock);
 }
 #endif
 

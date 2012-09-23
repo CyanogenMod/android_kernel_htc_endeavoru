@@ -36,13 +36,24 @@
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
+#include <linux/clk.h>
+#ifdef CONFIG_HAS_EARLYSUSPEND
+#include <linux/earlysuspend.h>
+#endif
 
 #include "tegra_pcm.h"
+#include "../../../arch/arm/mach-tegra/clock.h"
 
 #define DRV_NAME "tegra-pcm-audio"
 
-#define PERIOD_BYTES_MAX  (PAGE_SIZE * 2)
-#define PERIODS_MAX    64
+#define PERIOD_BYTES_MAX	(PAGE_SIZE * 2)
+#define PERIODS_MAX		64
+
+extern bool lock_wake_clock;
+#ifdef CONFIG_HAS_EARLYSUSPEND
+struct early_suspend tegra_pcm_early_suspender;
+bool screen_on = true;
+#endif
 
 static const struct snd_pcm_hardware tegra_pcm_hardware = {
 	.info			= SNDRV_PCM_INFO_MMAP |
@@ -197,6 +208,8 @@ static int tegra_pcm_open(struct snd_pcm_substream *substream)
 		prtd->tegra_wake_lock_name);
 #endif
 
+        lock_wake_clock = true;
+
 	return 0;
 
 err:
@@ -213,6 +226,7 @@ static int tegra_pcm_close(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct tegra_runtime_data *prtd = runtime->private_data;
+        struct clk *clk_wake = tegra_get_clock_by_name("wake.sclk");
 
 #ifdef CONFIG_HAS_WAKELOCK
 	wake_lock_destroy(&prtd->tegra_wake_lock);
@@ -220,6 +234,15 @@ static int tegra_pcm_close(struct snd_pcm_substream *substream)
 
 	if (prtd->dma_chan)
 		tegra_dma_free_channel(prtd->dma_chan);
+
+        lock_wake_clock = false;
+        if (!screen_on) {
+                if (clk_wake && (clk_wake->refcnt >= 1))
+                        clk_disable(clk_wake);
+
+                if (clk_wake)
+                        clk_enable(clk_wake);
+        }
 
 	kfree(prtd);
 
@@ -430,14 +453,36 @@ static struct platform_driver tegra_pcm_driver = {
 	.remove = __devexit_p(tegra_pcm_platform_remove),
 };
 
+#ifdef CONFIG_HAS_EARLYSUSPEND
+static void tegra_pcm_early_suspend(struct early_suspend *h)
+{
+        screen_on = false;
+}
+static void tegra_pcm_late_resume(struct early_suspend *h)
+{
+        screen_on = true;
+}
+#endif
+
 static int __init snd_tegra_pcm_init(void)
 {
+#ifdef CONFIG_HAS_EARLYSUSPEND
+        tegra_pcm_early_suspender.suspend = tegra_pcm_early_suspend;
+        tegra_pcm_early_suspender.resume = tegra_pcm_late_resume;
+        tegra_pcm_early_suspender.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN;
+        register_early_suspend(&tegra_pcm_early_suspender);
+#endif
+
 	return platform_driver_register(&tegra_pcm_driver);
 }
 module_init(snd_tegra_pcm_init);
 
 static void __exit snd_tegra_pcm_exit(void)
 {
+#ifdef CONFIG_HAS_EARLYSUSPEND
+        unregister_early_suspend(&tegra_pcm_early_suspender);
+#endif
+
 	platform_driver_unregister(&tegra_pcm_driver);
 }
 module_exit(snd_tegra_pcm_exit);
