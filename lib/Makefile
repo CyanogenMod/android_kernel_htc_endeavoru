@@ -2,6 +2,13 @@
 # Makefile for some libs needed in the kernel.
 #
 
+ifdef CONFIG_CC_OPTIMIZE_ALOT
+CFLAGS_bitmap.o += -Os
+endif
+ifdef CONFIG_CC_OPTIMIZE_DEFAULT
+CFLAGS_bitmap.o += -Os
+endif
+
 ifdef CONFIG_FUNCTION_TRACER
 ORIG_CFLAGS := $(KBUILD_CFLAGS)
 KBUILD_CFLAGS = $(subst -pg,,$(ORIG_CFLAGS))
