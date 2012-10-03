@@ -200,6 +200,9 @@ static int yushan_spi_transaction(struct spi_message *msg)
 #endif
 	}
 
+	//HTC_START fix Klocwork
+	msg->context = NULL;
+	//HTC_END
 	return status;
 }
 

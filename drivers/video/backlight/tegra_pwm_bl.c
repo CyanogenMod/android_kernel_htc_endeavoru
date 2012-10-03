@@ -40,7 +40,7 @@ static int tegra_pwm_backlight_update_status(struct backlight_device *bl)
 	int brightness = bl->props.brightness;
 	int max = bl->props.max_brightness;
 	struct tegra_dc *dc;
-	u8 pdata[]={0x51,0xFF};
+	u8 pdata[]={0x51,0xFF,0xB2,0x0E};
 	u8 dimming_off[]={0x53,0x24};
 	if (!bl->props.bkl_on) {
 		/*printk(KERN_DEBUG "[DISP] %s skip brightness=%d ,duty_cycle=%d\n",__FUNCTION__,brightness,tbl->params.duty_cycle);*/
@@ -82,7 +82,10 @@ static int tegra_pwm_backlight_update_status(struct backlight_device *bl)
 			tegra_dsi_send_panel_short_cmd(dc, dimming_off, ARRAY_SIZE(dimming_off));
 			hr_msleep(20);
 		}
-		tegra_dsi_send_panel_short_cmd(dc, pdata, ARRAY_SIZE(pdata));
+		if (brightness == 0 && tbl->params.lcm_source == HIMAX)
+			tegra_dsi_send_panel_short_cmd(dc, pdata, ARRAY_SIZE(pdata));
+		else
+			tegra_dsi_send_panel_short_cmd(dc, pdata, 2);
 		//setbkl(dc, brightness);
 	}
 	else if (dc)
@@ -144,6 +147,7 @@ static int tegra_pwm_backlight_probe(struct platform_device *pdev)
 	tbl->params.clk_div = data->clk_div;
 	tbl->params.clk_select = data->clk_select;
 	tbl->params.backlight_mode = data->backlight_mode;
+	tbl->params.lcm_source = data->lcm_source;
 	if(tbl->params.backlight_mode == MIPI_BACKLIGHT){
 		dc = tegra_dc_get_dc(data->which_dc);
 		tegra_dc_turn_off_pwm(dc);
@@ -162,8 +166,16 @@ static int tegra_pwm_backlight_probe(struct platform_device *pdev)
 	bl->props.bkl_on = 1;
 	bl->props.brightness = data->dft_brightness;
 
-	if ( data->draw_battery != 1 )
-		backlight_update_status(bl);
+	switch(data->backlight_status) {
+		case BACKLIGHT_SKIP_WHEN_PROBE:
+			break;
+		case BACKLIGHT_DISABLE:
+			bl->props.bkl_on = 0;
+			break;
+		case BACKLIGHT_ENABLE:
+		default:
+			backlight_update_status(bl);
+	}
 
 	platform_set_drvdata(pdev, bl);
 	return 0;

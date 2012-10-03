@@ -837,6 +837,14 @@ static bool tegra_dc_hdmi_detect(struct tegra_dc *dc)
 	if (!tegra_dc_hdmi_hpd(dc))
 		goto fail;
 
+#ifdef CONFIG_TEGRA_HDMI_MHL
+	if (!IsD0Mode()) {
+		DISP_INFO_LN("Sii9244 is not in D0 mode!");
+		update_mhl_status(false, CONNECT_TYPE_UNKNOWN);
+		goto fail;
+	}
+#endif
+
 	err = tegra_edid_get_monspecs(hdmi->edid, &specs);
 	if (err < 0) {
 		dev_err(&dc->ndev->dev, "error reading edid\n");
@@ -907,7 +915,8 @@ static void tegra_dc_hdmi_suspend(struct tegra_dc *dc)
 	struct tegra_dc_hdmi_data *hdmi = tegra_dc_get_outdata(dc);
 	unsigned long flags;
 
-	tegra_nvhdcp_suspend(hdmi->nvhdcp);
+	/* move to hdmi_hdcp_early_suspend and called by sii9234_early_suspend */
+	//tegra_nvhdcp_suspend(hdmi->nvhdcp);
 	spin_lock_irqsave(&hdmi->suspend_lock, flags);
 	hdmi->suspended = true;
 	spin_unlock_irqrestore(&hdmi->suspend_lock, flags);
@@ -929,6 +938,21 @@ static void tegra_dc_hdmi_resume(struct tegra_dc *dc)
 				   msecs_to_jiffies(30));
 
 	spin_unlock_irqrestore(&hdmi->suspend_lock, flags);
+	/* move to hdmi_hdcp_late_resume and called by sii9234_late_resume */
+	//tegra_nvhdcp_resume(hdmi->nvhdcp);
+}
+
+void hdmi_hdcp_early_suspend()
+{
+	struct tegra_dc *dc_hdmi = tegra_dc_get_dc(1);
+	struct tegra_dc_hdmi_data *hdmi = tegra_dc_get_outdata(dc_hdmi);
+	tegra_nvhdcp_suspend(hdmi->nvhdcp);
+}
+
+void hdmi_hdcp_late_resume()
+{
+	struct tegra_dc *dc_hdmi = tegra_dc_get_dc(1);
+	struct tegra_dc_hdmi_data *hdmi = tegra_dc_get_outdata(dc_hdmi);
 	tegra_nvhdcp_resume(hdmi->nvhdcp);
 }
 
@@ -1464,6 +1488,8 @@ static void tegra_dc_hdmi_setup_avi_infoframe(struct tegra_dc *dc, bool dvi)
 	struct tegra_dc_hdmi_data *hdmi = tegra_dc_get_outdata(dc);
 	struct hdmi_avi_infoframe avi;
 
+	tegra_dc_writel(hdmi->dc, 0x00000000, DC_DISP_BORDER_COLOR);
+
 	if (dvi) {
 		tegra_hdmi_writel(hdmi, 0x0,
 				  HDMI_NV_PDISP_HDMI_AVI_INFOFRAME_CTRL);
@@ -1481,6 +1507,8 @@ static void tegra_dc_hdmi_setup_avi_infoframe(struct tegra_dc *dc, bool dvi)
 		} else {
 			avi.m = HDMI_AVI_M_16_9;
 			avi.vic = 3;
+			avi.q = tegra_edid_vcdb_supported(hdmi->edid);
+			tegra_dc_writel(hdmi->dc, 0x00101010, DC_DISP_BORDER_COLOR);
 		}
 	} else if (dc->mode.v_active == 576) {
 		/* CEC modes 17 and 18 differ only by the pysical size of the
@@ -1507,7 +1535,10 @@ static void tegra_dc_hdmi_setup_avi_infoframe(struct tegra_dc *dc, bool dvi)
 		/* VIC for both 1080p and 1080p 3D mode */
 		avi.m = HDMI_AVI_M_16_9;
 		if (dc->mode.h_front_porch == 88)
-			avi.vic = 16; /* 60 Hz */
+			if (74250000 == dc->mode.pclk)
+				avi.vic = 34; /* 30 Hz */
+			else
+				avi.vic = 16; /* 60 Hz */
 		else if (dc->mode.h_front_porch == 528)
 			avi.vic = 31; /* 50 Hz */
 		else
@@ -1666,7 +1697,7 @@ static void tegra_dc_hdmi_enable(struct tegra_dc *dc)
 
 	tegra_hdmi_writel(hdmi,
 			  (dc->ndev->id ? HDMI_SRC_DISPLAYB : HDMI_SRC_DISPLAYA) |
-			  ARM_VIDEO_RANGE_LIMITED,
+			  ARM_VIDEO_RANGE_FULL,
 			  HDMI_NV_PDISP_INPUT_CONTROL);
 
 	clk_disable(hdmi->disp1_clk);

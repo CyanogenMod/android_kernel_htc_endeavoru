@@ -428,7 +428,7 @@ void greenLED_on_off(bool on)
 static int s5k6a1gx03_set_mode(struct s5k6a1gx03_info *info, struct s5k6a1gx03_mode *mode)
 {
 	int sensor_mode;
-	int err;
+	int err = -1;
 	struct s5k6a1gx03_reg reg_list[6];
 
 /* HTC_START */

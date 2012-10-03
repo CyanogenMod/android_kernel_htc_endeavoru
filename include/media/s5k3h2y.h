@@ -27,6 +27,7 @@
 #define S5K3H2Y_IOCTL_SET_GAIN			_IOW('o', 4, __u16)
 #define S5K3H2Y_IOCTL_GET_STATUS			_IOR('o', 5, __u8)
 #define S5K3H2Y_IOCTL_SET_GROUP_HOLD		_IOW('o', 6, struct s5k3h2y_ae)
+#define S5K3H2Y_IOCTL_RESET_RAWCHIP		_IOW('o', 12, struct s5k3h2y_mode)
 
 struct s5k3h2y_mode {
 	int xres;

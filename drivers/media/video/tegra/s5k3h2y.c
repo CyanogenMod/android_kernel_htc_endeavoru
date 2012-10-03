@@ -1237,6 +1237,66 @@ static long s5k3h2y_ioctl(struct file *file,
 		return err;
 	}
 #endif
+
+	case S5K3H2Y_IOCTL_RESET_RAWCHIP:
+	{
+		pr_info("%s: S5K3H2Y_IOCTL_RESET_RAWCHIP\n", __func__);
+
+		struct s5k3h2y_mode mode;
+		Yushan_New_Context_Config_t *newContextConfig;
+		if (copy_from_user(&mode,
+				   (const void __user *)arg,
+				   sizeof(struct s5k3h2y_mode))) {
+			pr_info("%s %d\n", __func__, __LINE__);
+			return -EFAULT;
+		}
+
+		mutex_lock(&info->camera_lock);
+		tegra_rawchip_block_iotcl(TRUE);
+
+		if (mode.xres == 3280 && mode.yres == 2464)
+		{
+			pr_info("[CAM] Reset rawchip mode to -> 3280x2464\n");
+			newContextConfig=&(mode_rawchip[0]);
+		}
+		else if (mode.xres == 3084 && mode.yres == 1736)
+		{
+			newContextConfig=&(mode_rawchip[3]);
+			pr_info("[CAM] Reset rawchip mode to -> 3084x1736\n");
+		}
+		else if (mode.xres == 768 && mode.yres == 432) {
+			pr_info("[CAM] Reset rawchip mode to -> 768x432\n");
+			newContextConfig=&(mode_rawchip[2]);
+		}
+		else if (mode.xres == 1640 && mode.yres == 510) {
+			pr_info("[CAM] Reset rawchip mode to -> 1640x510\n");
+			newContextConfig=&(mode_rawchip[4]);
+		}
+		else {
+			pr_err("%s: invalid resolution supplied to set mode %d %d\n",__func__, mode.xres, mode.yres);
+			tegra_rawchip_block_iotcl(FALSE);
+			mutex_unlock(&info->camera_lock);
+			return -EINVAL;
+		}
+
+		/*sensor stream off*/
+		ret = s5k3h2y_write_table(info->i2c_client, reset_seq, NULL, 0);
+		if (ret)
+			pr_err("[CAM]set sensor stream off failed!!!");
+
+		Reset_Yushan(newContextConfig);
+		msleep(10);
+
+		/*stream on*/
+		ret = s5k3h2y_write_table(info->i2c_client, mode_end, NULL, 0);
+		if (ret)
+			pr_err("[CAM]set sensor stream on failed!!!");
+
+		tegra_rawchip_block_iotcl(FALSE);
+		mutex_unlock(&info->camera_lock);
+		return ret;
+	}
+
 	default:
 		return -EINVAL;
 	}

@@ -304,6 +304,10 @@ int android_switch_function(unsigned func)
 	usb_remove_config(dev->cdev, &android_config_driver);
 
 	INIT_LIST_HEAD(&dev->enabled_functions);
+	if (board_mfg_mode() == 5) {
+		func = 3;/* USB_FUNCTION_UMS + USB_FUNCTION_ADB */
+		pr_debug("%s enter offmode-charging\n", __func__);
+	}
 
 	while ((f = *functions++)) {
 		if ((func & (1 << USB_FUNCTION_UMS)) &&

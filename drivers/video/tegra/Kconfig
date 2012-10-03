@@ -124,13 +124,19 @@ config TEGRA_NVHDCP
 config TEGRA_HDMI_MHL
 	depends on TEGRA_DC
 	bool "Enable MHL"
+	default y
 
 config TEGRA_HDMI_MHL_SUPERDEMO
-       depends on TEGRA_HDMI_MHL
-       bool "MHL SUPERDEMO"
-       default y
-       ---help---
-         Support for SCRATCHPAD event output through MHL SiI9234
+	depends on TEGRA_HDMI_MHL
+	bool "MHL SUPERDEMO"
+	default n
+	help
+	  Support for SCRATCHPAD event output through MHL SiI9234
+
+config INTERNAL_CHARGING_SUPPORT
+	depends on TEGRA_HDMI_MHL
+	bool "INTERNAL CHARGING SUPPORT"
+	default y
 
 endif
 

@@ -46,6 +46,7 @@
 #include <mach/mc.h>
 #include <linux/nvhost.h>
 #include <mach/latency_allowance.h>
+#include <asm/atomic.h>
 
 #include "dc_reg.h"
 #include "dc_priv.h"
@@ -64,6 +65,7 @@
 #define ALL_UF_INT (0)
 #endif
 
+static atomic_t update_frame = ATOMIC_INIT(0);
 extern global_wakeup_state;
 extern int resume_from_deep_suspend;
 
@@ -1280,9 +1282,11 @@ int tegra_dc_update_windows(struct tegra_dc_win *windows[], int n)
 		tegra_dc_writel(dc, val, DC_CMD_INT_MASK);
 	}
 
-	if (dc->out->flags & TEGRA_DC_OUT_ONE_SHOT_MODE)
+	if (dc->out->flags & TEGRA_DC_OUT_ONE_SHOT_MODE) {
+		atomic_set(&update_frame,1);
 		schedule_delayed_work(&dc->one_shot_work,
 				msecs_to_jiffies(dc->one_shot_delay_ms));
+	}
 
 	/* update EMC clock if calculated bandwidth has changed */
 	tegra_dc_program_bandwidth(dc);
@@ -2026,6 +2030,7 @@ void tegra_dc_host_trigger(struct tegra_dc *dc)
 	mutex_unlock(&dc->lock);
 	cancel_delayed_work_sync(&dc->one_shot_work);
 	mutex_lock(&dc->lock);
+	atomic_set(&update_frame,1);
 	schedule_delayed_work(&dc->one_shot_work,
 				msecs_to_jiffies(dc->one_shot_delay_ms));
 	tegra_dc_program_bandwidth(dc);
@@ -2037,8 +2042,13 @@ static void tegra_dc_one_shot_worker(struct work_struct *work)
 	struct tegra_dc *dc = container_of(
 		to_delayed_work(work), struct tegra_dc, one_shot_work);
 	mutex_lock(&dc->lock);
-	/* memory client has gone idle */
-	tegra_dc_clear_bandwidth(dc);
+	if (atomic_read(&update_frame)) {
+		schedule_delayed_work(&dc->one_shot_work,
+				msecs_to_jiffies(dc->one_shot_delay_ms));
+	} else {
+		/* memory client has gone idle */
+		tegra_dc_clear_bandwidth(dc);
+	}
 	mutex_unlock(&dc->lock);
 }
 
@@ -2052,25 +2062,47 @@ static u64 tegra_dc_underflow_count(struct tegra_dc *dc, unsigned reg)
 }
 
 #define UNDERFLOW_MAXLOG 10000
+#define UNDERFLOW_INCREASE_THRESHOLD 100
 static void tegra_dc_underflow_handler(struct tegra_dc *dc)
 {
 	u32 val;
 	int i;
 	static int underflow_cnt = 0;
+	u64 uf_increase = 0;
+	bool burst_increase = false;
 
 	dc->stats.underflows++;
-	if (dc->underflow_mask & WIN_A_UF_INT)
-		dc->stats.underflows_a += tegra_dc_underflow_count(dc,
-			DC_WINBUF_AD_UFLOW_STATUS);
-	if (dc->underflow_mask & WIN_B_UF_INT)
-		dc->stats.underflows_b += tegra_dc_underflow_count(dc,
+	if (dc->underflow_mask & WIN_A_UF_INT) {
+		uf_increase = tegra_dc_underflow_count(dc,
+                        DC_WINBUF_AD_UFLOW_STATUS);
+		if (uf_increase > UNDERFLOW_INCREASE_THRESHOLD)
+			burst_increase = true;
+		dc->stats.underflows_a += uf_increase;
+	}
+
+	if (dc->underflow_mask & WIN_B_UF_INT) {
+		uf_increase = tegra_dc_underflow_count(dc,
 			DC_WINBUF_BD_UFLOW_STATUS);
-	if (dc->underflow_mask & WIN_C_UF_INT)
-		dc->stats.underflows_c += tegra_dc_underflow_count(dc,
+		if (uf_increase > UNDERFLOW_INCREASE_THRESHOLD)
+			burst_increase = true;
+		dc->stats.underflows_b += uf_increase;
+	}
+
+	if (dc->underflow_mask & WIN_C_UF_INT) {
+		uf_increase = tegra_dc_underflow_count(dc,
 			DC_WINBUF_CD_UFLOW_STATUS);
+		if (uf_increase > UNDERFLOW_INCREASE_THRESHOLD)
+			burst_increase = true;
+		dc->stats.underflows_c += uf_increase;
+	}
 
 	if (underflow_cnt < UNDERFLOW_MAXLOG) {
-		printk(KERN_ERR "[DISP] dc underflow: %llu a: %llu b: %llu c: %llu emc_rate %d\n",
+		if (burst_increase)
+			printk(KERN_ERR "[DISP] dc underflow: %llu a: %llu b: %llu c: %llu emc_rate %d\n",
+			dc->stats.underflows,dc->stats.underflows_a, dc->stats.underflows_b
+			, dc->stats.underflows_c, dc->emc_clk_rate);
+		else
+			printk(KERN_WARNING "[DISP] dc underflow: %llu a: %llu b: %llu c: %llu emc_rate %d\n",
 			dc->stats.underflows,dc->stats.underflows_a, dc->stats.underflows_b
 			, dc->stats.underflows_c, dc->emc_clk_rate);
 		underflow_cnt++;
@@ -2164,6 +2196,7 @@ static void tegra_dc_one_shot_irq(struct tegra_dc *dc, unsigned long status)
 		/* Mark the frame_end as complete. */
 		if (!completion_done(&dc->frame_end_complete))
 			complete(&dc->frame_end_complete);
+		atomic_set(&update_frame,0);
 	}
 }
 
@@ -2784,7 +2817,7 @@ static int tegra_dc_probe(struct nvhost_device *ndev)
 	dc->shift_clk_div = 1;
 	/* Initialize one shot work delay, it will be assigned by dsi
 	 * according to refresh rate later. */
-	dc->one_shot_delay_ms = 70;
+	dc->one_shot_delay_ms = 40;
 
 	dc->base_res = base_res;
 	dc->base = base;

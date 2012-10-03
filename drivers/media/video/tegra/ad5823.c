@@ -29,12 +29,12 @@
 #define POS_HIGH (496)
 #define SETTLETIME_MS 55
 
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD) || defined(CONFIG_MACH_BLUE) || defined(CONFIG_MACH_TEGRA_ENTERPRISE)
+#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD) || defined(CONFIG_MACH_ERAU) || defined(CONFIG_MACH_BLUE) || defined(CONFIG_MACH_TEGRA_ENTERPRISE)
 #define FOCAL_LENGTH (3.03f)
 #define FNUMBER (2.0f)
 #endif
 
-#if defined(CONFIG_MACH_VERTEXF) || defined(CONFIG_MACH_QUATTRO_U)
+#if defined(CONFIG_MACH_VERTEXFP)
 #define FOCAL_LENGTH (2.95f)
 #define FNUMBER (2.4f)
 #endif

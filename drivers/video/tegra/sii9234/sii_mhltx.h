@@ -70,7 +70,8 @@ extern void sii9234_send_keyevent(uint32_t key, uint32_t type);
 extern	uint8_t	rcpSupportTable[];
 #ifdef CONFIG_INTERNAL_CHARGING_SUPPORT
 extern void ProcessMhlStatus(bool, bool);
-extern int mscCmdInProgress;
+extern uint8_t mscCmdInProgress;
 extern enum usb_connect_type gStatusMHL;
+extern int CBUS_SLAVE_ADDR;
 #endif
 

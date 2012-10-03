@@ -1978,8 +1978,11 @@ bool_t WaitForInterruptEvent2 (uint8_t bInterruptId ,uint32_t udwTimeOut)
 
 /*extern void sensor_streaming_on(void);*/
 /*extern void sensor_streaming_off(void);*/
-void Reset_Yushan(void)
+void Reset_Yushan(Yushan_New_Context_Config_t *sYushanNewContextConfig)
 {
+	pr_info("[CAM] %s\n",__func__);
+	uint8_t bStatus;
+	uint8_t bPdpMode = 0, bDppMode = 0, bDopMode = 0;
 	uint8_t	bSpiData;
 	Yushan_Init_Dxo_Struct_t	sDxoStruct;
 	sDxoStruct.pDxoPdpRamImage[0] = (uint8_t *)yushan_regs.pdpcode;
@@ -2002,8 +2005,75 @@ void Reset_Yushan(void)
 	sDxoStruct.uwBaseAddrPdpMicroCode[1] = yushan_regs.pdpclib->addr;
 	sDxoStruct.uwBaseAddrDppMicroCode[1] = yushan_regs.dppclib->addr;
 	sDxoStruct.uwBaseAddrDopMicroCode[1] = yushan_regs.dopclib->addr;
-	pr_err("[CAM] %s\n",__func__);
-	/*sensor_streaming_off();*/
+
+	Yushan_GainsExpTime_t sGainsExpTime;
+
+	sGainsExpTime.uwAnalogGainCodeGR = 0x20; /* 0x0 10x=>140; 1x=>20 */
+	sGainsExpTime.uwAnalogGainCodeR = 0x20;
+	sGainsExpTime.uwAnalogGainCodeB = 0x20;
+	sGainsExpTime.uwPreDigGainGR = 0x100;
+	sGainsExpTime.uwPreDigGainR = 0x100;
+	sGainsExpTime.uwPreDigGainB = 0x100;
+	sGainsExpTime.uwExposureTime = 0x20;
+	sGainsExpTime.bRedGreenRatio = 0x40;
+	sGainsExpTime.bBlueGreenRatio = 0x40;
+
+	Yushan_ImageChar_t sImageChar_context;
+
+	sImageChar_context.bImageOrientation = sYushanNewContextConfig->orientation;
+	if( (sYushanNewContextConfig->uwActiveFrameLength == 1736) && (sYushanNewContextConfig->uwActivePixels == 3084) )
+	{
+		//3084x1736
+		sImageChar_context.uwXAddrStart = 0x60;
+		sImageChar_context.uwYAddrStart = 0x16C;
+		sImageChar_context.uwXAddrEnd= 0xC6B;
+		sImageChar_context.uwYAddrEnd= 0x833;
+		sImageChar_context.uwXEvenInc = 1;
+		sImageChar_context.uwXOddInc = 1;
+		sImageChar_context.uwYEvenInc = 1;
+		sImageChar_context.uwYOddInc = 1;
+		sImageChar_context.bBinning = 0x11;
+	}
+	else if( (sYushanNewContextConfig->uwActiveFrameLength == 432) && (sYushanNewContextConfig->uwActivePixels == 768) )
+	{
+		//768x432
+		sImageChar_context.uwXAddrStart = 0x68;
+		sImageChar_context.uwYAddrStart = 0x1C8;
+		sImageChar_context.uwXAddrEnd= 0xC67;
+		sImageChar_context.uwYAddrEnd= 0x887;
+		sImageChar_context.uwXEvenInc = 1;
+		sImageChar_context.uwXOddInc = 7;
+		sImageChar_context.uwYEvenInc = 1;
+		sImageChar_context.uwYOddInc = 7;
+		sImageChar_context.bBinning = 0x22;
+	}
+	else if( (sYushanNewContextConfig->uwActiveFrameLength == 510) && (sYushanNewContextConfig->uwActivePixels == 1640) )
+	{
+		//1640x510
+		sImageChar_context.uwXAddrStart = 0x0;
+		sImageChar_context.uwYAddrStart = 0xD4;
+		sImageChar_context.uwXAddrEnd= 0xCCF;
+		sImageChar_context.uwYAddrEnd= 0x8CB;
+		sImageChar_context.uwXEvenInc = 1;
+		sImageChar_context.uwXOddInc = 3;
+		sImageChar_context.uwYEvenInc = 1;
+		sImageChar_context.uwYOddInc = 7;
+		sImageChar_context.bBinning = 0x22;
+	}
+	else
+	{
+		//3280x2464 Full size
+		sImageChar_context.uwXAddrStart = 0x0;
+		sImageChar_context.uwYAddrStart = 0x0;
+		sImageChar_context.uwXAddrEnd = sYushanNewContextConfig->uwActivePixels - 1;
+		sImageChar_context.uwYAddrEnd = sYushanNewContextConfig->uwActiveFrameLength -1;
+		sImageChar_context.uwXEvenInc = 1;
+		sImageChar_context.uwXOddInc = 1;
+		sImageChar_context.uwYEvenInc = 1;
+		sImageChar_context.uwYOddInc = 1;
+		sImageChar_context.bBinning = 0x11;
+	}
+
 	Yushan_Assert_Reset(0x001F0F10, RESET_MODULE);
 	bSpiData =1;
 	Yushan_DXO_Sync_Reset_Dereset(bSpiData);
@@ -2012,6 +2082,20 @@ void Reset_Yushan(void)
 	Yushan_DXO_Sync_Reset_Dereset(bSpiData);	
 	Yushan_Init_Dxo(&sDxoStruct, 1);
 	msleep(10);
+
+	Yushan_Update_ImageChar(&sImageChar_context);
+	Yushan_Update_SensorParameters(&sGainsExpTime);
+	Yushan_Update_DxoDpp_TuningParameters(&sDxoDppTuning);
+	Yushan_Update_DxoDop_TuningParameters(&sDxoDopTuning);
+	Yushan_Update_DxoPdp_TuningParameters(&sDxoPdpTuning);
+	bPdpMode = 1; bDppMode = 3; bDopMode = 1;
+	bStatus = Yushan_Update_Commit(bPdpMode, bDppMode, bDopMode);
+	if (bStatus == 1)
+		pr_info("[CAM] DXO Commit Done\n");
+	else {
+		pr_err("[CAM] DXO Commit FAILED\n");
+	}
+
 	/*Yushan_sensor_open_init();*/
 	/*Yushan_ContextUpdate_Wrapper(&sYushanFullContextConfig);*/
 	/*sensor_streaming_on();*/
@@ -3038,7 +3122,7 @@ bool_t	Yushan_Context_Config_Update(Yushan_New_Context_Config_t	*sYushanNewConte
 	/* bDataType */
 	/* bDataType = (bRawFormat==0x08)?0x2a:0x2b; */
 
-	if ((sYushanNewContextConfig->uwPixelFormat&0x0F)==0x0A){
+	if (likely((sYushanNewContextConfig->uwPixelFormat&0x0F)==0x0A)){
 		bRawFormat = RAW10;
 		bDataType  = 0x2b;
 	}
@@ -3049,6 +3133,11 @@ bool_t	Yushan_Context_Config_Update(Yushan_New_Context_Config_t	*sYushanNewConte
 			bDataType = 0x2a;
 		else /* 10 to 8 case */
 			bDataType = 0x30; /* bRawFormat at Yushan should be RAW8, not RAW10_8 */
+	}
+	else
+	{
+		pr_err("[CAM] bRawFormat is neither RAW10 nor RAW8");
+		return FAILURE;
 	}
 
 	/* Read the Index information of the VF or STILL resolution. */
@@ -3627,7 +3716,12 @@ bool_t Yushan_Read_AF_Statistics(uint32_t  *sYushanAFStats)
 
 
 	/* Read active number of ROI */
+	/* Avoid memory copy buffer overflow , so fix ROI number to 1 */
+#if 0
 	bStatus &= SPI_Read(DXO_DOP_BASE_ADDR+DxODOP_ROI_active_number_7_0, 1, (uint8_t*)(&bNumOfActiveRoi));
+#else
+	bNumOfActiveRoi = 1;
+#endif
 	/* pr_err("[CAM]%s, bNumOfActiveRoi:%d\n", __func__, bNumOfActiveRoi); */
 
 	if (!bNumOfActiveRoi) /* NO ROI ACTIVATED */
@@ -4115,8 +4209,8 @@ int Yushan_sensor_open_init(struct rawchip_sensor_init_data data)
 	sDxoDopTuning.bEstimationMode = 1;
 	sDxoDopTuning.bSharpness = 0x01; /*0x60;*/
 	sDxoDopTuning.bDenoisingLowGain = 0x1; /* 0xFF for de-noise verify, original:0x1 */
-	sDxoDopTuning.bDenoisingMedGain = 0x80;
-	sDxoDopTuning.bDenoisingHiGain = 0x60; /*0x80;*/
+	sDxoDopTuning.bDenoisingMedGain = 0x70;
+	sDxoDopTuning.bDenoisingHiGain = 0x45; /*0x80;*/
 	sDxoDopTuning.bNoiseVsDetailsLowGain = 0xA0;
 	sDxoDopTuning.bNoiseVsDetailsMedGain = 0x80;
 	sDxoDopTuning.bNoiseVsDetailsHiGain = 0x80;

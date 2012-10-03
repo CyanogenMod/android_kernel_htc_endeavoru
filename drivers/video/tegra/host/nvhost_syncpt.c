@@ -24,6 +24,12 @@
 #include "nvhost_syncpt.h"
 #include "dev.h"
 
+#if CONFIG_VIDEO_RAWCHIP
+/*HTC_start*/
+#include <media/rawchip/Yushan_API.h>
+#include <media/rawchip/rawchip.h>
+/*HTC_end*/
+#endif
 #define MAX_STUCK_CHECK_COUNT 15
 
 /**
@@ -210,7 +216,12 @@ int nvhost_syncpt_wait_timeout(struct nvhost_syncpt *sp, u32 id,
 				"%s: syncpoint id %d (%s) stuck waiting %d, timeout=%d\n",
 				 current->comm, id, syncpt_op(sp).name(sp, id),
 				 thresh, timeout);
-
+/* HTC_start */
+#if CONFIG_VIDEO_RAWCHIP
+tegra_rawchip_block_iotcl(TRUE);
+Yushan_dump_register();
+#endif
+/* HTC_end */
 			syncpt_op(sp).debug(sp);
 			if (check_count > MAX_STUCK_CHECK_COUNT) {
 				if (low_timeout) {

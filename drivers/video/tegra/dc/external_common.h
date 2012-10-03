@@ -2,6 +2,13 @@
 #ifndef __EXTERNAL_COMMON_H__
 #define __EXTERNAL_COMMON_H__
 
+#include <mach/cable_detect.h>
+
+#ifdef CONFIG_TEGRA_HDMI_MHL
+extern bool IsD0Mode(void);
+extern void update_mhl_status(bool isMHL, enum usb_connect_type statMHL);
+#endif
+
 #ifdef CONFIG_TEGRA_HDMI_MHL_SUPERDEMO
 typedef unsigned char uint8;
 typedef int uint16;

@@ -544,6 +544,7 @@ struct tegra_dc_pwm_params {
 	unsigned int clk_select;
 	unsigned int duty_cycle;
 	int backlight_mode;
+	int lcm_source;
 };
 
 void tegra_dc_config_pwm(struct tegra_dc *dc, struct tegra_dc_pwm_params *cfg);

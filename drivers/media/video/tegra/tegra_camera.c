@@ -172,8 +172,8 @@ static int tegra_camera_clk_set_rate(struct tegra_camera_dev *dev)
 
 	if (!info) {
 		dev_err(dev->dev,
-				"%s: no clock info %d\n",
-				__func__, info->id);
+				"%s: no clock info\n",
+				__func__);
 		return -EINVAL;
 	}
 

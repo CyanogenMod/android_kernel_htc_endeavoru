@@ -701,7 +701,7 @@ int Yushan_get_AFSU(uint32_t *pAfStatsGreen);
 #if 0
 bool_t Yushan_Read_AF_Statistics(uint32_t  *sYushanAFStats);
 #endif
-void Reset_Yushan(void);
+void Reset_Yushan(Yushan_New_Context_Config_t *sYushanNewContextConfig);
 
 void select_mode(uint8_t mode);
 

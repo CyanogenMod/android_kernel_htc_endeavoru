@@ -1,8 +1,6 @@
 #ifndef _CABLE_DETECT_H_
 #define _CABLE_DETECT_H_
 
-#include <linux/list.h>
-
 #define DOCK_STATE_UNDEFINED		-1
 #define DOCK_STATE_UNDOCKED		0
 #define DOCK_STATE_DESK			(1 << 0)
@@ -87,15 +85,20 @@ struct cable_detect_platform_data {
 /* START: add USB connected notify function */
 void tegra_usb_set_vbus_state(int online);
 enum usb_connect_type {
-	CONNECT_TYPE_NONE,
-	CONNECT_TYPE_UNKNOWN,
-	CONNECT_TYPE_AUDIO,
-	CONNECT_TYPE_CARKIT,
-	CONNECT_TYPE_MHL,
+	/* QC Synchronous */
+	CONNECT_TYPE_CLEAR = -2,
+	CONNECT_TYPE_UNKNOWN = -1,
+	CONNECT_TYPE_NONE = 0,
+	CONNECT_TYPE_USB,
+	CONNECT_TYPE_AC,
+	CONNECT_TYPE_9V_AC,
+	CONNECT_TYPE_WIRELESS,
+	CONNECT_TYPE_INTERNAL,
+	CONNECT_TYPE_UNSUPPORTED,
+
+	/* Reserved */
 	CONNECT_TYPE_UNDEFINED,
-	CONNECT_TYPE_USB, /* 0A5 */
 	CONNECT_TYPE_0A9_AC,
-	CONNECT_TYPE_AC, /* 1A */
 	CONNECT_TYPE_1A1_AC,
 	CONNECT_TYPE_1A2_AC,
 	CONNECT_TYPE_1A3_AC,

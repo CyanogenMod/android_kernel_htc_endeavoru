@@ -183,6 +183,8 @@ static struct platform_tegra_pwm_backlight_data enterprise_disp1_backlight_data 
 	.backlight_mode = MIPI_BACKLIGHT,	//Set MIPI_BACKLIGHT as default
 	/* Only toggle backlight on fb blank notifications for disp1 */
 	.check_fb	= enterprise_disp1_check_fb,
+	.backlight_status  = BACKLIGHT_ENABLE,
+	.lcm_source = NOVATEK,
 };
 
 static struct platform_device enterprise_disp1_backlight_device = {
@@ -3180,14 +3182,6 @@ int __init enterprise_panel_init(void)
 	int i;
 	int pin_count;
 
-
-	if (board_mfg_mode() == 5 && !(board_zchg_mode() & 0x1)) {
-		/* offmode charging, gfx devices register for vibrator*/
-		err = platform_add_devices(enterprise_gfx_devices,
-				ARRAY_SIZE(enterprise_gfx_devices));
-		return 0;
-	}
-
 	DISP_INFO_IN();
 
 	enterprise_carveouts[1].base = tegra_carveout_start;
@@ -3375,8 +3369,12 @@ int __init enterprise_panel_init(void)
 	if (!err)
 		err = nvhost_device_register(&nvavp_device);
 #endif
-	if ( (board_mfg_mode() == 5) && (board_zchg_mode() & 0x1))
-		enterprise_disp1_backlight_data.draw_battery = 1;
+	if( (board_mfg_mode() == 5) ) {
+		if (board_zchg_mode() & 0x1)  /*off-mode charge with china sku, need to draw battery*/
+			enterprise_disp1_backlight_data.backlight_status = BACKLIGHT_SKIP_WHEN_PROBE;
+		else        /*off-mode charge without china sku, do not need to open backlight */
+			enterprise_disp1_backlight_data.backlight_status = BACKLIGHT_DISABLE;
+	}
 
 	if (!err)
 		err = platform_add_devices(enterprise_bl_devices,

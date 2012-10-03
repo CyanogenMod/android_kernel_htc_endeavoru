@@ -1204,4 +1204,5 @@ void D2ToD3(void)
 	TPI_DEBUG_PRINT(("D2 To D3 mode\n"));
 	I2C_WriteByte(HDMI_SLAVE_ADDR, 0x01, 0x03);
 	I2C_WriteByte(TPID_SLAVE_ADDR, 0x3D, I2C_ReadByte(TPID_SLAVE_ADDR, 0x3D) & 0xFE);
+	fwPowerState = POWER_STATE_D3;
 }

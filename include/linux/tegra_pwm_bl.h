@@ -30,7 +30,21 @@ struct platform_tegra_pwm_backlight_data {
 	int (*notify)(struct device *dev, int brightness);
 	int (*check_fb)(struct device *dev, struct fb_info *info);
 	int backlight_mode;
-	int draw_battery;
+	int backlight_status;
+	int lcm_source;
 };
+
+enum {
+       BACKLIGHT_ENABLE = 0,
+       BACKLIGHT_SKIP_WHEN_PROBE,
+       BACKLIGHT_DISABLE,
+};
+
+enum {
+	NOVATEK = 0,
+	HIMAX,
+};
+
+
 
 #endif /* TERGA_PWM_BL_H */

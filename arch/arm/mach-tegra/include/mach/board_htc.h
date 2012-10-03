@@ -78,7 +78,6 @@ int __init msm_add_serial_devices(unsigned uart);
 #define MFG_BUILD   1
 #define ENG_BUILD   2
 
-
 int board_mfg_mode(void);
 int board_zchg_mode(void);
 void htc_gpio_set_diag_gpio_table(unsigned char* dwMFG_gpio_table);
@@ -117,7 +116,7 @@ extern int usb_phy_error;
 extern unsigned long tegra_bootloader_panel_lsb;
 extern unsigned long tegra_bootloader_panel_msb;
 
-extern const int htc_get_pcbid_info(void);
+const int htc_get_pcbid_info(void);
 const bool is_modem_rework_phase();
 
 enum {
@@ -139,6 +138,7 @@ enum {
 	PROJECT_PHASE_F   =  0x85,
 	PROJECT_PHASE_G   =  0x86,
 	PROJECT_PHASE_H   =  0x87,
+	PROJECT_PHASE_LATEST =  0xFF,
 };
 
 enum {
