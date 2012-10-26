@@ -32,13 +32,11 @@
 #include "clock.h"
 #include "reset.h"
 #include "sleep.h"
-#include "cpu-tegra.h"
 
 bool tegra_all_cpus_booted;
 
 static DECLARE_BITMAP(tegra_cpu_init_bits, CONFIG_NR_CPUS) __read_mostly;
 const struct cpumask *const tegra_cpu_init_mask = to_cpumask(tegra_cpu_init_bits);
-
 #define tegra_cpu_init_map	(*(cpumask_t *)tegra_cpu_init_mask)
 
 #define CLK_RST_CONTROLLER_CLK_CPU_CMPLX \
@@ -211,16 +209,8 @@ int boot_secondary(unsigned int cpu, struct task_struct *idle)
 			/* Early boot, clock infrastructure is not initialized
 			   - CPU mode switch is not allowed */
 			status = -EINVAL;
-		} else {
-			/* make sure cpu rate is within g-mode range before
-			   switching */
-			unsigned int speed = max(tegra_getspeed(0),
-				clk_get_min_rate(cpu_g_clk) / 1000);
-                        tegra_update_cpu_speed(speed);
-
-			/* change to g mode */
+		} else
 			status = clk_set_parent(cpu_clk, cpu_g_clk);
-		}
 
 		if (status)
 			goto done;
