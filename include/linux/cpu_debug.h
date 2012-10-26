@@ -1,7 +1,6 @@
 #ifndef __CPU_DEBUG_H__
 #define __CPU_DEBUG_H__
 
-#define DEBUG                   0
 #define CPU_DEBUG_TAG		"[CPUDEBUG]"
 
 #define CPU_DEBUG_GOVERNOR	0x01
@@ -12,7 +11,7 @@
 unsigned int get_cpu_debug(void);
 
 #define CPU_DEBUG_PRINTK(flag, fmt, ...)				\
-	if (DEBUG && flag) {					\
+	if (get_cpu_debug() & flag) {					\
 		pr_info(CPU_DEBUG_TAG pr_fmt(fmt), ##__VA_ARGS__);	\
 	}								\
 
