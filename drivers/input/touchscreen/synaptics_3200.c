@@ -2588,7 +2588,6 @@ static int synaptics_ts_suspend(struct i2c_client *client, pm_message_t mesg)
 		i2c_syn_error_handler(ts, 1, "force update", __func__);
 	printk("[TP] touch suspend, fast relasxation: %x", ts->relaxation);
 #endif
-/*
 	ret = i2c_syn_read(ts->client,
 			get_address_base(ts, 0x11, CONTROL_BASE) + 41, &data, 1);
 	if (ret < 0)
@@ -2601,7 +2600,7 @@ static int synaptics_ts_suspend(struct i2c_client *client, pm_message_t mesg)
 	if (ret < 0)
 		i2c_syn_error_handler(ts, 0, "w:0", __func__);
         printk("[TP] disable palm supression\n");
-*/
+
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2WAKE
 	if (s2w_switch == 0) {
 #endif
