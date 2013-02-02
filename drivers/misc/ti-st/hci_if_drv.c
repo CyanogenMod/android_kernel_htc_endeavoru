@@ -1,73 +1,265 @@
 /*
- *   TI BT Char Driver for Texas Instrument's Connectivity Chip.
- *   Copyright (C) 2009 Texas Instruments
+ *  TTY emulation for user-space Bluetooth stacks over HCI-H4
+ *  Copyright (C) 2011-2012 Texas Instruments
+ *  Author: Pavan Savoy <pavan_savoy@ti.com>
  *
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License version 2 as
- *   published by the Free Software Foundation.
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License version 2 as
+ *  published by the Free Software Foundation.
  *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
  *
- *   You should have received a copy of the GNU General Public License
- *   along with this program; if not, write to the Free Software
- *   Foundation, Inc.,59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  */
 
-#include "hci_if_drv.h"
-long hciif_st_event_recv(void *priv_data, struct sk_buff *skb);
-long hciif_st_ganeric_recv(void *priv_data, struct sk_buff *skb);
-void hciif_st_open_cb(void *priv_data, char data);
-static int hciif_register_client(struct st_proto_s *hciif_proto);
-static struct hciif_client *hciif_add_client_to_array(int channel,
-		unsigned char evt_type[],
-		struct hciif_client
-		*existingClient);
+/*
+** Note:
+** This driver was taken from:
+** http://git.omapzoom.org/?p=kernel/omap.git;a=blob_plain;f=drivers/misc/ti-st/tty_hci.c;hb=p-android-omap-3.4
+**
+** The device name has been changed to hci_tty to tihci to avoid compatibility issues
+** with HTC blobs
+**
+*/
 
+/*
+#define DEBUG
+#define VERBOSE
+*/
+
+#define pr_fmt(fmt) "(hci_tty): " fmt
+#include <linux/module.h>
+#include <linux/cdev.h>
+#include <linux/fs.h>
+#include <linux/device.h>
+
+#include <linux/uaccess.h>
+#include <linux/tty.h>
+#include <linux/sched.h>
+
+#include <linux/delay.h>
+#include <linux/firmware.h>
+#include <linux/platform_device.h>
+#include <linux/poll.h>
+#include <linux/skbuff.h>
+#include <linux/interrupt.h>
+
+#include <linux/ti_wilink_st.h>
+
+/* Number of seconds to wait for registration completion
+ * when ST returns PENDING status.
+ */
+#define BT_REGISTER_TIMEOUT   6000	/* 6 sec */
+
+/**
+ * struct ti_st - driver operation structure
+ * @hdev: hci device pointer which binds to bt driver
+ * @reg_status: ST registration callback status
+ * @st_write: write function provided by the ST driver
+ *	to be used by the driver during send_frame.
+ * @wait_reg_completion - completion sync between ti_st_open
+ *	and st_reg_completion_cb.
+ */
+struct ti_st {
+	struct hci_dev *hdev;
+	char reg_status;
+	long (*st_write) (struct sk_buff *);
+	struct completion wait_reg_completion;
+	wait_queue_head_t data_q;
+	struct sk_buff_head rx_list;
+};
+
+#define DEVICE_NAME     "tihci"
+
+/***********Functions called from ST driver**********************************/
+/* Called by Shared Transport layer when receive data is
+ * available */
+static long st_receive(void *priv_data, struct sk_buff *skb)
+{
+	struct ti_st	*hst = (void *) priv_data;
+
+	pr_debug("@ %s", __func__);
 #ifdef VERBOSE
-static void hciif_print_raw_data(char *raw_data, int skb_len, char *func_name);
+	print_hex_dump(KERN_INFO, ">rx>", DUMP_PREFIX_NONE,
+			16, 1, skb->data, skb->len, 0);
+#endif
+	skb_queue_tail(&hst->rx_list, skb);
+	wake_up_interruptible(&hst->data_q);
+	return 0;
+}
 
-#endif /*  */
-static int hciif_enter_cs(void);
-static void hciif_exit_cs(char status);
-static struct hciif_handle *hhciif;
-static struct st_proto_s hciif_proto[ST_MAX_CHANNELS];
-int copy_results;
+/* Called by ST layer to indicate protocol registration completion
+ * status.ti_st_open() function will wait for signal from this
+ * API when st_register() function returns ST_PENDING.
+ */
+static void st_reg_completion_cb(void *priv_data, char data)
+{
+	struct ti_st	*lhst = (void *) priv_data;
 
-/** hciif_open Function
+	pr_info("@ %s\n", __func__);
+	/* Save registration status for use in ti_st_open() */
+	lhst->reg_status = data;
+	/* complete the wait in ti_st_open() */
+	complete(&lhst->wait_reg_completion);
+}
+
+/* protocol structure registered with shared transport */
+#define MAX_BT_CHNL_IDS 3
+static struct st_proto_s ti_st_proto[MAX_BT_CHNL_IDS] = {
+	{
+		.chnl_id = 0x04, /* HCI Events */
+		.hdr_len = 2,
+		.offset_len_in_hdr = 1,
+		.len_size = 1, /* sizeof(plen) in struct hci_event_hdr */
+		.reserve = 8,
+	},
+	{
+		.chnl_id = 0x02, /* ACL */
+		.hdr_len = 4,
+		.offset_len_in_hdr = 2,
+		.len_size = 2,	/* sizeof(dlen) in struct hci_acl_hdr */
+		.reserve = 8,
+	},
+	{
+		.chnl_id = 0x03, /* SCO */
+		.hdr_len = 3,
+		.offset_len_in_hdr = 2,
+		.len_size = 1, /* sizeof(dlen) in struct hci_sco_hdr */
+		.reserve = 8,
+	},
+};
+/** hci_tty_open Function
  *  This function will perform an register on ST driver.
+ *
  *  Parameters :
  *  @file  : File pointer for BT char driver
  *  @inod  :
- *  Returns  HCIIF_SUCCESS -  on success
+ *  Returns  0 -  on success
  *           else suitable error code
  */
-int hciif_open(struct inode *inod, struct file *file)
+int hci_tty_open(struct inode *inod, struct file *file)
 {
-	HCIIFDRV_DBG(" Inside %s", __func__);
-	return HCIIF_SUCCESS;
+	int i = 0, err = 0;
+	unsigned long timeleft;
+	struct ti_st *hst;
+
+	pr_info("inside %s (%p, %p)\n", __func__, inod, file);
+
+	hst = kzalloc(sizeof(*hst), GFP_KERNEL);
+	file->private_data = hst;
+	hst = file->private_data;
+
+	for (i = 0; i < MAX_BT_CHNL_IDS; i++) {
+		ti_st_proto[i].priv_data = hst;
+		ti_st_proto[i].max_frame_size = 1026;
+		ti_st_proto[i].recv = st_receive;
+		ti_st_proto[i].reg_complete_cb = st_reg_completion_cb;
+
+		/* Prepare wait-for-completion handler */
+		init_completion(&hst->wait_reg_completion);
+		/* Reset ST registration callback status flag,
+		 * this value will be updated in
+		 * st_reg_completion_cb()
+		 * function whenever it called from ST driver.
+		 */
+		hst->reg_status = -EINPROGRESS;
+
+		err = st_register(&ti_st_proto[i]);
+		if (!err)
+			goto done;
+
+		if (err != -EINPROGRESS) {
+			pr_err("st_register failed %d", err);
+			goto error;
+		}
+
+		/* ST is busy with either protocol
+		 * registration or firmware download.
+		 */
+		pr_debug("waiting for registration "
+				"completion signal from ST");
+		timeleft = wait_for_completion_timeout
+			(&hst->wait_reg_completion,
+			 msecs_to_jiffies(BT_REGISTER_TIMEOUT));
+		if (!timeleft) {
+			pr_err("Timeout(%d sec),didn't get reg "
+					"completion signal from ST",
+					BT_REGISTER_TIMEOUT / 1000);
+			err = -ETIMEDOUT;
+			goto error;
+		}
+
+		/* Is ST registration callback
+		 * called with ERROR status? */
+		if (hst->reg_status != 0) {
+			pr_err("ST registration completed with invalid "
+					"status %d", hst->reg_status);
+			err = -EAGAIN;
+			goto error;
+		}
+
+done:
+		hst->st_write = ti_st_proto[i].write;
+		if (!hst->st_write) {
+			pr_err("undefined ST write function");
+			for (i = 0; i < MAX_BT_CHNL_IDS; i++) {
+				/* Undo registration with ST */
+				err = st_unregister(&ti_st_proto[i]);
+				if (err)
+					pr_err("st_unregister() failed with "
+							"error %d", err);
+				hst->st_write = NULL;
+			}
+			return -EIO;
+		}
+	}
+
+	skb_queue_head_init(&hst->rx_list);
+	init_waitqueue_head(&hst->data_q);
+
+	return 0;
+
+error:
+	kfree(hst);
+	return err;
 }
 
-
-/** hciif_release Function
+/** hci_tty_release Function
  *  This function will un-registers from the ST driver.
  *
  *  Parameters :
  *  @file  : File pointer for BT char driver
  *  @inod  :
- *  Returns  HCIIF_SUCCESS -  on success
+ *  Returns  0 -  on success
  *           else suitable error code
  */
-int hciif_release(struct inode *inod, struct file *file)
+int hci_tty_release(struct inode *inod, struct file *file)
 {
-	return hciif_dev_down((struct hciif_client *)file->private_data);
+	int err, i;
+	struct ti_st *hst = file->private_data;
+
+	pr_info("inside %s (%p, %p)\n", __func__, inod, file);
+
+	for (i = 0; i < MAX_BT_CHNL_IDS; i++) {
+		err = st_unregister(&ti_st_proto[i]);
+		if (err)
+			pr_err("st_unregister(%d) failed with error %d",
+					ti_st_proto[i].chnl_id, err);
+	}
+
+	hst->st_write = NULL;
+	skb_queue_purge(&hst->rx_list);
+	kfree(hst);
+	return err;
 }
 
-/** hciif_read Function
- *  This function will wait till the data received from the ST driver
- *  and then send it to BT host application.
+/** hci_tty_read Function
  *
  *  Parameters :
  *  @file  : File pointer for BT char driver
@@ -77,142 +269,130 @@ int hciif_release(struct inode *inod, struct file *file)
  *  Returns  Size of packet received -  on success
  *           else suitable error code
  */
-ssize_t hciif_read(struct file *file, char __user *data, size_t size,
-				   loff_t *offset)
+ssize_t hci_tty_read(struct file *file, char __user *data, size_t size,
+		loff_t *offset)
 {
-	int len = 0;
-	struct sk_buff *skb = NULL;
-	struct hciif_client *client;
-	unsigned long timeout = HCIIFDRV_READ_TIMEOUT;
-	HCIIFDRV_DBG(" Inside %s", __func__);
+	int len = 0, tout;
+	struct sk_buff *skb = NULL, *rskb = NULL;
+	struct ti_st	*hst;
+
+	pr_debug("inside %s (%p, %p, %u, %p)\n",
+			__func__, file, data, size, offset);
 
 	/* Validate input parameters */
 	if ((NULL == file) || (((NULL == data) || (0 == size)))) {
-		HCIIFDRV_ERR("Invalid input parameters passed to %s",
-					 __func__);
+		pr_err("Invalid input params passed to %s", __func__);
 		return -EINVAL;
 	}
-	client = file->private_data;
-	HCIIFDRV_DBG(" read: client = 0x%08x", (unsigned int)client);
+
+	hst = file->private_data;
 
 	/* cannot come here if poll-ed before reading
 	 * if not poll-ed wait on the same wait_q
 	 */
-	timeout =
-		wait_event_interruptible_timeout(client->hciif_client_q,
-										 !skb_queue_empty
-										 (&client->rx_list),
-										 msecs_to_jiffies(timeout));
-
+	tout = wait_event_interruptible_timeout(hst->data_q,
+			!skb_queue_empty(&hst->rx_list),
+				msecs_to_jiffies(1000));
 	/* Check for timed out condition */
-	if (0 == timeout) {
-		HCIIFDRV_ERR("BT Device Read timed out");
-		return HCIIF_ERR_TIMEOUT;
+	if (0 == tout) {
+		pr_err("Device Read timed out\n");
+		return -ETIMEDOUT;
 	}
-	HCIIFDRV_VER(" Read wait completed, sending packet");
 
-	/* client->rx_list not empty, skb already present */
-	spin_lock(&client->rx_lock);
-	skb = skb_dequeue(&client->rx_list);
-	spin_unlock(&client->rx_lock);
+	/* hst->rx_list not empty skb already present */
+	skb = skb_dequeue(&hst->rx_list);
 	if (!skb) {
-		HCIIFDRV_ERR("Dequed SKB is NULL?");
-		return HCIIF_ERR_UNKNOWN;
-	}
-	HCIIFDRV_VER(" Before adding PKT_TYPE: skb->data[0] = %x",
-				 skb->data[0]);
-
-	/* Add packet type to skb data */
-	memcpy(skb_push(skb, 1), &(bt_cb(skb)->pkt_type), 1);
-	HCIIFDRV_VER(" After adding PKT_TYPE: skb->data[0] = %x",
-				 skb->data[0]);
-	if (skb->len > size) {
-		HCIIFDRV_DBG
-		("SKB length is Greater than requested size Returning the requested size");
-		copy_results = copy_to_user(data, skb->data, size);
-		if (copy_results) {
-			HCIIFDRV_ERR("copy_to_user fail");
-			return HCIIF_ERR_UNKNOWN;
-		}
-		skb_pull(skb, size);
-		if (skb->len != 0) {
-			spin_lock(&client->rx_lock);
-			skb_queue_head(&client->rx_list, skb);
-			spin_unlock(&client->rx_lock);
-		}
-		printk(KERN_DEBUG "hciif_read: total size read= %d", size);
-		return size;
+		pr_err("dequed skb is null?\n");
+		return -EIO;
 	}
 
 #ifdef VERBOSE
-	hciif_print_raw_data(skb->data, skb->len, "hciif_read(From ST)");
+	print_hex_dump(KERN_INFO, ">in>", DUMP_PREFIX_NONE,
+			16, 1, skb->data, skb->len, 0);
+#endif
 
-#endif /*  */
-	HCIIFDRV_VER(" Before copying to user...");
+	/* Forward the data to the user */
+	if (skb->len >= size) {
+		pr_err("FIONREAD not done before read\n");
+		return -ENOMEM;
+	} else {
+		/* returning skb */
+		rskb = alloc_skb(size, GFP_KERNEL);
+		if (!rskb) {
+			pr_err("alloc_skb error\n");
+			return -ENOMEM;
+		}
 
-	/* Forward the data to the user --> case (skb->len <= size) */
-	if (copy_to_user(data, skb->data, skb->len)) {
-		HCIIFDRV_ERR(" Unable to copy to user space");
+		/* cb[0] has the pkt_type 0x04 or 0x02 or 0x03 */
+		memcpy(skb_put(rskb, 1), &skb->cb[0], 1);
+		memcpy(skb_put(rskb, skb->len), skb->data, skb->len);
 
-		/* Queue the skb back to head */
-		spin_lock(&client->rx_lock);
-		skb_queue_head(&client->rx_list, skb);
-		spin_unlock(&client->rx_lock);
-		return HCIIF_ERR_CPY_TO_USR;
+		if (copy_to_user(data, rskb->data, rskb->len)) {
+			pr_err("unable to copy to user space\n");
+			/* Queue the skb back to head */
+			skb_queue_head(&hst->rx_list, skb);
+			kfree_skb(rskb);
+			return -EIO;
+		}
 	}
-	HCIIFDRV_VER(" After copying to user...");
-	len = skb->len;
+
+	len = rskb->len;	/* len of returning skb */
 	kfree_skb(skb);
-	HCIIFDRV_DBG(" Exit %s", __func__);
+	kfree_skb(rskb);
+	pr_debug("total size read= %d\n", len);
 	return len;
 }
 
-
-/** hciif_write Function
- *  This function will forward the incoming packet
- *  sent from the BT host application, to the ST Core.
+/* hci_tty_write Function
  *
  *  Parameters :
  *  @file   : File pointer for BT char driver
- *  @data   : HCI packet data from BT application
+ *  @data   : packet data from BT application
  *  @size   : Size of the packet data
  *  @offset :
  *  Returns  Size of packet on success
  *           else suitable error code
  */
-ssize_t hciif_write(struct file *file, const char __user *data,
-					size_t size, loff_t *offset)
+ssize_t hci_tty_write(struct file *file, const char __user *data,
+		size_t size, loff_t *offset)
 {
-	struct hciif_client *client;
-	struct sk_buff *skb;
-	HCIIFDRV_DBG(" Inside %s", __func__);
+	struct ti_st *hst = file->private_data;
+	struct	sk_buff *skb;
 
-	/* Validate input parameters */
-	if ((NULL == file) || (((NULL == data) || (0 == size)))) {
-		HCIIFDRV_ERR("Invalid input parameters passed to %s",
-					 __func__);
+	pr_debug("inside %s (%p, %p, %u, %p)\n",
+			__func__, file, data, size, offset);
+
+	if (!hst->st_write) {
+		pr_err(" Can't write to ST, hhci_tty->st_write null ?");
 		return -EINVAL;
 	}
-	client = file->private_data;
-	skb = alloc_skb(size, GFP_ATOMIC);
 
+	skb = alloc_skb(size, GFP_KERNEL);
 	/* Validate Created SKB */
 	if (NULL == skb) {
-		HCIIFDRV_ERR("Error aloacting SKB");
+		pr_err("Error aaloacting SKB");
 		return -ENOMEM;
 	}
 
 	/* Forward the data from the user space to ST core */
 	if (copy_from_user(skb_put(skb, size), data, size)) {
-		HCIIFDRV_ERR(" Unable to copy from user space");
+		pr_err(" Unable to copy from user space");
 		kfree_skb(skb);
-		return HCIIF_ERR_CPY_FRM_USR;
+		return -EIO;
 	}
-	return hciif_send_frame(skb, client);
+
+#ifdef VERBOSE
+	pr_debug("start data..");
+	print_hex_dump(KERN_INFO, "<out<", DUMP_PREFIX_NONE,
+			16, 1, skb->data, size, 0);
+	pr_debug("\n..end data");
+#endif
+
+	hst->st_write(skb);
+	return size;
 }
 
-
-/** hciif_ioctl Function
+/** hci_tty_ioctl Function
  *  This will peform the functions as directed by the command and command
  *  argument.
  *
@@ -220,915 +400,160 @@ ssize_t hciif_write(struct file *file, const char __user *data,
  *  @file  : File pointer for BT char driver
  *  @cmd   : IOCTL Command
  *  @arg   : Command argument for IOCTL command
- *  Returns  HCIIF_SUCCESS on success
+ *  Returns  0 on success
  *           else suitable error code
  */
-static long hciif_ioctl(struct file * file, unsigned int cmd,
-					   unsigned long arg)
+static long hci_tty_ioctl(struct file *file,
+		unsigned int cmd, unsigned long arg)
 {
-	lock_kernel();
 	struct sk_buff *skb = NULL;
-	int retCode = HCIIF_SUCCESS;
-	struct hciif_client *client, *tmp;
-	HCIIFDRV_DBG(" Inside %s", __func__);
+	int		retCode = 0;
+	struct ti_st	*hst;
+
+	pr_debug("inside %s (%p, %u, %lx)", __func__, file, cmd, arg);
 
 	/* Validate input parameters */
 	if ((NULL == file) || (0 == cmd)) {
-		HCIIFDRV_ERR("Invalid input parameters passed to %s",
-					 __func__);
-		unlock_kernel();
+		pr_err("invalid input parameters passed to %s", __func__);
 		return -EINVAL;
 	}
-	client = file->private_data;
+
+	hst = file->private_data;
+
 	switch (cmd) {
-	case TCFLSH:
-		HCIIFDRV_VER(" IOCTL TCFLSH invoked with %ld argument", arg);
-		spin_lock(&client->rx_lock);
-		switch (arg) {
-
-			/* purge Rx/Tx SKB list queues depending on arg value */
-		case TCIFLUSH:
-			skb_queue_purge(&client->rx_list);
-			break;
-		case TCOFLUSH:
-
-			/* Not Supporeted, no Tx queue */
-			break;
-		case TCIOFLUSH:
-			skb_queue_purge(&client->rx_list);
-			break;
-		default:
-			HCIIFDRV_ERR("Invalid Command passed for tcflush");
-			retCode = -EINVAL;
-			break;
-		}
-		spin_unlock(&client->rx_lock);
-		break;
 	case FIONREAD:
-
 		/* Deque the SKB from the head if rx_list is not empty
-		 * And update the argument with skb->len to provide
-		 * amount of data available in the available SKB
+		 * update the argument with skb->len to provide amount of data
+		 * available in the available SKB +1 for the PKT_TYPE
+		 * field not provided in data by TI-ST.
 		 */
-		HCIIFDRV_VER(" IOCTL FIONREAD invoked");
-		spin_lock(&client->rx_lock);
-		if (!skb_queue_empty(&client->rx_list)) {
-			skb = skb_dequeue(&client->rx_list);
-			if (skb != NULL) {
-				*(unsigned int *)arg = skb->len + 1;	/* +1 --> for packet type */
-
-				/* Re-Store the SKB for future RD operations */
-				skb_queue_head(&client->rx_list, skb);
-			} else
-				*(unsigned int *)arg = 0;
+		skb = skb_dequeue(&hst->rx_list);
+		if (skb != NULL) {
+			*(unsigned int *)arg = skb->len + 1;
+			/* Re-Store the SKB for furtur Read operations */
+			skb_queue_head(&hst->rx_list, skb);
 		} else {
 			*(unsigned int *)arg = 0;
 		}
-		spin_unlock(&client->rx_lock);
+		pr_debug("returning %d\n", *(unsigned int *)arg);
 		break;
-
-		/* HCI IF IOCTLs */
-	case HCIIF_IOCTL_DEVUP: {
-		struct hciif_filter_t filter;
-
-		/* Indicates to bring up the device for the channels and events that are sent as an argument */
-		HCIIFDRV_VER(" IOCTL HCIIF_IOCTL_DEVUP invoked");
-		copy_results = copy_from_user(&filter,	/*vic */
-									  (const void __user *)arg,
-									  sizeof(struct
-											 hciif_filter_t));
-		retCode =
-			hciif_dev_up(file, &filter, /* NULL, */ &tmp);
-	}
-	break;
 	default:
-		HCIIFDRV_DBG("Un-Identified command provided for IOCTL");
-		retCode = -EINVAL;
+		pr_debug("Un-Identified IOCTL %d", cmd);
+		retCode = 0;
 		break;
 	}
-	HCIIFDRV_DBG(" Exit %s", __func__);
-	unlock_kernel();
+
 	return retCode;
 }
 
-
-/** hciif_poll Function
- *  This function will wait till some data is received to the BT driver from ST
+/** hci_tty_poll Function
+ *  This function will wait till some data is received to the hci_tty driver from ST
  *
  *  Parameters :
- *  @file  : File pointer for TI BT char driver
+ *  @file  : File pointer for BT char driver
  *  @wait  : POLL wait information
  *  Returns  status of POLL on success
  *           else suitable error code
  */
-static unsigned int hciif_poll(struct file *file, poll_table *wait)
+static unsigned int hci_tty_poll(struct file *file, poll_table *wait)
 {
+	struct ti_st	*hst = file->private_data;
 	unsigned long mask = 0;
-	struct hciif_client *client;
-	client = file->private_data;
 
-	/* Wait till data is signalled from hciif_st_recv function */
-	poll_wait(file, &client->hciif_client_q, wait);
-	if (!skb_queue_empty(&client->rx_list))
+	pr_debug("@ %s\n", __func__);
+
+	/* wait to be completed by st_receive */
+	poll_wait(file, &hst->data_q, wait);
+	pr_debug("poll broke\n");
+
+	if (!skb_queue_empty(&hst->rx_list)) {
+		pr_debug("rx list que !empty\n");
 		mask |= POLLIN;	/* TODO: check app for mask */
+	}
+
 	return mask;
 }
 
-
 /* BT Char driver function pointers
  * These functions are called from USER space by pefroming File Operations
- * on /dev/tihci node exposed by this driver during init
+ * on /dev/hci_tty node exposed by this driver during init
  */
-const struct file_operations hciif_chrdev_ops = {
-		.owner = THIS_MODULE,
-		.open = hciif_open,
-		.read = hciif_read,
-		.write = hciif_write,
-		.unlocked_ioctl = hciif_ioctl,
-		.poll = hciif_poll,
-		.release = hciif_release, /*Invoked on close */
+const struct file_operations hci_tty_chrdev_ops = {
+	.owner = THIS_MODULE,
+	.open = hci_tty_open,
+	.read = hci_tty_read,
+	.write = hci_tty_write,
+	.unlocked_ioctl = hci_tty_ioctl,
+	.poll = hci_tty_poll,
+	.release = hci_tty_release,
 };
 
+/*********Functions called during insmod and delmod****************************/
 
-/*********Other APIs***************************************/
-
-/** hciif_init Function
- *  This function Initializes the TI BT driver parametes and exposes
- *  /dev/hciif node to user space
+static int hci_tty_major;		/* major number */
+static struct class *hci_tty_class;	/* class during class_create */
+static struct device *hci_tty_dev;	/* dev during device_create */
+/** hci_tty_init Function
+ *  This function Initializes the hci_tty driver parametes and exposes
+ *  /dev/hci_tty node to user space
  *
  *  Parameters : NULL
- *  Returns  HCIIF_SUCCESS on success
+ *  Returns  0 on success
  *           else suitable error code
  */
-static int __init hciif_init(void)
+static int __init hci_tty_init(void)
 {
-	long err = 0;
-	int i = 0;
-	HCIIFDRV_DBG(" Inside %s", __func__);
-
-	/* Allocate local resource memory */
-	hhciif = kzalloc(sizeof(struct hciif_handle), GFP_KERNEL);
-	if (!(hhciif)) {
-		HCIIFDRV_ERR("Can't allocate BT data structure");
-		return -ENOMEM;
-	}
-	HCIIFDRV_VER("Allocated BT data structure");
+	pr_info("inside %s\n", __func__);
 
 	/* Expose the device DEVICE_NAME to user space
 	 * And obtain the major number for the device
 	 */
-	hhciif->hciif_major =
-		register_chrdev(0, DEVICE_NAME, &hciif_chrdev_ops);
-	if (0 > hhciif->hciif_major) {
-		err = hhciif->hciif_major;
-		HCIIFDRV_ERR
-		("Error when registering to char dev. Error = %ld.", err);
-		kfree(hhciif);
-		return err;
-	}
-	HCIIFDRV_VER(" %ld: allocated %d, %d", err, hhciif->hciif_major, 0);
-
-	/* udev */
-	hhciif->hciif_class = class_create(THIS_MODULE, DEVICE_NAME);
-	if (IS_ERR(hhciif->hciif_class)) {
-		HCIIFDRV_ERR(" Something went wrong in class_create");
-		unregister_chrdev(hhciif->hciif_major, DEVICE_NAME);
-		kfree(hhciif);
-		return HCIIF_ERR_CLASS;
-	}
-	hhciif->hciif_dev =
-		device_create(hhciif->hciif_class, NULL,
-					  MKDEV(hhciif->hciif_major, 0), NULL, DEVICE_NAME);
-	if (IS_ERR(hhciif->hciif_dev)) {
-		err = PTR_ERR(hhciif->hciif_dev);
-		HCIIFDRV_ERR(" Error in class_create. Error = %ld", err);
-		class_unregister(hhciif->hciif_class);
-		class_destroy(hhciif->hciif_class);
-		unregister_chrdev(hhciif->hciif_major, DEVICE_NAME);
-		kfree(hhciif);
-		return err;
+	hci_tty_major = register_chrdev(0, DEVICE_NAME, \
+			&hci_tty_chrdev_ops);
+	if (0 > hci_tty_major) {
+		pr_err("Error when registering to char dev");
+		return hci_tty_major;
 	}
 
-	/* Initialize registration complete strucuture */
-	init_completion(&hhciif->hciif_reg_completed);
-
-	/* Initialize registration complete strucuture */
-	init_completion(&hhciif->hciif_oper_completed);
-
-	/* Initialize Cmds Clients counter */
-	hhciif->hciif_cmdClientsCounter = 0;
-
-	/* Initialize Clients Array */
-	for (i = 0; i < ST_MAX_CHANNELS; i++)
-		hhciif->hciif_RawClients[i] = NULL;
-	for (i = 0; i < HCIIF_CMD_CLIENTS_NUM; i++)
-		hhciif->hciif_CmdClients[i] = NULL;
-
-	/* Initialize The Write Clients List */
-	INIT_LIST_HEAD(&(hhciif->hciif_WriteClientsList.list));
-
-	/* Initialize The Write Clients List lock */
-	spin_lock_init(&hhciif->hciif_lock);
-
-	/* Init 'st_proto_s' Static Array */
-	for (i = 0; i < ST_MAX_CHANNELS; i++) {
-		hciif_proto[i].chnl_id = i;
-		hciif_proto[i].recv = hciif_st_ganeric_recv;
-		hciif_proto[i].reg_complete_cb = hciif_st_open_cb;
-		hciif_proto[i].max_frame_size = HCIIF_FRAME_SIZE_DEF;
-		hciif_proto[i].hdr_len = HCIIF_HDR_SIZE_DEF;
-		hciif_proto[i].offset_len_in_hdr = HCIIF_LEN_OFFSET_DEF;
-		hciif_proto[i].len_size = HCIIF_LEN_SIZE_DEF;
-		hciif_proto[i].reserve = 8;
+	/*  udev */
+	hci_tty_class = class_create(THIS_MODULE, DEVICE_NAME);
+	if (IS_ERR(hci_tty_class)) {
+		pr_err("Something went wrong in class_create");
+		unregister_chrdev(hci_tty_major, DEVICE_NAME);
+		return -1;
 	}
-	hciif_proto[HCIIF_CHAN_ACL].max_frame_size = HCIIF_FRAME_SIZE_ACL;
-	hciif_proto[HCIIF_CHAN_ACL].hdr_len = HCIIF_HDR_SIZE_ACL;
-	hciif_proto[HCIIF_CHAN_ACL].offset_len_in_hdr = HCIIF_LEN_OFFSET_ACL;
-	hciif_proto[HCIIF_CHAN_ACL].len_size = HCIIF_LEN_SIZE_ACL;
-	hciif_proto[HCIIF_CHAN_SCO].max_frame_size = HCIIF_FRAME_SIZE_SCO;
-	hciif_proto[HCIIF_CHAN_SCO].hdr_len = HCIIF_HDR_SIZE_SCO;
-	hciif_proto[HCIIF_CHAN_SCO].offset_len_in_hdr = HCIIF_LEN_OFFSET_SCO;
-	hciif_proto[HCIIF_CHAN_SCO].len_size = HCIIF_LEN_SIZE_SCO;
-	hciif_proto[HCIIF_CHAN_EVT].recv = hciif_st_event_recv;
-	hciif_proto[HCIIF_CHAN_EVT].max_frame_size = HCIIF_FRAME_SIZE_EVT;
-	hciif_proto[HCIIF_CHAN_EVT].hdr_len = HCIIF_HDR_SIZE_EVT;
-	hciif_proto[HCIIF_CHAN_EVT].offset_len_in_hdr = HCIIF_LEN_OFFSET_EVT;
-	hciif_proto[HCIIF_CHAN_EVT].len_size = HCIIF_LEN_SIZE_EVT;
-	hciif_proto[HCIIF_CHAN_FM].max_frame_size = HCIIF_FRAME_SIZE_FM;
-	hciif_proto[HCIIF_CHAN_FM].hdr_len = HCIIF_HDR_SIZE_FM;
-	hciif_proto[HCIIF_CHAN_FM].offset_len_in_hdr = HCIIF_LEN_OFFSET_FM;
-	hciif_proto[HCIIF_CHAN_FM].len_size = HCIIF_LEN_SIZE_FM;
-	return HCIIF_SUCCESS;
+
+	hci_tty_dev =
+		device_create(hci_tty_class, NULL, MKDEV(hci_tty_major, 0),
+				NULL, DEVICE_NAME);
+	if (IS_ERR(hci_tty_dev)) {
+		pr_err("Error in device create");
+		unregister_chrdev(hci_tty_major, DEVICE_NAME);
+		class_destroy(hci_tty_class);
+		return -1;
+	}
+	pr_info("allocated %d, %d\n", hci_tty_major, 0);
+	return 0;
 }
 
-
-/** hciif_exit Function
- *  This function Destroys the TI BT driver parametes and /dev/hciif node
+/** hci_tty_exit Function
+ *  This function Destroys the hci_tty driver parametes and /dev/hci_tty node
  *
  *  Parameters : NULL
  *  Returns   NULL
  */
-static void __exit hciif_exit(void)
+static void __exit hci_tty_exit(void)
 {
-	int i = 0;
-	HCIIFDRV_DBG(" Inside %s, freeing up: %d", __func__,
-				 hhciif->hciif_major);
-	device_destroy(hhciif->hciif_class, MKDEV(hhciif->hciif_major, 0));
-	class_unregister(hhciif->hciif_class);
-	class_destroy(hhciif->hciif_class);
-	unregister_chrdev(hhciif->hciif_major, DEVICE_NAME);
-	for (i = 0; i < ST_MAX_CHANNELS; i++) {
-		if (hhciif->hciif_RawClients[i])
-			kfree(hhciif->hciif_RawClients[i]);
-	}
-	for (i = 0; i < HCIIF_CMD_CLIENTS_NUM; i++) {
-		if (hhciif->hciif_CmdClients[i])
-			kfree(hhciif->hciif_CmdClients[i]);
-	}
-	kfree(hhciif);
+	pr_info("inside %s\n", __func__);
+	pr_info("bye.. freeing up %d\n", hci_tty_major);
+
+	device_destroy(hci_tty_class, MKDEV(hci_tty_major, 0));
+	class_destroy(hci_tty_class);
+	unregister_chrdev(hci_tty_major, DEVICE_NAME);
 }
 
-int hciif_dev_up(struct file *file, struct hciif_filter_t *rcv_filter,
-				 struct hciif_client **client)
-{
-	int i, retCode = HCIIF_SUCCESS;
-	struct hciif_client *newClient = NULL;
-	struct hciif_filter_t filter;
-	HCIIFDRV_DBG(" Inside %s", __func__);
-	retCode = hciif_enter_cs();
-	if (retCode != HCIIF_SUCCESS)
-		return retCode;
-	memcpy(&filter, rcv_filter, sizeof(struct hciif_filter_t));
-	if (test_bit(HCIIF_CHAN_EVT, &filter.chan_mask)) {
-		if (hhciif->hciif_cmdClientsCounter == HCIIF_CMD_CLIENTS_NUM) {
-			HCIIFDRV_ERR
-			("hciif_dev_up(): Trying to regsiter a client to Events channel --> Max clients are already registered");
-			hciif_exit_cs(-EINPROGRESS);
-			return -EINVAL;
-		}
-		if (hhciif->hciif_cmdClientsCounter == 0) {
-			retCode =
-				hciif_register_client(&hciif_proto[HCIIF_CHAN_EVT]);
-		}
-		if (retCode == HCIIF_SUCCESS) {
-			HCIIFDRV_VER
-			("hciif_dev_up(): calling hciif_add_client_to_array(HCIIF_CHAN_EVT) ");
-			newClient =
-				hciif_add_client_to_array(HCIIF_CHAN_EVT,
-										  filter.evt_type, NULL);
-			if (!newClient) {
-				HCIIFDRV_ERR("Failed adding client to array");
-				hciif_exit_cs(-EINPROGRESS);
-				return -EINVAL;
-			}
-		}
+module_init(hci_tty_init);
+module_exit(hci_tty_exit);
 
-		else {
-			HCIIFDRV_ERR("hciif_register_client failed");
-			hciif_exit_cs(-EINPROGRESS);
-			return -EINVAL;
-		}
-	}
-
-	/* Each client can may register on more then one channel, so after we handled ch4 lets
-	   register all other channels that this client requires...
-	Note: each channel can handle only one client, and only ch4 can handle up
-	to 8 client registrations */
-	for (i = 0; i < ST_MAX_CHANNELS; i++) {
-		if (i == HCIIF_CHAN_EVT)	/* Each bit in chan_mask represents 1 channel that client requires... */
-			continue;
-		if (test_bit(i, &filter.chan_mask)) {
-			if (hhciif->hciif_RawClients[i])	/* "hciif_RawClients" only for channels with single client(all but 4th ch)
-								   array index = channel # so indx0 and index4 are allways NULL */
-			{
-				HCIIFDRV_ERR
-				("There is already a client registered to channel %d",
-				 i);
-				hciif_exit_cs(-EINPROGRESS);
-				return -EINVAL;
-			}
-
-			else {
-				retCode =
-					hciif_register_client(&hciif_proto[i]);
-				if (retCode == HCIIF_SUCCESS) {
-					HCIIFDRV_VER
-					("hciif_dev_up()/hciif_register_client(OK): successfully registered client with index=%d\n",
-					 i);
-					newClient =
-						hciif_add_client_to_array(i, NULL,
-												  newClient);
-					if (!newClient) {
-						HCIIFDRV_ERR
-						("Failed adding client to array");
-						hciif_exit_cs(-EINPROGRESS);
-						return -EINVAL;
-					}
-				}
-			}
-		}
-	}
-	if (newClient) {
-
-		/* Update client's struct with some more params,
-		   copy client's channels & events, this parameters
-		   is not filled in hciif_add_client_to_array()  */
-		memcpy(&newClient->filter, &filter,
-			   sizeof(struct hciif_filter_t));
-		newClient->file = file;
-		file->private_data = newClient;
-	}
-
-	else {
-		HCIIFDRV_ERR("No channels were set");
-		hciif_exit_cs(-EINPROGRESS);
-		return -EINVAL;
-	}
-	hciif_exit_cs(0);
-	HCIIFDRV_DBG(" Exit %s", __func__);
-	return HCIIF_SUCCESS;
-}
-
-int hciif_dev_down(struct hciif_client *client)
-{
-	int retVal = HCIIF_SUCCESS;
-	int i = 0;
-	unsigned long flags = 0;
-	unsigned long chan_mask;
-	struct hciif_client *tmpClient;
-	struct list_head *pos, *q;
-	HCIIFDRV_DBG(" Inside %s", __func__);
-	retVal = hciif_enter_cs();
-	if (retVal != HCIIF_SUCCESS)
-		return retVal;
-
-	/* Complete 'release' call is portected by the lock */
-	spin_lock_irqsave(&hhciif->hciif_lock, flags);
-	HCIIFDRV_DBG(" Inside %s", __func__);
-	if (!client) {
-		spin_unlock_irqrestore(&hhciif->hciif_lock, flags);
-		HCIIFDRV_VER("client is NULL, nothing to do... Exit");
-		hciif_exit_cs(0);
-		return retVal;
-	}
-	chan_mask = client->filter.chan_mask;
-
-	/* First handle EVENT CHANNEL and its special array */
-	if (test_bit(HCIIF_CHAN_EVT, &chan_mask)) {
-
-		/* Find Client Struct */
-		for (i = 0; i < HCIIF_CMD_CLIENTS_NUM; i++) {
-			if (hhciif->hciif_CmdClients[i] == client)
-				break;
-		}
-		if (i == HCIIF_CMD_CLIENTS_NUM) {
-			spin_unlock_irqrestore(&hhciif->hciif_lock, flags);
-			HCIIFDRV_ERR
-			("Client is not registered to EVT CHANNEL, Exit!");
-			hciif_exit_cs(-EINPROGRESS);
-			return HCIIF_ERR_UNKNOWN;
-		}
-
-		/* Remove client from array */
-		hhciif->hciif_CmdClients[i] = NULL;
-
-		/* Update Clients counter */
-		hhciif->hciif_cmdClientsCounter--;
-
-		/* Align rest of the clients to the begining of the array */
-		for (i = i + 1; (i < HCIIF_CMD_CLIENTS_NUM - 1)
-				&& (hhciif->hciif_CmdClients[i] != NULL); i++) {
-			hhciif->hciif_CmdClients[i - 1] =
-				hhciif->hciif_CmdClients[i];
-		}
-
-		/* Remove this client from the hciif_WriteClientsList */
-		list_for_each_safe(pos, q,
-						   &hhciif->hciif_WriteClientsList.list)  {
-			tmpClient = list_entry(pos, struct hciif_client, list);
-			if (tmpClient == client)
-				list_del(pos);
-		}
-
-		/* If last CMD client --> Un-register EVT_CHAN from ST */
-		if (hhciif->hciif_cmdClientsCounter == 0) {
-			HCIIFDRV_VER
-			(" last CMD Client --> will perform ST un-registration from EVENT Channel");
-		}
-
-		else {
-
-			/*st_unregister will be done along with all other channels.
-			  If this isn't the last CMD client, clear the EVENT BIT,
-			  so the st_unregister won't be called for this channel. */
-			clear_bit(HCIIF_CHAN_EVT, &chan_mask);
-		}
-	}
-
-	/* Now handle all other RAW CHANNELs */
-	for (i = 0; i < ST_MAX_CHANNELS; i++) {
-		if (i == HCIIF_CHAN_EVT)
-			continue;
-		if (test_bit(i, &chan_mask))
-			hhciif->hciif_RawClients[i] = NULL;
-	}
-
-	/* De-allocate Client's struct */
-	skb_queue_purge(&client->rx_list);
-	kfree(client);
-	spin_unlock_irqrestore(&hhciif->hciif_lock, flags);
-
-	/* Un-Register all channels */
-	for (i = 0; i < ST_MAX_CHANNELS; i++) {
-		if (test_bit(i, &chan_mask)) {
-			HCIIFDRV_VER
-			("Performing ST un-registration from Channel %d",
-			 i);
-			if (st_unregister(&hciif_proto[i]) < 0) {
-				HCIIFDRV_ERR(" st_unregister failed");
-				retVal = HCIIF_ERR_FAILURE;
-			}
-
-			else {
-				HCIIFDRV_VER("st_unregister success");
-			}
-		}
-	}
-	hciif_exit_cs(0);
-	return retVal;
-}
-
-long hciif_send_frame(struct sk_buff *skb, struct hciif_client *client)
-{
-	HCIIFDRV_DBG(" Inside %s", __func__);
-
-	/* Packet is completed! Forward to ST. */
-#ifdef VERBOSE
-	/*Very verbose ! should be used through eth port whith disabled serial output. */
-	hciif_print_raw_data(skb->data, skb->len,
-						 "hciif_send_frame(To ST)");
-
-#endif /*  */
-
-	/* If packet is of CMD type --> Save client in write list */
-	if (skb->data[0] == HCIIF_CHAN_CMD) {
-		client->cmd_opcode = *((uint16_t *) (&skb->data[1]));
-		HCIIFDRV_VER("Client 0x%08x, command opcode 0x%04x",
-					 (unsigned int)client, client->cmd_opcode);
-
-		/* HCI Host Number Of Completed Packets command does not generate event */
-		if (client->cmd_opcode != HCIIF_CMD_HOST_NUM_OF_CMPLT_PKTS) {
-			spin_lock(&hhciif->hciif_lock);
-			list_add_tail(&(client->list),
-						  &(hhciif->hciif_WriteClientsList.list));
-			spin_unlock(&hhciif->hciif_lock);
-		}
-	}
-	return hhciif->st_write(skb);
-}
-
-
-/***********Functions called from ST driver**********************************/
-
-/*  hciif_st_event_recv Function
- *  This is Called in from -- ST Core when an event is received
- *  This is a registered callback with ST core when the BT driver
- *  registers with ST.
- *  Parameters:
- *  @skb    : SKB buffer pointer which contains the incoming data.
- *  Returns:
- *          HCIIF_SUCCESS - On Success
- *          else suitable error code
- */
-long hciif_st_event_recv(void *priv_data, struct sk_buff *skb)
-{
-	struct hciif_client *destClient;
-	int i, j;
-	bool isClientFound = false;
-	HCIIFDRV_DBG(" Inside %s", __func__);
-
-	/* SKB is NULL */
-	if (NULL == skb) {
-		HCIIFDRV_ERR("Input SKB is NULL");
-		return HCIIF_ERR_FAILURE;
-	}
-	if (bt_cb(skb)->pkt_type != HCIIF_CHAN_EVT) {
-		HCIIFDRV_ERR("Packet received is not of type EVENT");
-		return HCIIF_ERR_FAILURE;
-	}
-
-	else {
-
-		/* If opcode is COMPLETED/STATUS --> Send SKB to client from write list */
-		if ((skb->data[0] == HCIIF_OP_EVT_COMPLETED)
-				|| (skb->data[0] == HCIIF_OP_EVT_STATUS)) {
-
-			/* Send CMD CMPLT to the client that sent the cmd */
-			spin_lock(&hhciif->hciif_lock);
-			destClient =
-				list_entry(hhciif->hciif_WriteClientsList.list.next,
-						   struct hciif_client, list);
-
-			/* Here we are making sure that the number of completed commands equles to 1 and
-			   that the command complete was recevied for the expected command opcode.
-			   If one of the above is not true --> ERROR */
-			if ((skb->data[0] == HCIIF_OP_EVT_COMPLETED)
-					&& ((skb->data[2] != 1)
-						|| (destClient->cmd_opcode !=
-							*((uint16_t *) (&skb->data[3]))))) {
-				spin_unlock(&hhciif->hciif_lock);
-				HCIIFDRV_ERR
-				("*** ERROR HCIIF_OP_EVT_COMPLETED ***: The received opcode from client "
-
-				 "0x%08x, is Cmd complete: 0x%04x, not matching the expected cmd opcode 0x%04x!!!!!",
-				 (unsigned int)destClient,
-				 *((uint16_t *)&skb->data[3]),
-				 destClient->cmd_opcode);
-				return HCIIF_ERR_FAILURE;
-			}
-
-			else if ((skb->data[0] == HCIIF_OP_EVT_STATUS)
-					 && ((skb->data[3] != 1)
-						 || (destClient->cmd_opcode !=
-							 *((uint16_t *) (&skb->data[4]))))) {
-				spin_unlock(&hhciif->hciif_lock);
-				HCIIFDRV_ERR
-				("***ERROR HCIIF_OP_EVT_STATUS ***: The received opcode from client "
-
-				 "0x%08x, is Cmd complete: 0x%04x, not matching the expected cmd opcode 0x%04x!!!!!",
-				 (unsigned int)destClient,
-				 *((uint16_t *)&skb->data[4]),
-				 destClient->cmd_opcode);
-				return HCIIF_ERR_FAILURE;
-			}
-			list_del(hhciif->hciif_WriteClientsList.list.next);
-			INIT_LIST_HEAD(&(destClient->list));
-			spin_unlock(&hhciif->hciif_lock);
-		}
-
-		else {	/* If any other opcode --> Send SKB to the client that registered to this event */
-			spin_lock(&hhciif->hciif_lock);
-			for (i = 0;
-					i < HCIIF_CMD_CLIENTS_NUM
-					&& (hhciif->hciif_CmdClients[i] != NULL); i++) {
-				for (j = 0; j < HCIIF_MAX_REG_EVENTS; j++) {
-					if (hhciif->
-							hciif_CmdClients[i]->filter.
-							evt_type[j] == 0) {
-						break;
-					}
-
-					else if (hhciif->
-							 hciif_CmdClients[i]->filter.
-							 evt_type[j] == skb->data[0]) {
-						isClientFound = true;
-						break;
-					}
-				}
-				if (isClientFound)
-					break;
-			}
-			if ((i < HCIIF_CMD_CLIENTS_NUM) && (isClientFound)) {
-				destClient = hhciif->hciif_CmdClients[i];
-				spin_unlock(&hhciif->hciif_lock);
-			}
-
-			else if ((hhciif->hciif_CmdClients
-					  [HCIIF_CMD_CLIENTS_NUM - 1] != NULL)
-					 &&
-					 (hhciif->hciif_CmdClients
-					  [HCIIF_CMD_CLIENTS_NUM -
-					   1]->filter.evt_type[0] ==
-					  HCIIF_EVT_DEFUALT)) {
-				destClient =
-					hhciif->hciif_CmdClients
-					[HCIIF_CMD_CLIENTS_NUM - 1];
-				spin_unlock(&hhciif->hciif_lock);
-			}
-
-			else {
-				spin_unlock(&hhciif->hciif_lock);
-				HCIIFDRV_ERR
-				("Can't send EVT --> No client is registered to it and no default client is registered");
-				return HCIIF_ERR_FAILURE;
-			}
-		}
-	}
-	HCIIFDRV_DBG(" hciif_st_event_recv: dest_client = 0x%08x",
-				 (unsigned int)destClient);
-
-	/* Forward Rx */
-	spin_lock(&destClient->rx_lock);
-	skb_queue_tail(&destClient->rx_list, skb);
-	spin_unlock(&destClient->rx_lock);
-	HCIIFDRV_DBG(" calling wake_up_interruptible()..");
-	wake_up_interruptible(&destClient->hciif_client_q);
-	HCIIFDRV_DBG(" hciif_st_event_recv: exit !");
-	return HCIIF_SUCCESS;
-}
-
-
-/*  hciif_st_ganeric_recv Function
- *  This is Called in from -- ST Core when a data is received
- *  This is a registered callback with ST core when the BT driver
- *  registers with ST.
- *  Parameters:
- *  @skb    : SKB buffer pointer which contains the incoming data.
- *  Returns:
- *          HCIIF_SUCCESS - On Success
- *          else suitable error code
- */
-long hciif_st_ganeric_recv(void *priv_data, struct sk_buff *skb)
-{
-	struct hciif_client *destClient;
-	HCIIFDRV_DBG(" Inside %s", __func__);
-
-	/* SKB is NULL */
-	if (NULL == skb) {
-		HCIIFDRV_ERR("Input SKB is NULL");
-		return HCIIF_ERR_FAILURE;
-	}
-	if (bt_cb(skb)->pkt_type >= ST_MAX_CHANNELS) {
-		HCIIFDRV_ERR("pkt_type is not supported");
-		return HCIIF_ERR_FAILURE;
-	}
-	spin_lock(&hhciif->hciif_lock);
-	destClient = hhciif->hciif_RawClients[bt_cb(skb)->pkt_type];
-	spin_unlock(&hhciif->hciif_lock);
-	if (!destClient) {
-		HCIIFDRV_ERR
-		("Can't send packet --> No client is registered to the requested channel %d",
-		 bt_cb(skb)->pkt_type);
-		return HCIIF_ERR_FAILURE;
-	}
-	HCIIFDRV_DBG(" hciif_st_ganeric_recv: dest_client = 0x%08x",
-				 (unsigned int)destClient);
-
-	/* Forward Rx */
-	spin_lock(&destClient->rx_lock);
-	skb_queue_tail(&destClient->rx_list, skb);
-	spin_unlock(&destClient->rx_lock);
-	wake_up_interruptible(&destClient->hciif_client_q);
-	return HCIIF_SUCCESS;
-}
-
-
-/*  hciif_st_cb Function
- *  This is Called in from -- ST Core when the state is pending
- *  during st_register.
- *  This is a registered callback with ST core when the BT driver
- *  registers with ST.
- *
- *  Parameters:
- *  @data   Status update of BT registration
- *  Returns: NULL
- */
-void hciif_st_open_cb(void *priv_data, char data)
-{
-	HCIIFDRV_DBG(" Inside %s", __func__);
-	hhciif->streg_cbdata = data;	/* ST registration callback  status */
-	complete_all(&hhciif->hciif_reg_completed);
-	return;
-}
-
-
-/*********** Functions used internally **********************************/
-#ifdef VERBOSE
-static void hciif_print_raw_data(char *raw_data, int skb_len, char *func_name)
-{
-	long count = 0, line_number = 1;
-	char result_str[150 + 1] = { };
-	char tmp_str[2 + 1] = { };
-	printk(KERN_ERR "\n%s<%d> START:", func_name, skb_len);
-	while (count < skb_len) {
-		result_str[0] = 0;
-		for (; ((count < skb_len) && (count < 50 * line_number));
-				count++) {
-			sprintf(tmp_str, "%02x.", raw_data[count]);
-			strncat(result_str, tmp_str, 3);
-		}
-		line_number++;
-		printk(KERN_ERR "%s\n", result_str);
-	}
-	printk(KERN_ERR "%s: END.\n\n", func_name);
-}
-
-
-#endif /*  */
-static int hciif_register_client(struct st_proto_s *hciif_proto)
-{
-	int ret = 0;
-	unsigned long timeout = HCIIFDRV_REG_TIMEOUT;
-	HCIIFDRV_DBG(" Inside %s", __func__);
-
-	/*Initialize  hciif_reg_completed so as to wait for
-	 *completion on the same
-	 *if st_register returns with a PENDING status
-	 */
-	INIT_COMPLETION(hhciif->hciif_reg_completed);
-
-	/* Resgister BT with ST */
-	ret = st_register(hciif_proto);
-
-	/*Save the st_write ptr */
-	hhciif->st_write = hciif_proto->write;
-	HCIIFDRV_VER("st_register(): returned %d", ret);
-
-	/* If Registration returned with error, return the appropriate error code */
-	if (ret < 0 && ret != -EINPROGRESS) {
-		HCIIFDRV_ERR("hciif_register_client(): st_register failed");
-		if (ret == -EALREADY)
-			return HCIIF_ERR_ALREADY;
-		return HCIIF_ERR_FAILURE;
-	}
-
-	/* if returned status is pending, wait for the completion */
-	if (ret == -EINPROGRESS) {
-		hhciif->streg_cbdata = -EINPROGRESS;
-		HCIIFDRV_VER(" BT Register waiting for completion ");
-		timeout =
-			wait_for_completion_timeout(&hhciif->hciif_reg_completed,
-										msecs_to_jiffies(timeout));
-
-		/* Check for timed out condition */
-		if (0 == timeout) {
-			HCIIFDRV_ERR("st_register timed out");
-			return HCIIF_ERR_TIMEOUT;
-		}
-		if (hhciif->streg_cbdata != 0) {
-			HCIIFDRV_ERR
-			("BT Device Registration Failed-ST Reg CB called with invalid value %d",
-			 hhciif->streg_cbdata);
-			return -EAGAIN;
-		}
-	}
-	HCIIFDRV_DBG(" bt registration complete ");
-	return HCIIF_SUCCESS;
-}
-
-static struct hciif_client *hciif_add_client_to_array(int channel,
-		unsigned char
-		evt_type[],
-		struct hciif_client
-		*existingClient) {
-	struct hciif_client *client;
-	unsigned long flags = 0;
-	int i;
-	HCIIFDRV_DBG(" Inside %s", __func__);
-	spin_lock_irqsave(&hhciif->hciif_lock, flags);
-	if (!existingClient) {
-		HCIIFDRV_VER(" Creating Client Handler...");
-
-		/* Allocate Client Struct */
-		client = kzalloc(sizeof(struct hciif_client), GFP_ATOMIC);
-		if (!(client)) {
-			spin_unlock_irqrestore(&hhciif->hciif_lock, flags);
-			HCIIFDRV_ERR("Can't allocate client structure");
-			return NULL;
-		}
-
-		/* Initialize Client Struct */
-		INIT_LIST_HEAD(&(client->list));
-		skb_queue_head_init(&client->rx_list);
-		init_waitqueue_head(&client->hciif_client_q);
-		spin_lock_init(&client->rx_lock);
-	}
-
-	else
-		client = existingClient;
-	if (channel == HCIIF_CHAN_EVT) {
-		if (evt_type[0] == HCIIF_EVT_DEFUALT) {
-			if (hhciif->hciif_CmdClients[HCIIF_CMD_CLIENTS_NUM - 1]
-					!= NULL) {
-				HCIIFDRV_ERR
-				("There is already a client registered to EVT_DEFUALT");
-				spin_unlock_irqrestore(&hhciif->hciif_lock,
-									   flags);
-				kfree(client);
-				return NULL;
-			}
-
-			else {
-				hhciif->hciif_CmdClients[HCIIF_CMD_CLIENTS_NUM
-										 - 1] = client;
-			}
-		}
-
-		else {
-
-			/* Find free spot in Cmd Clients array and save client struct */
-			for (i = 0; i < HCIIF_CMD_CLIENTS_NUM; i++) {
-				if (hhciif->hciif_CmdClients[i] == NULL)
-					break;
-			}
-			hhciif->hciif_CmdClients[i] = client;
-		}
-		hhciif->hciif_cmdClientsCounter++;
-	}
-
-	else {
-		hhciif->hciif_RawClients[channel] = client;
-	}
-	HCIIFDRV_VER(" Client Handler 0x%08x was created & added successfuly",
-				 (unsigned int)client);
-	spin_unlock_irqrestore(&hhciif->hciif_lock, flags);
-	return client;
-}
-
-
-/*  hciif_enter_cs Function
- *  Critical Section service for protecting DEVUP & DEVDWON operations.
- *
- *  Parameters: None
- *
- *  Returns: Status
- */
-static int hciif_enter_cs(void)
-{
-	unsigned long timeout = HCIIFDRV_REG_TIMEOUT;
-	HCIIFDRV_DBG(" Inside %s", __func__);
-
-	/*HCIIF_ST_INPROGRESS bit is for synchronizing Open & Close
-	 operations between the different clients */
-	while (test_and_set_bit(HCIIF_ST_INPROGRESS, &hhciif->state)) {
-		HCIIFDRV_DBG
-		(" Some other operation is in progress, waiting...");
-		timeout =
-			wait_for_completion_timeout(&hhciif->hciif_oper_completed,
-										msecs_to_jiffies(timeout));
-
-		/* Check for timed out condition */
-		if (0 == timeout) {
-			HCIIFDRV_ERR("hciif_oper_completed timed out");
-			return HCIIF_ERR_TIMEOUT;
-		}
-		if (hhciif->stoper_cbdata != 0) {
-			HCIIFDRV_ERR("Error during the previous operation");
-			return -EAGAIN;
-		}
-	}
-	return HCIIF_SUCCESS;
-}
-
-
-/*  hciif_exit_cs Function
- *  Critical Section service for protecting DEVUP & DEVDWON operations.
- *
- *  Parameters: status - Status of operation
- *
- *  Returns: None
- */
-static void hciif_exit_cs(char status)
-{
-	clear_bit(HCIIF_ST_INPROGRESS, &hhciif->state);
-	hhciif->stoper_cbdata = status;
-	INIT_COMPLETION(hhciif->hciif_oper_completed);
-	complete(&hhciif->hciif_oper_completed);
-}
-module_init(hciif_init);
-
-module_exit(hciif_exit);
-
-/* ------ Module Info ------ */
-
+MODULE_AUTHOR("Pavan Savoy <pavan_savoy@ti.com>");
 MODULE_LICENSE("GPL");
