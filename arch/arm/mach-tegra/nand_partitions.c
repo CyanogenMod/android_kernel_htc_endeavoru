@@ -29,7 +29,7 @@
 
 #include <linux/mtd/nand.h>
 #include <linux/mtd/partitions.h>
-#include <linux/slab.h>                                                                                                                                      
+#include <linux/slab.h>
 
 
 //#include <mach/msm_iomap.h>
@@ -88,8 +88,8 @@ printk("Parsting partition tag");
 
 //	count = (((tag->hdr.size - 2)<<2)-3) /
 //		(sizeof(struct msm_ptbl_entry) / sizeof(__u32));
-	printk("[emmc] (sizeof(struct msm_ptbl_entry) / sizeof(__u32)) %d\n",(sizeof(struct msm_ptbl_entry) / sizeof(__u32))); 
-	printk("[emmc] header->size %d\n",tag->hdr.size); 
+	printk("[emmc] (sizeof(struct msm_ptbl_entry) / sizeof(__u32)) %d\n",(sizeof(struct msm_ptbl_entry) / sizeof(__u32)));
+	printk("[emmc] header->size %d\n",tag->hdr.size);
     printk("[emmc] count %d\n",count);
 	if (count > MSM_MAX_PARTITIONS)
 		count = MSM_MAX_PARTITIONS;

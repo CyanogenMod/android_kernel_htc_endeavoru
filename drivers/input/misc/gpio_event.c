@@ -20,6 +20,7 @@
 #include <linux/hrtimer.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <mach/mfootprint.h>
 
 struct gpio_event {
 	struct gpio_event_input_devs *input_devs;
@@ -105,9 +106,13 @@ err_no_func:
 void gpio_event_suspend(struct early_suspend *h)
 {
 	struct gpio_event *ip;
+	MF_DEBUG("00190000");
 	ip = container_of(h, struct gpio_event, early_suspend);
+	MF_DEBUG("00190001");
 	gpio_event_call_all_func(ip, GPIO_EVENT_FUNC_SUSPEND);
+	MF_DEBUG("00190002");
 	ip->info->power(ip->info, 0);
+	MF_DEBUG("00190003");
 }
 
 void gpio_event_resume(struct early_suspend *h)

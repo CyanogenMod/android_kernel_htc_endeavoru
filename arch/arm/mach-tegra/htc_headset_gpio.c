@@ -45,11 +45,33 @@ static void hs_key_irq_enable_func(struct work_struct *work);
 static DECLARE_DELAYED_WORK(hs_key_irq_enable, hs_key_irq_enable_func);
 static void cancel_button_work_func(struct work_struct *work);
 static DECLARE_DELAYED_WORK(cancel_button_work, cancel_button_work_func);
+static void irq_init_work_func(struct work_struct *work);
+static DECLARE_DELAYED_WORK(irq_init_work, irq_init_work_func);
 
 static struct htc_headset_gpio_info *hi;
 unsigned long last_key_jiffies = 0;
 unsigned long unstable_jiffies = 0.02 * HZ;
 unsigned long irq_delay = 0.010 * HZ;
+
+static headset_uart_enable = 0;
+
+/*
+ * This function should be called while caller thread holding a
+ * htc_headset_mgr.mutex_lock. Therefore, we don't need to
+ * protect concurrency access to headset_uart_enable.
+ * Note: Default value of headset_uart_enable is 0.
+ */
+
+static void hs_gpio_uart_set(int value)
+{
+	value = !!value;
+
+	if (value != headset_uart_enable) {
+		headset_uart_enable = value;
+		HS_LOG("%s headset uart", value? "enable": "disable");
+		gpio_set_value(hi->pdata.uart_gpio, value);
+	}
+}
 
 static int hs_gpio_hpin_state(void)
 {
@@ -167,6 +189,24 @@ static irqreturn_t button_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static void irq_init_work_func(struct work_struct *work)
+{
+	HS_DBG();
+
+	if (hi->pdata.hpin_gpio) {
+		HS_LOG("Enable detect IRQ");
+		irq_set_irq_type(hi->hpin_irq, IRQF_TRIGGER_LOW);
+		enable_irq(hi->hpin_irq);
+	}
+
+/*	if (hi->pdata.key_gpio) {
+		HS_LOG("Enable button IRQ");
+		hi->key_irq_type = IRQF_TRIGGER_LOW;
+		set_irq_type(hi->key_irq, hi->key_irq_type);
+		enable_irq(hi->key_irq);
+	}*/
+}
+
 static int hs_gpio_request_irq(unsigned int gpio, unsigned int *irq,
 			       irq_handler_t handler, unsigned long flags,
 			       const char *name, unsigned int wake)
@@ -238,6 +278,28 @@ static int hs_gpio_request(unsigned int gpio, const char *name)
 	return 1;
 }
 
+static int hs_gpio_request_output(unsigned int gpio, const char *name, int value)
+{
+	int ret = 0;
+
+	HS_DBG();
+
+	ret = gpio_request(gpio, name);
+	if (ret < 0)
+		HS_LOG("GPIO Already Requested");
+
+	ret = gpio_direction_output(gpio, value);
+	if (ret < 0) {
+		HS_ERR("gpio_direction_output(gpio);");
+		gpio_free(gpio);
+		return ret;
+	}
+
+	tegra_gpio_enable(gpio);
+
+	return 1;
+}
+
 static void detect_gpio_work_func(struct work_struct *work)
 {
 	int insert = 0;
@@ -246,9 +308,10 @@ static void detect_gpio_work_func(struct work_struct *work)
 	HS_DBG();
 	if ((hi->pdata.eng_cfg == HS_EDE_U) || (hi->pdata.eng_cfg == HS_EDE_TD) || (hi->pdata.eng_cfg == HS_BLE))
 	{
+		HS_LOG("Turn on headset mic bias");
 		aic3008_set_mic_bias(1);
 	}
-	if ((hi->pdata.eng_cfg == HS_QUO_F_U))
+	if ((hi->pdata.eng_cfg == HS_QUO_F_U) || (hi->pdata.eng_cfg == HS_ENRC2_U_XB))
 	{
 		regulator = regulator_get(NULL, "v_aud_2v85");
 		if (IS_ERR_OR_NULL(regulator)) {
@@ -297,9 +360,27 @@ static void detect_gpio_work_func(struct work_struct *work)
 	}
 }
 
+static int hs_gpio_key_int_enable(int enable)
+{
+	if (enable) {
+		HS_LOG("Key int enable");
+		enable_irq(hi->key_irq);
+	} else {
+		HS_LOG("Key int disable");
+		disable_irq_nosync(hi->key_irq);
+	}
+	return 0;
+}
+
 static void hs_gpio_register(void)
 {
 	struct headset_notifier notifier;
+
+	if (hi->pdata.uart_gpio) {
+		notifier.id = HEADSET_REG_UART_SET;
+		notifier.func = hs_gpio_uart_set;
+		headset_notifier_register(&notifier);
+	}
 
 	if (hi->pdata.hpin_gpio) {
 		notifier.id = HEADSET_REG_HPIN_GPIO;
@@ -316,6 +397,12 @@ static void hs_gpio_register(void)
 	if (hi->pdata.key_enable_gpio) {
 		notifier.id = HEADSET_REG_KEY_ENABLE;
 		notifier.func = hs_gpio_key_enable;
+		headset_notifier_register(&notifier);
+	}
+
+	if (hi->pdata.key_gpio) {
+		notifier.id = HEADSET_REG_KEY_INT_ENABLE;
+		notifier.func = hs_gpio_key_int_enable;
 		headset_notifier_register(&notifier);
 	}
 }
@@ -337,6 +424,7 @@ static int htc_headset_gpio_probe(struct platform_device *pdev)
 		pdata->config_headset_gpio();
 
 	hi->pdata.eng_cfg = pdata->eng_cfg;
+	hi->pdata.uart_gpio = pdata->uart_gpio;
 	hi->pdata.hpin_gpio = pdata->hpin_gpio;
 	hi->pdata.key_gpio = pdata->key_gpio;
 	hi->pdata.key_enable_gpio = pdata->key_enable_gpio;
@@ -345,15 +433,13 @@ static int htc_headset_gpio_probe(struct platform_device *pdev)
 	hi->hpin_debounce = HS_JIFFIES_ZERO;
 	hi->key_irq_type = IRQF_TRIGGER_LOW;
 	hi->headset_state = 0;
+	last_key_jiffies = jiffies;
 
-	if ((hi->pdata.eng_cfg == HS_QUO_F_U))
-	{
-		/* HW power connet cable issue */
-		/* EVT XB WORKAROUND Only */
-		if (PROJECT_PHASE_XB == htc_get_pcbid_info()) {
-			HS_ERR("=====FORCED RETURN!!!!!=====");
-			return -ENOMEM;
-		}
+	/* HW power connet cable issue */
+	/* EVT XB WORKAROUND Only */
+	if (hi->pdata.eng_cfg == HS_QUO_F_U_XB) {
+		HS_ERR("=====FORCED RETURN!!!!!=====");
+		return -ENOMEM;
 	}
 
 	detect_wq = create_workqueue("HS_GPIO_DETECT");
@@ -372,14 +458,22 @@ static int htc_headset_gpio_probe(struct platform_device *pdev)
 
 	wake_lock_init(&hi->hs_wake_lock, WAKE_LOCK_SUSPEND, DRIVER_NAME);
 
+	if (hi->pdata.uart_gpio) {
+		ret = hs_gpio_request_output(hi->pdata.uart_gpio, "HS_GPIO_UART", 0);
+		if (ret < 0) {
+			HS_ERR("Fail to request GPIO UART(0x%x)", ret);
+		}
+	}
+
 	if (hi->pdata.hpin_gpio) {
 		ret = hs_gpio_request_irq(hi->pdata.hpin_gpio,
 				&hi->hpin_irq, detect_irq_handler,
-				IRQF_TRIGGER_LOW, "HS_GPIO_DETECT", 1);
+				IRQF_TRIGGER_FALLING, "HS_GPIO_DETECT", 1);
 		if (ret < 0) {
 			HS_ERR("Failed to request GPIO HPIN IRQ (0x%X)", ret);
 			goto err_request_detect_irq;
 		}
+		disable_irq_nosync(hi->hpin_irq);
 	}
 
 	if (hi->pdata.key_gpio) {
@@ -387,6 +481,8 @@ static int htc_headset_gpio_probe(struct platform_device *pdev)
 		if (ret < 0)
 			HS_ERR("Failed to request GPIO HPIN IRQ (0x%X)", ret);
 	}
+
+	queue_delayed_work(detect_wq, &irq_init_work, HS_JIFFIES_IRQ_INIT);
 
 	hs_gpio_register();
 	hs_notify_driver_ready(DRIVER_NAME);
@@ -422,6 +518,10 @@ static int htc_headset_gpio_remove(struct platform_device *pdev)
 		gpio_free(hi->pdata.hpin_gpio);
 	}
 
+	if(hi->pdata.uart_gpio) {
+		gpio_free(hi->pdata.uart_gpio);
+	}
+
 	wake_lock_destroy(&hi->hs_wake_lock);
 	destroy_workqueue(button_wq);
 	destroy_workqueue(detect_wq);
@@ -442,6 +542,8 @@ static struct platform_driver htc_headset_gpio_driver = {
 
 static int __init htc_headset_gpio_init(void)
 {
+	if (board_mfg_mode() == BOARD_MFG_MODE_OFFMODE_CHARGING)
+		return 0;
 	HS_LOG("INIT");
 	return platform_driver_register(&htc_headset_gpio_driver);
 }

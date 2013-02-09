@@ -499,6 +499,7 @@ void drm_connector_cleanup(struct drm_connector *connector)
 	mutex_lock(&dev->mode_config.mutex);
 	drm_mode_object_put(dev, &connector->base);
 	list_del(&connector->head);
+	dev->mode_config.num_connector--;
 	mutex_unlock(&dev->mode_config.mutex);
 }
 EXPORT_SYMBOL(drm_connector_cleanup);
@@ -529,6 +530,7 @@ void drm_encoder_cleanup(struct drm_encoder *encoder)
 	mutex_lock(&dev->mode_config.mutex);
 	drm_mode_object_put(dev, &encoder->base);
 	list_del(&encoder->head);
+	dev->mode_config.num_encoder--;
 	mutex_unlock(&dev->mode_config.mutex);
 }
 EXPORT_SYMBOL(drm_encoder_cleanup);
@@ -886,9 +888,6 @@ int drm_mode_group_init(struct drm_device *dev, struct drm_mode_group *group)
 	total_objects += dev->mode_config.num_connector;
 	total_objects += dev->mode_config.num_encoder;
 
-	if (total_objects == 0)
-		return -EINVAL;
-
 	group->id_list = kzalloc(total_objects * sizeof(uint32_t), GFP_KERNEL);
 	if (!group->id_list)
 		return -ENOMEM;
@@ -1113,7 +1112,7 @@ int drm_mode_getresources(struct drm_device *dev, void *data,
 	if (card_res->count_fbs >= fb_count) {
 		copied = 0;
 		fb_id = (uint32_t __user *)(unsigned long)card_res->fb_id_ptr;
-		list_for_each_entry(fb, &file_priv->fbs, head) {
+		list_for_each_entry(fb, &file_priv->fbs, filp_head) {
 			if (put_user(fb->base.id, fb_id + copied)) {
 				ret = -EFAULT;
 				goto out;
@@ -1869,6 +1868,10 @@ int drm_mode_dirtyfb_ioctl(struct drm_device *dev,
 	}
 
 	if (num_clips && clips_ptr) {
+		if (num_clips < 0 || num_clips > DRM_MODE_FB_DIRTY_MAX_CLIPS) {
+			ret = -EINVAL;
+			goto out_err1;
+		}
 		clips = kzalloc(num_clips * sizeof(*clips), GFP_KERNEL);
 		if (!clips) {
 			ret = -ENOMEM;

@@ -163,8 +163,8 @@ unsigned long st_ll_sleep_state(struct st_data_s *st_data,
 	case LL_SLEEP_IND:	/* sleep ind */
 		pr_debug("sleep indication recvd");
 		ll_device_want_to_sleep(st_data);
-		pr_mode_exit("Idle mode");
-		pr_mode_enter("Sleep mode", 80, "uA");
+//		pr_mode_exit("Idle mode");
+//		pr_mode_enter("Sleep mode", 80, "uA");
 		break;
 	case LL_SLEEP_ACK:	/* sleep ack */
 		pr_err("sleep ack rcvd: host shouldn't");
@@ -172,8 +172,8 @@ unsigned long st_ll_sleep_state(struct st_data_s *st_data,
 	case LL_WAKE_UP_IND:	/* wake ind */
 		pr_debug("wake indication recvd");
 		ll_device_want_to_wakeup(st_data);
-		pr_mode_exit("Sleep mode");
-		pr_mode_enter("Idle mode", 2850, "uA");
+//		pr_mode_exit("Sleep mode");
+//		pr_mode_enter("Idle mode", 2850, "uA");
 		break;
 	case LL_WAKE_UP_ACK:	/* wake ack */
 		pr_debug("wake ack rcvd");

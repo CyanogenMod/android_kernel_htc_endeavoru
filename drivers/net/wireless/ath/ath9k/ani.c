@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2010 Atheros Communications Inc.
+ * Copyright (c) 2008-2011 Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -502,9 +502,6 @@ static void ath9k_ani_reset_old(struct ath_hw *ah, bool is_scanning)
 		ath9k_hw_ani_control(ah, ATH9K_ANI_CCK_WEAK_SIGNAL_THR,
 				     ATH9K_ANI_CCK_WEAK_SIG_THR);
 
-		ath9k_hw_setrxfilter(ah, ath9k_hw_getrxfilter(ah) |
-				     ATH9K_RX_FILTER_PHYERR);
-
 		ath9k_ani_restart(ah);
 		return;
 	}
@@ -525,8 +522,6 @@ static void ath9k_ani_reset_old(struct ath_hw *ah, bool is_scanning)
 		ath9k_hw_ani_control(ah, ATH9K_ANI_FIRSTEP_LEVEL,
 				     aniState->firstepLevel);
 
-	ath9k_hw_setrxfilter(ah, ath9k_hw_getrxfilter(ah) &
-			     ~ATH9K_RX_FILTER_PHYERR);
 	ath9k_ani_restart(ah);
 
 	ENABLE_REGWRITE_BUFFER(ah);
@@ -899,12 +894,6 @@ void ath9k_hw_ani_init(struct ath_hw *ah)
 	 * check here default level should not modify INI setting.
 	 */
 	if (use_new_ani(ah)) {
-		const struct ani_ofdm_level_entry *entry_ofdm;
-		const struct ani_cck_level_entry *entry_cck;
-
-		entry_ofdm = &ofdm_level_table[ATH9K_ANI_OFDM_DEF_LEVEL];
-		entry_cck = &cck_level_table[ATH9K_ANI_CCK_DEF_LEVEL];
-
 		ah->aniperiod = ATH9K_ANI_PERIOD_NEW;
 		ah->config.ani_poll_interval = ATH9K_ANI_POLLINTERVAL_NEW;
 	} else {

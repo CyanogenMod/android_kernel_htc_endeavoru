@@ -30,7 +30,6 @@
 #include <linux/ip.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
-#include <linux/version.h>
 #include <linux/rcupdate.h>
 #include <linux/spinlock.h>
 
@@ -175,6 +174,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	struct pptp_opt *opt = &po->proto.pptp;
 	struct pptp_gre_header *hdr;
 	unsigned int header_len = sizeof(*hdr);
+	struct flowi4 fl4;
 	int islcp;
 	int len;
 	unsigned char *data;
@@ -189,7 +189,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	if (sk_pppox(po)->sk_state & PPPOX_DEAD)
 		goto tx_error;
 
-	rt = ip_route_output_ports(&init_net, NULL,
+	rt = ip_route_output_ports(&init_net, &fl4, NULL,
 				   opt->dst_addr.sin_addr.s_addr,
 				   opt->src_addr.sin_addr.s_addr,
 				   0, 0, IPPROTO_GRE,
@@ -270,8 +270,8 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 		iph->frag_off	=	0;
 	iph->protocol = IPPROTO_GRE;
 	iph->tos      = 0;
-	iph->daddr    = rt->rt_dst;
-	iph->saddr    = rt->rt_src;
+	iph->daddr    = fl4.daddr;
+	iph->saddr    = fl4.saddr;
 	iph->ttl      = ip4_dst_hoplimit(&rt->dst);
 	iph->tot_len  = htons(skb->len);
 
@@ -285,8 +285,10 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	ip_send_check(iph);
 
 	ip_local_out(skb);
+	return 1;
 
 tx_error:
+	kfree_skb(skb);
 	return 1;
 }
 
@@ -305,11 +307,18 @@ static int pptp_rcv_core(struct sock *sk, struct sk_buff *skb)
 	}
 
 	header = (struct pptp_gre_header *)(skb->data);
+	headersize  = sizeof(*header);
 
 	/* test if acknowledgement present */
 	if (PPTP_GRE_IS_A(header->ver)) {
-		__u32 ack = (PPTP_GRE_IS_S(header->flags)) ?
-				header->ack : header->seq; /* ack in different place if S = 0 */
+		__u32 ack;
+
+		if (!pskb_may_pull(skb, headersize))
+			goto drop;
+		header = (struct pptp_gre_header *)(skb->data);
+
+		/* ack in different place if S = 0 */
+		ack = PPTP_GRE_IS_S(header->flags) ? header->ack : header->seq;
 
 		ack = ntohl(ack);
 
@@ -318,21 +327,18 @@ static int pptp_rcv_core(struct sock *sk, struct sk_buff *skb)
 		/* also handle sequence number wrap-around  */
 		if (WRAPPED(ack, opt->ack_recv))
 			opt->ack_recv = ack;
+	} else {
+		headersize -= sizeof(header->ack);
 	}
-
 	/* test if payload present */
 	if (!PPTP_GRE_IS_S(header->flags))
 		goto drop;
 
-	headersize  = sizeof(*header);
 	payload_len = ntohs(header->payload_len);
 	seq         = ntohl(header->seq);
 
-	/* no ack present? */
-	if (!PPTP_GRE_IS_A(header->ver))
-		headersize -= sizeof(header->ack);
 	/* check for incomplete packet (length smaller than expected) */
-	if (skb->len - headersize < payload_len)
+	if (!pskb_may_pull(skb, headersize + payload_len))
 		goto drop;
 
 	payload = skb->data + headersize;
@@ -417,10 +423,8 @@ static int pptp_bind(struct socket *sock, struct sockaddr *uservaddr,
 	lock_sock(sk);
 
 	opt->src_addr = sp->sa_addr.pptp;
-	if (add_chan(po)) {
-		release_sock(sk);
+	if (add_chan(po))
 		error = -EBUSY;
-	}
 
 	release_sock(sk);
 	return error;
@@ -434,6 +438,7 @@ static int pptp_connect(struct socket *sock, struct sockaddr *uservaddr,
 	struct pppox_sock *po = pppox_sk(sk);
 	struct pptp_opt *opt = &po->proto.pptp;
 	struct rtable *rt;
+	struct flowi4 fl4;
 	int error = 0;
 
 	if (sp->sa_protocol != PX_PROTO_PPTP)
@@ -463,7 +468,7 @@ static int pptp_connect(struct socket *sock, struct sockaddr *uservaddr,
 	po->chan.private = sk;
 	po->chan.ops = &pptp_chan_ops;
 
-	rt = ip_route_output_ports(&init_net, sk,
+	rt = ip_route_output_ports(&init_net, &fl4, sk,
 				   opt->dst_addr.sin_addr.s_addr,
 				   opt->src_addr.sin_addr.s_addr,
 				   0, 0,

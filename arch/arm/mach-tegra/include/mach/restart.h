@@ -35,12 +35,6 @@
 
 #define SZ_DIAG_ERR_MSG 64
 
-#define BATTERY_LEVEL_SIG_SHIFT		(8)
-#define BATTERY_LEVEL_SIG_MASK		(0xFFFFFF)
-#define BATTERY_LEVEL_SIG		(0xBBC566)
-#define BATTERY_LEVEL_MASK		(0xFF)
-#define BATTERY_LEVEL_NO_VALUE		(0xFF)
-
 struct htc_reboot_params {
 	unsigned reboot_reason;
 	unsigned radio_flag;
@@ -97,11 +91,9 @@ enum RESTART_MODE {
 #define RESTART_REASON_OEM_BASE		0x6f656d00
 #define RESTART_REASON_RIL_FATAL	(RESTART_REASON_OEM_BASE | 0x99)
 
-void set_ramdump_reason(const char *msg);
-void set_hardware_reason(const char *msg);
-void set_reboot_battery_level(unsigned level);
-unsigned get_reboot_battery_level(void);
-//inline void soc_restart(char mode, const char *msg);
-//inline void notify_modem_cache_flush_done(void);
-//int check_in_panic(void);
+/*
+ * export battery_level from reboot_params.
+ */
+unsigned get_last_reboot_params_battery_level(void);
+void set_reboot_params_battery_level(unsigned level);
 #endif

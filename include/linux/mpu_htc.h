@@ -92,6 +92,8 @@
 #define MPU_READ_CAL_DATA           (0xef)
 extern unsigned char gyro_gsensor_kvalue[37];
 #endif
+int GSensorReadData(short *rbuf);
+int GSensor_set_mode(unsigned char mode);
 
 /* Structure for the following IOCTL's:
    MPU_SET_RAM
@@ -177,6 +179,7 @@ enum ext_slave_id {
     ACCEL_ID_LIS3DH,
 
 	COMPASS_ID_AKM,
+	COMPASS_ID_AKM8963,
 	COMPASS_ID_AMI30X,
 	COMPASS_ID_YAS529,
 	COMPASS_ID_HMC5883,
@@ -319,8 +322,7 @@ struct mpu3050_platform_data {
 	struct ext_slave_platform_data compass;
 	struct ext_slave_platform_data pressure;
 	int en_1v8;
-	bool microP_1v8;
-	void (*microp_enable_disable_1v8)(bool enable);
+	int (*g_sensors_reset)(void);
 };
 
 
@@ -408,6 +410,12 @@ struct ext_slave_descr *mma845x_get_slave_descr(void);
 struct ext_slave_descr *ak8975_get_slave_descr(void);
 #undef get_compass_slave_descr
 #define get_compass_slave_descr ak8975_get_slave_descr
+#endif
+
+#ifdef CONFIG_MPU_SENSORS_AK8963_HTC	/* AKM compass */
+struct ext_slave_descr *ak8963_get_slave_descr(void);
+#undef get_compass_slave_descr
+#define get_compass_slave_descr ak8963_get_slave_descr
 #endif
 
 #ifdef CONFIG_MPU_SENSORS_AMI30X	/* AICHI Steel compass */

@@ -21,6 +21,8 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/io.h>
+#include <linux/platform_data/ram_console.h>
+#include <mach/mfootprint.h>
 
 #ifdef CONFIG_ANDROID_RAM_CONSOLE_ERROR_CORRECTION
 #include <linux/rslib.h>
@@ -142,7 +144,7 @@ ram_console_write(struct console *console, const char *s, unsigned int count)
 static struct console ram_console = {
 	.name	= "ram",
 	.write	= ram_console_write,
-	.flags	= CON_PRINTBUFFER | CON_ENABLED,
+	.flags	= CON_PRINTBUFFER | CON_ENABLED | CON_ANYTIME,
 	.index	= -1,
 };
 
@@ -154,45 +156,21 @@ void ram_console_enable_console(int enabled)
 		ram_console.flags &= ~CON_ENABLED;
 }
 
-#ifdef CONFIG_ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
-static char *last_off_event = "NULL";
-static int __init pmic_last_off_event(char *opt)
-{
-	if (!opt || !*opt || *opt == '\0')
-		return 1;
-	pr_debug("ram_console: last_off_event=%s", opt);
-	last_off_event = opt;
-	return 1;
-}
-__setup("last_off_event=", pmic_last_off_event);
-
-static char *start_on_event = "NULL";
-static int __init pmic_start_on_event(char *opt)
-{
-	if (!opt || !*opt || *opt == '\0')
-		return 1;
-	pr_debug("ram_console: start_on_event=%s", opt);
-	start_on_event = opt;
-	return 1;
-}
-__setup("start_on_event=", pmic_start_on_event);
-#endif
-
 static void __init
-ram_console_save_old(struct ram_console_buffer *buffer, char *dest)
+ram_console_save_old(struct ram_console_buffer *buffer, const char *bootinfo,
+	char *dest)
 {
-	char* buffer_ptr;
 	size_t old_log_size = buffer->size;
-#ifdef CONFIG_ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
-#define PMIC_STATUS_MAX 100
-	char pmic_status_buffer[PMIC_STATUS_MAX];
-	size_t pmic_status_buffer_len;
-#endif
+	size_t bootinfo_size = 0;
+	size_t total_size = old_log_size;
+	char *ptr;
+	const char *bootinfo_label = "Boot info:\n";
+
 #ifdef CONFIG_ANDROID_RAM_CONSOLE_ERROR_CORRECTION
 	uint8_t *block;
 	uint8_t *par;
 	char strbuf[80];
-	int strbuf_len;
+	int strbuf_len = 0;
 
 	block = buffer->data;
 	par = ram_console_par_buffer;
@@ -227,20 +205,23 @@ ram_console_save_old(struct ram_console_buffer *buffer, char *dest)
 				      "\nNo errors detected\n");
 	if (strbuf_len >= sizeof(strbuf))
 		strbuf_len = sizeof(strbuf) - 1;
-	old_log_size += strbuf_len;
+	total_size += strbuf_len;
 #endif
-#ifdef CONFIG_ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
-	pmic_status_buffer_len =
-		snprintf(pmic_status_buffer, sizeof(pmic_status_buffer),
-			"\nPMIC status: start_on_event=%s, last_off_event=%s\n",
-			start_on_event, last_off_event);
-	pmic_status_buffer_len =
-		min(pmic_status_buffer_len, sizeof(pmic_status_buffer) - 1);
-	old_log_size += pmic_status_buffer_len;
+
+	if (bootinfo)
+		bootinfo_size = strlen(bootinfo) + strlen(bootinfo_label);
+	total_size += bootinfo_size;
+
+#if defined(CONFIG_MEMORY_FOOTPRINT_DEBUGGING)
+	if (old_mf != NULL) {
+		total_size += HEADER_LENGTH;
+		total_size += FOOTPRINT_LENGTH;
+	} else
+		pr_info("[MF] There is no last memory footprint\n");
 #endif
 
 	if (dest == NULL) {
-		dest = kmalloc(old_log_size, GFP_KERNEL);
+		dest = kmalloc(total_size, GFP_KERNEL);
 		if (dest == NULL) {
 			printk(KERN_ERR
 			       "ram_console: failed to allocate buffer\n");
@@ -249,29 +230,38 @@ ram_console_save_old(struct ram_console_buffer *buffer, char *dest)
 	}
 
 	ram_console_old_log = dest;
-	ram_console_old_log_size = old_log_size;
-
-	buffer_ptr = ram_console_old_log;
-	memcpy(buffer_ptr,
+	ram_console_old_log_size = total_size;
+	memcpy(ram_console_old_log,
 	       &buffer->data[buffer->start], buffer->size - buffer->start);
-	buffer_ptr += buffer->size - buffer->start;
-	memcpy(buffer_ptr,
+	memcpy(ram_console_old_log + buffer->size - buffer->start,
 	       &buffer->data[0], buffer->start);
-	buffer_ptr += buffer->start;
+	ptr = ram_console_old_log + old_log_size;
 #ifdef CONFIG_ANDROID_RAM_CONSOLE_ERROR_CORRECTION
-	memcpy(buffer_ptr,
-	       strbuf, strbuf_len);
-	buffer_ptr += strbuf_len;
+	memcpy(ptr, strbuf, strbuf_len);
+	ptr += strbuf_len;
 #endif
-#ifdef CONFIG_ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
-	memcpy(buffer_ptr,
-		   pmic_status_buffer, pmic_status_buffer_len);
-	buffer_ptr += pmic_status_buffer_len;
+	if (bootinfo) {
+		memcpy(ptr, bootinfo_label, strlen(bootinfo_label));
+		ptr += strlen(bootinfo_label);
+		memcpy(ptr, bootinfo, strlen(bootinfo));
+		ptr += strlen(bootinfo);
+	}
+
+#if defined(CONFIG_MEMORY_FOOTPRINT_DEBUGGING)
+	if (old_mf != NULL) {
+		memcpy(ptr, old_mf, (HEADER_LENGTH+FOOTPRINT_LENGTH));
+		ptr += HEADER_LENGTH;
+		ptr += FOOTPRINT_LENGTH;
+		kfree(old_mf);
+		old_mf = NULL;
+	}
 #endif
+
 }
 
 static int __init ram_console_init(struct ram_console_buffer *buffer,
-				   size_t buffer_size, char *old_buf)
+				   size_t buffer_size, const char *bootinfo,
+				   char *old_buf)
 {
 #ifdef CONFIG_ANDROID_RAM_CONSOLE_ERROR_CORRECTION
 	int numerr;
@@ -338,7 +328,7 @@ static int __init ram_console_init(struct ram_console_buffer *buffer,
 			printk(KERN_INFO "ram_console: found existing buffer, "
 			       "size %d, start %d\n",
 			       buffer->size, buffer->start);
-			ram_console_save_old(buffer, old_buf);
+			ram_console_save_old(buffer, bootinfo, old_buf);
 		}
 	} else {
 		printk(KERN_INFO "ram_console: no valid data in buffer "
@@ -362,6 +352,7 @@ static int __init ram_console_early_init(void)
 	return ram_console_init((struct ram_console_buffer *)
 		CONFIG_ANDROID_RAM_CONSOLE_EARLY_ADDR,
 		CONFIG_ANDROID_RAM_CONSOLE_EARLY_SIZE,
+		NULL,
 		ram_console_old_log_init_buffer);
 }
 #else
@@ -371,6 +362,8 @@ static int ram_console_driver_probe(struct platform_device *pdev)
 	size_t start;
 	size_t buffer_size;
 	void *buffer;
+	const char *bootinfo = NULL;
+	struct ram_console_platform_data *pdata = pdev->dev.platform_data;
 
 	if (res == NULL || pdev->num_resources != 1 ||
 	    !(res->flags & IORESOURCE_MEM)) {
@@ -388,7 +381,10 @@ static int ram_console_driver_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	return ram_console_init(buffer, buffer_size, NULL/* allocate */);
+	if (pdata)
+		bootinfo = pdata->bootinfo;
+
+	return ram_console_init(buffer, buffer_size, bootinfo, NULL/* allocate */);
 }
 
 static struct platform_driver ram_console_driver = {

@@ -17,6 +17,10 @@
 
 #include <mach/bits.h>
 
+#ifdef CONFIG_RIL_FTRACE_DEBUG_SOCK_IOCTL
+#define DBG_FTRACE_IOCTL BIT13
+#endif
+
 #define DBG_EHCI_URB BIT12
 
 #define DBG_USBCHR_L4 BIT11

@@ -27,6 +27,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
+#include <linux/mutex.h>
 
 #include "dvb_frontend.h"
 
@@ -191,6 +192,12 @@ struct dib0090_state {
 	u8 wbd_calibration_gain;
 	const struct dib0090_wbd_slope *current_wbd_table;
 	u16 wbdmux;
+
+	/* for the I2C transfer */
+	struct i2c_msg msg[2];
+	u8 i2c_write_buffer[3];
+	u8 i2c_read_buffer[2];
+	struct mutex i2c_buffer_lock;
 };
 
 struct dib0090_fw_state {
@@ -198,53 +205,127 @@ struct dib0090_fw_state {
 	struct dvb_frontend *fe;
 	struct dib0090_identity identity;
 	const struct dib0090_config *config;
+
+	/* for the I2C transfer */
+	struct i2c_msg msg;
+	u8 i2c_write_buffer[2];
+	u8 i2c_read_buffer[2];
+	struct mutex i2c_buffer_lock;
 };
 
 static u16 dib0090_read_reg(struct dib0090_state *state, u8 reg)
 {
-	u8 b[2];
-	struct i2c_msg msg[2] = {
-		{.addr = state->config->i2c_address, .flags = 0, .buf = &reg, .len = 1},
-		{.addr = state->config->i2c_address, .flags = I2C_M_RD, .buf = b, .len = 2},
-	};
-	if (i2c_transfer(state->i2c, msg, 2) != 2) {
-		printk(KERN_WARNING "DiB0090 I2C read failed\n");
+	u16 ret;
+
+	if (mutex_lock_interruptible(&state->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
 		return 0;
 	}
-	return (b[0] << 8) | b[1];
+
+	state->i2c_write_buffer[0] = reg;
+
+	memset(state->msg, 0, 2 * sizeof(struct i2c_msg));
+	state->msg[0].addr = state->config->i2c_address;
+	state->msg[0].flags = 0;
+	state->msg[0].buf = state->i2c_write_buffer;
+	state->msg[0].len = 1;
+	state->msg[1].addr = state->config->i2c_address;
+	state->msg[1].flags = I2C_M_RD;
+	state->msg[1].buf = state->i2c_read_buffer;
+	state->msg[1].len = 2;
+
+	if (i2c_transfer(state->i2c, state->msg, 2) != 2) {
+		printk(KERN_WARNING "DiB0090 I2C read failed\n");
+		ret = 0;
+	} else
+		ret = (state->i2c_read_buffer[0] << 8)
+			| state->i2c_read_buffer[1];
+
+	mutex_unlock(&state->i2c_buffer_lock);
+	return ret;
 }
 
 static int dib0090_write_reg(struct dib0090_state *state, u32 reg, u16 val)
 {
-	u8 b[3] = { reg & 0xff, val >> 8, val & 0xff };
-	struct i2c_msg msg = {.addr = state->config->i2c_address, .flags = 0, .buf = b, .len = 3 };
-	if (i2c_transfer(state->i2c, &msg, 1) != 1) {
-		printk(KERN_WARNING "DiB0090 I2C write failed\n");
-		return -EREMOTEIO;
+	int ret;
+
+	if (mutex_lock_interruptible(&state->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
+		return -EINVAL;
 	}
-	return 0;
+
+	state->i2c_write_buffer[0] = reg & 0xff;
+	state->i2c_write_buffer[1] = val >> 8;
+	state->i2c_write_buffer[2] = val & 0xff;
+
+	memset(state->msg, 0, sizeof(struct i2c_msg));
+	state->msg[0].addr = state->config->i2c_address;
+	state->msg[0].flags = 0;
+	state->msg[0].buf = state->i2c_write_buffer;
+	state->msg[0].len = 3;
+
+	if (i2c_transfer(state->i2c, state->msg, 1) != 1) {
+		printk(KERN_WARNING "DiB0090 I2C write failed\n");
+		ret = -EREMOTEIO;
+	} else
+		ret = 0;
+
+	mutex_unlock(&state->i2c_buffer_lock);
+	return ret;
 }
 
 static u16 dib0090_fw_read_reg(struct dib0090_fw_state *state, u8 reg)
 {
-	u8 b[2];
-	struct i2c_msg msg = {.addr = reg, .flags = I2C_M_RD, .buf = b, .len = 2 };
-	if (i2c_transfer(state->i2c, &msg, 1) != 1) {
-		printk(KERN_WARNING "DiB0090 I2C read failed\n");
+	u16 ret;
+
+	if (mutex_lock_interruptible(&state->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
 		return 0;
 	}
-	return (b[0] << 8) | b[1];
+
+	state->i2c_write_buffer[0] = reg;
+
+	memset(&state->msg, 0, sizeof(struct i2c_msg));
+	state->msg.addr = reg;
+	state->msg.flags = I2C_M_RD;
+	state->msg.buf = state->i2c_read_buffer;
+	state->msg.len = 2;
+	if (i2c_transfer(state->i2c, &state->msg, 1) != 1) {
+		printk(KERN_WARNING "DiB0090 I2C read failed\n");
+		ret = 0;
+	} else
+		ret = (state->i2c_read_buffer[0] << 8)
+			| state->i2c_read_buffer[1];
+
+	mutex_unlock(&state->i2c_buffer_lock);
+	return ret;
 }
 
 static int dib0090_fw_write_reg(struct dib0090_fw_state *state, u8 reg, u16 val)
 {
-	u8 b[2] = { val >> 8, val & 0xff };
-	struct i2c_msg msg = {.addr = reg, .flags = 0, .buf = b, .len = 2 };
-	if (i2c_transfer(state->i2c, &msg, 1) != 1) {
-		printk(KERN_WARNING "DiB0090 I2C write failed\n");
-		return -EREMOTEIO;
+	int ret;
+
+	if (mutex_lock_interruptible(&state->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
+		return -EINVAL;
 	}
-	return 0;
+
+	state->i2c_write_buffer[0] = val >> 8;
+	state->i2c_write_buffer[1] = val & 0xff;
+
+	memset(&state->msg, 0, sizeof(struct i2c_msg));
+	state->msg.addr = reg;
+	state->msg.flags = 0;
+	state->msg.buf = state->i2c_write_buffer;
+	state->msg.len = 2;
+	if (i2c_transfer(state->i2c, &state->msg, 1) != 1) {
+		printk(KERN_WARNING "DiB0090 I2C write failed\n");
+		ret = -EREMOTEIO;
+	} else
+		ret = 0;
+
+	mutex_unlock(&state->i2c_buffer_lock);
+	return ret;
 }
 
 #define HARD_RESET(state) do {  if (cfg->reset) {  if (cfg->sleep) cfg->sleep(fe, 0); msleep(10);  cfg->reset(fe, 1); msleep(10);  cfg->reset(fe, 0); msleep(10);  }  } while (0)
@@ -2403,6 +2484,7 @@ struct dvb_frontend *dib0090_register(struct dvb_frontend *fe, struct i2c_adapte
 	st->config = config;
 	st->i2c = i2c;
 	st->fe = fe;
+	mutex_init(&st->i2c_buffer_lock);
 	fe->tuner_priv = st;
 
 	if (config->wbd == NULL)
@@ -2434,6 +2516,7 @@ struct dvb_frontend *dib0090_fw_register(struct dvb_frontend *fe, struct i2c_ada
 	st->config = config;
 	st->i2c = i2c;
 	st->fe = fe;
+	mutex_init(&st->i2c_buffer_lock);
 	fe->tuner_priv = st;
 
 	if (dib0090_fw_reset_digital(fe, st->config) != 0)

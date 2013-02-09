@@ -7,6 +7,9 @@
 #define CPU_DEBUG_FREQ		0x02
 #define CPU_DEBUG_HOTPLUG	0x04
 #define CPU_DEBUG_RQ		0x08
+#define CPU_DEBUG_BTHP      0x10
+#define CPU_DEBUG_BTHP_LB   0x20
+#define CPU_DEBUG_BTHP_LBX  0x40
 
 unsigned int get_cpu_debug(void);
 

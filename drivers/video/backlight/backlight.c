@@ -19,7 +19,7 @@
 #include <asm/backlight.h>
 #endif
 
-static const char const *backlight_types[] = {
+static const char *const backlight_types[] = {
 	[BACKLIGHT_RAW] = "raw",
 	[BACKLIGHT_PLATFORM] = "platform",
 	[BACKLIGHT_FIRMWARE] = "firmware",
@@ -205,6 +205,17 @@ static ssize_t backlight_show_actual_brightness(struct device *dev,
 	return rc;
 }
 
+static ssize_t app_list_value_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	static const char *cameratitle = "BL_CAM_MIN=";
+	struct backlight_device *bd = to_backlight_device(dev);
+
+	sprintf(buf, "%s%u\n", cameratitle, bd->props.cam_launch_bkl_value);
+
+	return (strlen(buf) + 1);
+}
+
 static struct class *backlight_class;
 
 static int backlight_suspend(struct device *dev, pm_message_t state)
@@ -249,6 +260,7 @@ static struct device_attribute bl_device_attributes[] = {
 		     NULL),
 	__ATTR(max_brightness, 0444, backlight_show_max_brightness, NULL),
 	__ATTR(type, 0444, backlight_show_type, NULL),
+	__ATTR(backlight_info, 0644, app_list_value_show, NULL),
 	__ATTR_NULL,
 };
 

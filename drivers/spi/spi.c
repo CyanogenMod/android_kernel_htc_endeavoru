@@ -1,5 +1,5 @@
 /*
- * spi.c - SPI init/core code
+ * SPI init/core code
  *
  * Copyright (C) 2005 David Brownell
  *
@@ -33,9 +33,6 @@
 static void spidev_release(struct device *dev)
 {
 	struct spi_device	*spi = to_spi_device(dev);
-
-	if (spi == NULL)
-		return;
 
 	/* spi masters may cleanup for released devices */
 	if (spi->master->cleanup)
@@ -77,9 +74,10 @@ const struct spi_device_id *spi_get_device_id(const struct spi_device *sdev)
 {
 	const struct spi_driver *sdrv = to_spi_driver(sdev->dev.driver);
 
-	if (sdrv == NULL)
+	if (!sdrv) {
+		pr_err("[SPI] %s: sdrv is NULL\n", __func__);
 		return NULL;
-
+	}
 	return spi_match_id(sdrv->id_table, sdev);
 }
 EXPORT_SYMBOL_GPL(spi_get_device_id);
@@ -93,7 +91,11 @@ static int spi_match_device(struct device *dev, struct device_driver *drv)
 	if (of_driver_match_device(dev, drv))
 		return 1;
 
-	if ((sdrv != NULL) && (sdrv->id_table))
+	if (!sdrv) {
+		pr_err("[SPI] %s: sdrv is NULL\n", __func__);
+		return -1;
+	}
+	if (sdrv->id_table)
 		return !!spi_match_id(sdrv->id_table, spi);
 
 	return strcmp(spi->modalias, drv->name) == 0;
@@ -234,9 +236,10 @@ static int spi_drv_probe(struct device *dev)
 {
 	const struct spi_driver		*sdrv = to_spi_driver(dev->driver);
 
-	if (sdrv == NULL)
-		return 0;
-
+	if (!sdrv) {
+		pr_err("[SPI] %s: sdrv is NULL\n", __func__);
+		return -1;
+	}
 	return sdrv->probe(to_spi_device(dev));
 }
 
@@ -244,20 +247,33 @@ static int spi_drv_remove(struct device *dev)
 {
 	const struct spi_driver		*sdrv = to_spi_driver(dev->driver);
 
-	if (sdrv == NULL)
-		return 0;
-
+	if (!sdrv) {
+		pr_err("[SPI] %s: sdrv is NULL\n", __func__);
+		return -1;
+	}
 	return sdrv->remove(to_spi_device(dev));
 }
 
 static void spi_drv_shutdown(struct device *dev)
 {
 	const struct spi_driver		*sdrv = to_spi_driver(dev->driver);
-	if(sdrv == NULL)
-		return;
 
+	if (!sdrv) {
+		pr_err("[SPI] %s: sdrv is NULL\n", __func__);
+		return;
+	}
 	sdrv->shutdown(to_spi_device(dev));
 }
+
+int spi_clock_control(struct spi_device *spi, int c_enable)
+{
+	struct spi_master *master = spi->master;
+	if (master->clock_control == NULL)
+		return -ENOSYS;
+	else
+		return master->clock_control(spi, c_enable);
+}
+EXPORT_SYMBOL_GPL(spi_clock_control);
 
 /**
  * spi_register_driver - register a SPI driver
@@ -1061,8 +1077,8 @@ static u8	*buf;
  * spi_{async,sync}() calls with dma-safe buffers.
  */
 int spi_write_then_read(struct spi_device *spi,
-		const u8 *txbuf, unsigned n_tx,
-		u8 *rxbuf, unsigned n_rx)
+		const void *txbuf, unsigned n_tx,
+		void *rxbuf, unsigned n_rx)
 {
 	static DEFINE_MUTEX(lock);
 

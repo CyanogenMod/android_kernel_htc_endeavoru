@@ -154,6 +154,7 @@ struct tegra_dtv_context {
 	struct dentry             *d;
 	/* for refer back */
 	struct platform_device    *pdev;
+	struct miscdevice          miscdev;
 };
 
 static inline struct tegra_dtv_context *to_ctx(struct dtv_stream *s)
@@ -389,9 +390,6 @@ static void __force_xfer_stop(struct dtv_stream *s)
 		}
 	}
 
-	/* just in case. dma should be cancelled before this */
-	if (!tegra_dma_is_empty(s->dma_chan))
-		pr_err("%s: DMA channel is not empty!\n", __func__);
 	tegra_dma_cancel(s->dma_chan);
 	s->xferring = false;
 
@@ -618,7 +616,10 @@ static ssize_t tegra_dtv_read(struct file *file, char __user *buf,
 static int tegra_dtv_open(struct inode *inode, struct file *file)
 {
 	int i;
-	struct tegra_dtv_context *dtv_ctx;
+	struct miscdevice *miscdev = file->private_data;
+	struct tegra_dtv_context *dtv_ctx =
+		container_of(miscdev, struct tegra_dtv_context, miscdev);
+	file->private_data = dtv_ctx;
 
 	dtv_ctx = (struct tegra_dtv_context *) file->private_data;
 
@@ -680,12 +681,6 @@ static const struct file_operations tegra_dtv_fops = {
 	.release = tegra_dtv_release,
 };
 
-static struct miscdevice tegra_dtv_misc_device = {
-	.minor = MISC_DYNAMIC_MINOR,
-	.name = TEGRA_DTV_NAME,
-	.fops = &tegra_dtv_fops,
-};
-
 #ifdef CONFIG_DEBUG_FS
 static int dtv_reg_show(struct seq_file *s, void *unused)
 {
@@ -737,7 +732,7 @@ static void dtv_debugfs_exit(struct tegra_dtv_context *dtv_ctx)
 	debugfs_remove(dtv_ctx->d);
 }
 #else
-static int dtv_debugfs_init(struct tegra_dtv_context *dtv_ctx) { return 0 }
+static int dtv_debugfs_init(struct tegra_dtv_context *dtv_ctx) { return 0; }
 static void dtv_debugfs_exit(struct tegra_dtv_context *dtv_ctx) {};
 #endif
 
@@ -761,6 +756,7 @@ static void setup_dma_rx_request(struct tegra_dma_req *req,
 	req->source_addr = dtv_ctx->phys + DTV_RX_FIFO;
 	req->source_wrap = 4;
 	req->source_bus_width = 32;
+	req->fixed_burst_size = 1;
 
 	req->dest_wrap = 0;
 	req->dest_bus_width = 32;
@@ -800,7 +796,8 @@ static int setup_dma(struct tegra_dtv_context *dtv_ctx)
 					 DMA_FROM_DEVICE);
 			dtv_ctx->stream.buf_phy[i] = 0;
 		}
-		tegra_dma_free_channel(dtv_ctx->stream.dma_chan);
+		if (dtv_ctx->stream.dma_chan)
+			tegra_dma_free_channel(dtv_ctx->stream.dma_chan);
 		dtv_ctx->stream.dma_chan = 0;
 
 		return ret;
@@ -925,6 +922,7 @@ static int tegra_dtv_probe(struct platform_device *pdev)
 		ret = -EIO;
 		goto fail_no_clk;
 	}
+	dtv_ctx->clk = clk;
 	ret = clk_enable(clk);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "cannot enable clk for tegra_dtv.\n");
@@ -964,7 +962,10 @@ static int tegra_dtv_probe(struct platform_device *pdev)
 		goto fail_setup_dma;
 
 	/* register as a misc device */
-	ret = misc_register(&tegra_dtv_misc_device);
+	dtv_ctx->miscdev.minor = MISC_DYNAMIC_MINOR;
+	dtv_ctx->miscdev.name = TEGRA_DTV_NAME;
+	dtv_ctx->miscdev.fops = &tegra_dtv_fops;
+	ret = misc_register(&dtv_ctx->miscdev);
 	if (ret) {
 		pr_err("%s: Unable to register misc device.\n",
 		       __func__);
@@ -984,7 +985,7 @@ static int tegra_dtv_probe(struct platform_device *pdev)
 fail_debugfs_reg:
 	dtv_debugfs_exit(dtv_ctx);
 fail_misc_reg:
-	misc_deregister(&tegra_dtv_misc_device);
+	misc_deregister(&dtv_ctx->miscdev);
 fail_setup_stream:
 fail_setup_dma:
 	tear_down_dma(dtv_ctx);
@@ -1003,13 +1004,15 @@ static int __devexit tegra_dtv_remove(struct platform_device *pdev)
 
 	pr_info("%s: remove dtv.\n", __func__);
 
-	misc_deregister(&tegra_dtv_misc_device);
-
 	dtv_ctx = platform_get_drvdata(pdev);
 
 	dtv_debugfs_exit(dtv_ctx);
 	tear_down_dma(dtv_ctx);
 	release_stream_buffer(&dtv_ctx->stream, dtv_ctx->stream.num_bufs);
+
+	clk_put(dtv_ctx->clk);
+
+	misc_deregister(&dtv_ctx->miscdev);
 
 	return 0;
 }
@@ -1017,11 +1020,38 @@ static int __devexit tegra_dtv_remove(struct platform_device *pdev)
 #ifdef CONFIG_PM
 static int tegra_dtv_suspend(struct platform_device *pdev, pm_message_t state)
 {
+	struct tegra_dtv_context *dtv_ctx;
+
+	pr_info("%s: suspend dtv.\n", __func__);
+
+	dtv_ctx = platform_get_drvdata(pdev);
+
+	/* stop xferring */
+	mutex_lock(&dtv_ctx->stream.mtx);
+	if (dtv_ctx->stream.xferring) {
+		stop_xfer_unsafe(&dtv_ctx->stream);
+		/* clean up stop condition */
+		complete(&dtv_ctx->stream.stop_completion);
+		__force_xfer_stop(&dtv_ctx->stream);
+	}
+	/* wakeup any pending process */
+	wakeup_suspend(&dtv_ctx->stream);
+	mutex_unlock(&dtv_ctx->stream.mtx);
+
+	clk_disable(dtv_ctx->clk);
+
 	return 0;
 }
 
 static int tegra_dtv_resume(struct platform_device *pdev)
 {
+	struct tegra_dtv_context *dtv_ctx;
+
+	pr_info("%s: resume dtv.\n", __func__);
+
+	dtv_ctx = platform_get_drvdata(pdev);
+	clk_enable(dtv_ctx->clk);
+
 	return 0;
 }
 #endif /* CONFIG_PM */

@@ -104,6 +104,7 @@ A word or two about DMA. Driver support DMA operations at two ways:
 #include <linux/mc146818rtc.h>
 #include <linux/gfp.h>
 #include <linux/delay.h>
+#include <linux/io.h>
 #include <asm/dma.h>
 
 #include "8253.h"
@@ -1662,7 +1663,7 @@ static void rtc_dropped_irq(unsigned long data)
 		tmp = (CMOS_READ(RTC_INTR_FLAGS) & 0xF0);	/* restart */
 		restore_flags(flags);
 		break;
-	};
+	}
 }
 
 /*

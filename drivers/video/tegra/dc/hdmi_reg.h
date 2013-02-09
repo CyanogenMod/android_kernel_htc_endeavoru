@@ -4,6 +4,8 @@
  * Copyright (C) 2010 Google, Inc.
  * Author: Erik Gilling <konkers@android.com>
  *
+ * Copyright (c) 2010-2012, NVIDIA CORPORATION, All rights reserved.
+ *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
  * may be copied, distributed, and modified under those terms.
@@ -414,6 +416,7 @@
 #define  AUDIO_CNTRL0_SOURCE_SELECT_AUTO	(0 << 20)
 #define  AUDIO_CNTRL0_SOURCE_SELECT_SPDIF	(1 << 20)
 #define  AUDIO_CNTRL0_SOURCE_SELECT_HDAL	(2 << 20)
+#define  AUDIO_CNTRL0_INJECT_NULLSMPL		(1 << 29)
 #define  AUDIO_CNTRL0_FRAMES_PER_BLOCK(x)	(((x) & 0xff) << 24)
 
 #define HDMI_NV_PDISP_AUDIO_N					0x8c

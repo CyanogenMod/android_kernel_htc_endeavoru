@@ -1,6 +1,4 @@
 /*
- *  linux/drivers/char/8250.c
- *
  *  Driver for 8250/16550-type serial ports
  *
  *  Based on drivers/char/serial.c, by Linus Torvalds, Theodore Ts'o.
@@ -83,7 +81,7 @@ static unsigned int skip_txen_test; /* force skip of txen test at init time */
 #define DEBUG_INTR(fmt...)	do { } while (0)
 #endif
 
-#define PASS_LIMIT	256
+#define PASS_LIMIT	512
 
 #define BOTH_EMPTY 	(UART_LSR_TEMT | UART_LSR_THRE)
 
@@ -273,7 +271,7 @@ static const struct serial8250_config uart_config[] = {
 		.fifo_size	= 32,
 		.tx_loadsz	= 32,
 		.fcr		= UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_10,
-		.flags		= UART_CAP_FIFO | UART_CAP_UUE,
+		.flags		= UART_CAP_FIFO | UART_CAP_UUE | UART_CAP_RTOIE,
 	},
 	[PORT_RM9000] = {
 		.name		= "RM9000",
@@ -307,9 +305,10 @@ static const struct serial8250_config uart_config[] = {
 		.name		= "Tegra",
 		.fifo_size	= 32,
 		.tx_loadsz	= 8,
-		.fcr		= UART_FCR_ENABLE_FIFO | UART_FCR_T_TRIG_01 |
-				  UART_FCR_R_TRIG_01,
-		.flags		= UART_CAP_FIFO | UART_CAP_HW_CTSRTS,
+		.fcr		= UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_01 |
+				  UART_FCR_T_TRIG_01,
+		.flags		= UART_CAP_FIFO | UART_CAP_RTOIE |
+				  UART_CAP_HW_CTSRTS,
 	},
 };
 
@@ -879,7 +878,7 @@ static void autoconfig_has_efr(struct uart_8250_port *up)
 	id3 = serial_icr_read(up, UART_ID3);
 	rev = serial_icr_read(up, UART_REV);
 
-	DEBUG_AUTOCONF("[SER] 950id=%02x:%02x:%02x:%02x ", id1, id2, id3, rev);
+	DEBUG_AUTOCONF("950id=%02x:%02x:%02x:%02x ", id1, id2, id3, rev);
 
 	if (id1 == 0x16 && id2 == 0xC9 &&
 	    (id3 == 0x50 || id3 == 0x52 || id3 == 0x54)) {
@@ -904,7 +903,7 @@ static void autoconfig_has_efr(struct uart_8250_port *up)
 	 *  0x14 - XR16C854.
 	 */
 	id1 = autoconfig_read_divisor_id(up);
-	DEBUG_AUTOCONF("[SER] 850id=%04x ", id1);
+	DEBUG_AUTOCONF("850id=%04x ", id1);
 
 	id2 = id1 >> 8;
 	if (id2 == 0x10 || id2 == 0x12 || id2 == 0x14) {
@@ -1001,11 +1000,11 @@ static void autoconfig_16550a(struct uart_8250_port *up)
 	if (serial_in(up, UART_EFR) == 0) {
 		serial_outp(up, UART_EFR, 0xA8);
 		if (serial_in(up, UART_EFR) != 0) {
-			DEBUG_AUTOCONF("[SER] EFRv1 ");
+			DEBUG_AUTOCONF("EFRv1 ");
 			up->port.type = PORT_16650;
 			up->capabilities |= UART_CAP_EFR | UART_CAP_SLEEP;
 		} else {
-			DEBUG_AUTOCONF("[SER] Motorola 8xxx DUART ");
+			DEBUG_AUTOCONF("Motorola 8xxx DUART ");
 		}
 		serial_outp(up, UART_EFR, 0);
 		return;
@@ -1017,7 +1016,7 @@ static void autoconfig_16550a(struct uart_8250_port *up)
 	 */
 	serial_outp(up, UART_LCR, UART_LCR_CONF_MODE_B);
 	if (serial_in(up, UART_EFR) == 0 && !broken_efr(up)) {
-		DEBUG_AUTOCONF("[SER] EFRv2 ");
+		DEBUG_AUTOCONF("EFRv2 ");
 		autoconfig_has_efr(up);
 		return;
 	}
@@ -1078,7 +1077,7 @@ static void autoconfig_16550a(struct uart_8250_port *up)
 	serial_outp(up, UART_FCR, UART_FCR_ENABLE_FIFO);
 	serial_outp(up, UART_LCR, 0);
 
-	DEBUG_AUTOCONF("[SER] iir1=%d iir2=%d ", status1, status2);
+	DEBUG_AUTOCONF("iir1=%d iir2=%d ", status1, status2);
 
 	if (status1 == 6 && status2 == 7) {
 		up->port.type = PORT_16750;
@@ -1107,9 +1106,9 @@ static void autoconfig_16550a(struct uart_8250_port *up)
 			 * It's an Xscale.
 			 * We'll leave the UART_IER_UUE bit set to 1 (enabled).
 			 */
-			DEBUG_AUTOCONF("[SER] Xscale ");
+			DEBUG_AUTOCONF("Xscale ");
 			up->port.type = PORT_XSCALE;
-			up->capabilities |= UART_CAP_UUE;
+			up->capabilities |= UART_CAP_UUE | UART_CAP_RTOIE;
 			return;
 		}
 	} else {
@@ -1117,7 +1116,7 @@ static void autoconfig_16550a(struct uart_8250_port *up)
 		 * If we got here we couldn't force the IER_UUE bit to 0.
 		 * Log it and continue.
 		 */
-		DEBUG_AUTOCONF("[SER] Couldn't force IER_UUE to 0 ");
+		DEBUG_AUTOCONF("Couldn't force IER_UUE to 0 ");
 	}
 	serial_outp(up, UART_IER, iersave);
 
@@ -1147,7 +1146,7 @@ static void autoconfig(struct uart_8250_port *up, unsigned int probeflags)
 	if (!up->port.iobase && !up->port.mapbase && !up->port.membase)
 		return;
 
-	DEBUG_AUTOCONF("[SER] ttyS%d: autoconf (0x%04lx, 0x%p): ",
+	DEBUG_AUTOCONF("ttyS%d: autoconf (0x%04lx, 0x%p): ",
 		       serial_index(&up->port), up->port.iobase, up->port.membase);
 
 	/*
@@ -1193,7 +1192,7 @@ static void autoconfig(struct uart_8250_port *up, unsigned int probeflags)
 			/*
 			 * We failed; there's nothing here
 			 */
-			DEBUG_AUTOCONF("[SER] IER test failed (%02x, %02x) ",
+			DEBUG_AUTOCONF("IER test failed (%02x, %02x) ",
 				       scratch2, scratch3);
 			goto out;
 		}
@@ -1238,7 +1237,7 @@ static void autoconfig(struct uart_8250_port *up, unsigned int probeflags)
 	serial_outp(up, UART_FCR, UART_FCR_ENABLE_FIFO);
 	scratch = serial_in(up, UART_IIR) >> 6;
 
-	DEBUG_AUTOCONF("[SER] iir=%d ", scratch);
+	DEBUG_AUTOCONF("iir=%d ", scratch);
 
 	switch (scratch) {
 	case 0:
@@ -1276,7 +1275,7 @@ static void autoconfig(struct uart_8250_port *up, unsigned int probeflags)
 
 	if (up->capabilities != uart_config[up->port.type].flags) {
 		printk(KERN_WARNING
-		       "[SER] ttyS%d: detected caps %08x should be %08x\n",
+		       "ttyS%d: detected caps %08x should be %08x\n",
 		       serial_index(&up->port), up->capabilities,
 		       uart_config[up->port.type].flags);
 	}
@@ -1305,7 +1304,7 @@ static void autoconfig(struct uart_8250_port *up, unsigned int probeflags)
 
  out:
 	spin_unlock_irqrestore(&up->port.lock, flags);
-	DEBUG_AUTOCONF("[SER] type=%s\n", uart_config[up->port.type].name);
+	DEBUG_AUTOCONF("type=%s\n", uart_config[up->port.type].name);
 }
 
 static void autoconfig_irq(struct uart_8250_port *up)
@@ -1435,6 +1434,27 @@ static void serial8250_enable_ms(struct uart_port *port)
 	serial_out(up, UART_IER, up->ier);
 }
 
+/*
+ * Clear the Tegra rx fifo after a break
+ *
+ * FIXME: This needs to become a port specific callback once we have a
+ * framework for this
+ */
+static void clear_rx_fifo(struct uart_8250_port *up)
+{
+	unsigned int status, tmout = 10000;
+	do {
+		status = serial_in(up, UART_LSR);
+		if (status & (UART_LSR_FIFOE | UART_LSR_BRK_ERROR_BITS))
+			status = serial_in(up, UART_RX);
+		else
+			break;
+		if (--tmout == 0)
+			break;
+		udelay(1);
+	} while (1);
+}
+
 static void
 receive_chars(struct uart_8250_port *up, unsigned int *status)
 {
@@ -1469,6 +1489,13 @@ receive_chars(struct uart_8250_port *up, unsigned int *status)
 			if (lsr & UART_LSR_BI) {
 				lsr &= ~(UART_LSR_FE | UART_LSR_PE);
 				up->port.icount.brk++;
+				/*
+				 * If tegra port then clear the rx fifo to
+				 * accept another break/character.
+				 */
+				if (up->port.type == PORT_TEGRA)
+					clear_rx_fifo(up);
+
 				/*
 				 * We do the SysRQ and SAK checking
 				 * here because otherwise the break
@@ -1655,7 +1682,7 @@ static irqreturn_t serial8250_interrupt(int irq, void *dev_id)
 		if (l == i->head && pass_counter++ > PASS_LIMIT) {
 			/* If we hit this, we're dead. */
 			printk_ratelimited(KERN_ERR
-				"[SER] serial8250: too much work for irq%d\n", irq);
+				"serial8250: too much work for irq%d\n", irq);
 			break;
 		}
 	} while (l != end);
@@ -1793,6 +1820,8 @@ static void serial8250_backup_timeout(unsigned long data)
 	unsigned int iir, ier = 0, lsr;
 	unsigned long flags;
 
+	spin_lock_irqsave(&up->port.lock, flags);
+
 	/*
 	 * Must disable interrupts or else we risk racing with the interrupt
 	 * based handler.
@@ -1810,10 +1839,8 @@ static void serial8250_backup_timeout(unsigned long data)
 	 * the "Diva" UART used on the management processor on many HP
 	 * ia64 and parisc boxes.
 	 */
-	spin_lock_irqsave(&up->port.lock, flags);
 	lsr = serial_in(up, UART_LSR);
 	up->lsr_saved_flags |= lsr & LSR_SAVE_FLAGS;
-	spin_unlock_irqrestore(&up->port.lock, flags);
 	if ((iir & UART_IIR_NO_INT) && (up->ier & UART_IER_THRI) &&
 	    (!uart_circ_empty(&up->port.state->xmit) || up->port.x_char) &&
 	    (lsr & UART_LSR_THRE)) {
@@ -1822,10 +1849,12 @@ static void serial8250_backup_timeout(unsigned long data)
 	}
 
 	if (!(iir & UART_IIR_NO_INT))
-		serial8250_handle_port(up);
+		transmit_chars(up);
 
 	if (is_real_interrupt(up->port.irq))
 		serial_out(up, UART_IER, ier);
+
+	spin_unlock_irqrestore(&up->port.lock, flags);
 
 	/* Standard timer interval plus 0.2s to keep the port running */
 	mod_timer(&up->timer,
@@ -2058,7 +2087,7 @@ static int serial8250_startup(struct uart_port *port)
 	 */
 	if (!(up->port.flags & UPF_BUGGY_UART) &&
 	    (serial_inp(up, UART_LSR) == 0xff)) {
-		printk(KERN_INFO "[SER] ttyS%d: LSR safety check engaged!\n",
+		printk(KERN_INFO "ttyS%d: LSR safety check engaged!\n",
 		       serial_index(&up->port));
 		return -ENODEV;
 	}
@@ -2216,9 +2245,6 @@ dont_test_tx_en:
 	 * anyway, so we don't enable them here.
 	 */
 	up->ier = UART_IER_RLSI | UART_IER_RDI;
-	/* Use the receive timeout interrupt for tegra port*/
-	if (up->port.type == PORT_TEGRA)
-		up->ier |= UART_IER_RTOIE;
 	serial_outp(up, UART_IER, up->ier);
 
 	if (up->port.flags & UPF_FOURPORT) {
@@ -2421,7 +2447,9 @@ serial8250_do_set_termios(struct uart_port *port, struct ktermios *termios,
 			UART_ENABLE_MS(&up->port, termios->c_cflag))
 		up->ier |= UART_IER_MSI;
 	if (up->capabilities & UART_CAP_UUE)
-		up->ier |= UART_IER_UUE | UART_IER_RTOIE;
+		up->ier |= UART_IER_UUE;
+	if (up->capabilities & UART_CAP_RTOIE)
+		up->ier |= UART_IER_RTOIE;
 
 	serial_out(up, UART_IER, up->ier);
 
@@ -3314,6 +3342,7 @@ void serial8250_unregister_port(int line)
 		uart->port.flags &= ~UPF_BOOT_AUTOCONF;
 		uart->port.type = PORT_UNKNOWN;
 		uart->port.dev = &serial8250_isa_devs->dev;
+		uart->capabilities = uart_config[uart->port.type].flags;
 		uart_add_one_port(&serial8250_reg, &uart->port);
 	} else {
 		uart->port.dev = NULL;
@@ -3329,7 +3358,7 @@ static int __init serial8250_init(void)
 	if (nr_uarts > UART_NR)
 		nr_uarts = UART_NR;
 
-	printk(KERN_INFO "[SER] Serial: 8250/16550 driver, "
+	printk(KERN_INFO "Serial: 8250/16550 driver, "
 		"%d ports, IRQ sharing %sabled\n", nr_uarts,
 		share_irqs ? "en" : "dis");
 
@@ -3372,6 +3401,7 @@ out:
 	return ret;
 }
 
+#ifdef MODULE
 static void __exit serial8250_exit(void)
 {
 	struct platform_device *isa_dev = serial8250_isa_devs;
@@ -3395,6 +3425,9 @@ static void __exit serial8250_exit(void)
 
 module_init(serial8250_init);
 module_exit(serial8250_exit);
+#else
+postcore_initcall(serial8250_init);
+#endif
 
 EXPORT_SYMBOL(serial8250_suspend_port);
 EXPORT_SYMBOL(serial8250_resume_port);

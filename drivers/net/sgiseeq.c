@@ -1,11 +1,12 @@
 /*
  * sgiseeq.c: Seeq8003 ethernet driver for SGI machines.
  *
- * Copyright (C) 1996 David S. Miller (dm@engr.sgi.com)
+ * Copyright (C) 1996 David S. Miller (davem@davemloft.net)
  */
 
 #undef DEBUG
 
+#include <linux/dma-mapping.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/slab.h>

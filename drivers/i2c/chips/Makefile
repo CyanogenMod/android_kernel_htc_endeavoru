@@ -17,9 +17,11 @@ obj-$(CONFIG_SENSORS_CAPSENSE_SAR) += cap_sense_vertex.o
 obj-$(CONFIG_SENSORS_CAPSENSE_HSNR) += cap_sense_a_project.o
 obj-$(CONFIG_SENSORS_AKM8975_PANA_GYRO)   += akm8975_pana_gyro.o
 obj-$(CONFIG_SENSORS_PANASONIC_GYRO)	+= ewtzmu2.o
-
+obj-$(CONFIG_TPS61310_FLASHLIGHT)	+=tps61310_flashlight.o
 obj-$(CONFIG_INPUT_ISL29028_CM3628)    += cm3628.o
 obj-$(CONFIG_INPUT_CAPELLA_CM3629)     += cm3629.o
+obj-$(CONFIG_SND_AMP_TFA9887)     += tfa9887.o
+obj-$(CONFIG_SND_AMP_TPA6185)     += tpa6185.o
 
 ifeq ($(CONFIG_I2C_DEBUG_CHIP),y)
 EXTRA_CFLAGS += -DDEBUG

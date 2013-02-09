@@ -67,6 +67,10 @@ ifdef CONFIG_MPU_SENSORS_AK8975_HTC
 mpu3050-objs += $(MLLITE_DIR)compass/ak8975.o
 endif
 
+ifdef CONFIG_MPU_SENSORS_AK8963_HTC
+mpu3050-objs += $(MLLITE_DIR)compass/ak8963.o
+endif
+
 ifdef CONFIG_MPU_SENSORS_AMI30X
 mpu3050-objs += $(MLLITE_DIR)compass/ami30x.o
 endif
@@ -118,6 +122,10 @@ mpu6000-objs += mpuirq.o \
 
 ifdef CONFIG_MPU_SENSORS_AK8975
 mpu6000-objs += $(MLLITE_DIR)compass/ak8975.o
+endif
+
+ifdef CONFIG_MPU_SENSORS_AK8963
+mpu6000-objs += $(MLLITE_DIR)compass/ak8963.o
 endif
 
 ifdef CONFIG_MPU_SENSORS_MPU6000

@@ -1,7 +1,6 @@
 /*
  * message.c - synchronous message handling
  */
-
 #define DEBUG
 
 #include <linux/pci.h>	/* for scatterlist macros */
@@ -20,42 +19,6 @@
 #include <asm/byteorder.h>
 
 #include "usb.h"
-
-#define MODULE_NAME "[USBMSG] "
-
-/* HTC */
-static void urb_print(struct urb *urb, char *msg)
-{
-	if (IS_ERR_OR_NULL(urb) || !msg) {
-		pr_info(MODULE_NAME " %s - urb null", __func__);
-		return;
-	}
-
-    dev_dbg(&urb->dev->dev,
-        "%s %s -> ep%d%s, urb-pipe=0x%x, len=%u/%u ==> "
-		"ep_desc: type=%d, bLength=%d, bEndpointAddress=0x%xh, "
-		"bmAttributes=0x%x, wMaxPacketSize=%d, bInterval=%d",
-		//1
-        current->comm,
-		msg,
-        usb_endpoint_num(&urb->ep->desc),
-        usb_urb_dir_in(urb) ? "in" : "out",
-		urb->pipe,
-        urb->actual_length,
-        urb->transfer_buffer_length,
-
-		//2. urb descriptor
-		usb_endpoint_type(&urb->ep->desc),
-		urb->ep->desc.bLength,
-		urb->ep->desc.bEndpointAddress,
-
-		//3.
-		urb->ep->desc.bmAttributes,
-		urb->ep->desc.wMaxPacketSize,
-		urb->ep->desc.bInterval
-	);
-}
-
 
 static void cancel_async_set_config(struct usb_device *udev);
 
@@ -90,8 +53,7 @@ static int usb_start_wait_urb(struct urb *urb, int timeout, int *actual_length)
 	urb->actual_length = 0;
 	retval = usb_submit_urb(urb, GFP_NOIO);
 	if (unlikely(retval)) {
-		pr_info(MODULE_NAME "%s - usb_submit_urb retval=%d\n",
-				__func__, retval); /* HTC */
+		pr_info("%s usb_submit_urb failed retval = %d\n",__func__, retval);
 		goto out;
 	}
 
@@ -100,11 +62,7 @@ static int usb_start_wait_urb(struct urb *urb, int timeout, int *actual_length)
 		usb_kill_urb(urb);
 		retval = (ctx.status == -ENOENT ? -ETIMEDOUT : ctx.status);
 
-#if 0 //HTC_CSP_START
-		dump_stack();
-#endif //HTC_END
-
-		dev_dbg(&urb->dev->dev,
+		dev_err(&urb->dev->dev,
 			"%s timed out on ep%d%s len=%u/%u\n",
 			current->comm,
 			usb_endpoint_num(&urb->ep->desc),
@@ -114,18 +72,8 @@ static int usb_start_wait_urb(struct urb *urb, int timeout, int *actual_length)
 	} else
 		retval = ctx.status;
 out:
-	if (actual_length) {
-		if (false == IS_ERR_OR_NULL(urb)) /* HTC: potential protection */
+	if (actual_length)
 		*actual_length = urb->actual_length;
-		else
-			pr_info(MODULE_NAME "%s IS_ERR_OR_NULL urb skip it", __func__);
-	}
-
-	/* HTC */
-	/*
-	if (retval < 0)
-		urb_print(urb, "[dbg_urb]");
-	*/
 
 	usb_free_urb(urb);
 	return retval;
@@ -1740,8 +1688,6 @@ int usb_set_configuration(struct usb_device *dev, int configuration)
 	struct usb_hcd *hcd = bus_to_hcd(dev->bus);
 	int n, nintf;
 
-	/* pr_info("[USBF] %s\n", __func__); */
-
 	if (dev->authorized == 0 || configuration == -1)
 		configuration = 0;
 	else {
@@ -1903,16 +1849,12 @@ free_interfaces:
 	for (i = 0; i < nintf; ++i) {
 		struct usb_interface *intf = cp->interface[i];
 
-		/* HTC: change dev_dbg to dev_info */
-		dev_info(&dev->dev,
+		dev_dbg(&dev->dev,
 			"adding %s (config #%d, interface %d)\n",
 			dev_name(&intf->dev), configuration,
 			intf->cur_altsetting->desc.bInterfaceNumber);
 		device_enable_async_suspend(&intf->dev);
 		ret = device_add(&intf->dev);
-
-		/* HTC: device added, check if dev intf is for usb_chr */
-		pr_info("[USBF] %s: usb intf dev_add - %s\n", __func__, dev_name(&intf->dev));
 		if (ret != 0) {
 			dev_err(&dev->dev, "device_add(%s) --> %d\n",
 				dev_name(&intf->dev), ret);

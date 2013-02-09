@@ -37,7 +37,6 @@
 #include <mach/iomux-mx27.h>
 #include <asm/mach/time.h>
 #include <mach/audmux.h>
-#include <mach/mxc_nand.h>
 #include <mach/irqs.h>
 #include <mach/ulpi.h>
 
@@ -357,6 +356,8 @@ static const struct imx_fb_platform_data pca100_fb_data __initconst = {
 static void __init pca100_init(void)
 {
 	int ret;
+
+	imx27_soc_init();
 
 	/* SSI unit */
 	mxc_audmux_v1_configure_port(MX27_AUDMUX_HPCR1_SSI0,

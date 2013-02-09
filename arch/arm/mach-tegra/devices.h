@@ -5,7 +5,7 @@
  *	Colin Cross <ccross@android.com>
  *	Erik Gilling <ccross@android.com>
  *
- * Copyright (C) 2010-2011 NVIDIA Corporation.
+ * Copyright (C) 2010-2012 NVIDIA Corporation.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -22,6 +22,7 @@
 #define __MACH_TEGRA_DEVICES_H
 
 #include <linux/platform_device.h>
+#include <linux/nvhost.h>
 
 extern struct platform_device tegra_sdhci_device1;
 extern struct platform_device tegra_sdhci_device2;
@@ -68,6 +69,7 @@ extern struct platform_device spdif_dit_device;
 extern struct platform_device bluetooth_dit_device;
 extern struct platform_device baseband_dit_device;
 extern struct platform_device tegra_pcm_device;
+extern struct platform_device tegra_tdm_pcm_device;
 extern struct platform_device tegra_w1_device;
 extern struct platform_device tegra_udc_device;
 extern struct platform_device tegra_ehci1_device;
@@ -95,7 +97,13 @@ extern struct platform_device tegra_gart_device;
 #else
 extern struct platform_device tegra_smmu_device;
 #endif
+#if defined(CONFIG_ARCH_TEGRA_2x_SOC)
 extern struct platform_device tegra_wdt_device;
+#else
+extern struct platform_device tegra_wdt0_device;
+extern struct platform_device tegra_wdt1_device;
+extern struct platform_device tegra_wdt2_device;
+#endif
 extern struct platform_device tegra_pwfm0_device;
 extern struct platform_device tegra_pwfm1_device;
 extern struct platform_device tegra_pwfm2_device;
@@ -106,7 +114,6 @@ extern struct platform_device tegra_uartb_device;
 extern struct platform_device tegra_uartc_device;
 extern struct platform_device tegra_uartd_device;
 extern struct platform_device tegra_uarte_device;
-extern struct platform_device tegra_grhost_device;
 extern struct platform_device tegra_avp_device;
 extern struct nvhost_device nvavp_device;
 extern struct platform_device tegra_aes_device;
@@ -122,5 +129,10 @@ extern struct platform_device debug_uartd_device;
 extern struct platform_device tegra_se_device;
 extern struct platform_device debug_uarte_device;
 #endif
+
+extern struct nvhost_device tegra_disp1_device;
+extern struct platform_device tegra_nvmap_device;
+
+void __init tegra_init_debug_uart_rate(void);
 
 #endif

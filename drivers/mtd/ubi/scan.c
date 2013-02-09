@@ -1103,7 +1103,7 @@ static int check_what_we_have(struct ubi_device *ubi, struct ubi_scan_info *si)
 		 * otherwise, only print a warning.
 		 */
 		if (si->corr_peb_count >= max_corr) {
-			ubi_err("too many corrupted PEBs, refusing this device");
+			ubi_err("too many corrupted PEBs, refusing");
 			return -EINVAL;
 		}
 	}
@@ -1347,7 +1347,7 @@ static int paranoid_check_si(struct ubi_device *ubi, struct ubi_scan_info *si)
 	struct ubi_scan_leb *seb, *last_seb;
 	uint8_t *buf;
 
-	if (!(ubi_chk_flags & UBI_CHK_GEN))
+	if (!ubi->dbg->chk_gen)
 		return 0;
 
 	/*

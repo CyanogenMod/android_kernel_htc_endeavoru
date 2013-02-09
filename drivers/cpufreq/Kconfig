@@ -166,6 +166,12 @@ config CPU_FREQ_GOV_ONDEMAND
 
 	  If in doubt, say N.
 
+config CPU_FREQ_GOV_ONDEMAND_2_PHASE
+	bool "'2-phase' power-efficiency ondemand algorithm"
+	depends on CPU_FREQ_GOV_ONDEMAND
+	help
+	  '2-phase' - Adding a new algorithm to reduce power consumption
+
 config CPU_FREQ_GOV_INTERACTIVE
 	tristate "'interactive' cpufreq policy governor"
 	help
@@ -205,6 +211,21 @@ config CPU_FREQ_GOV_CONSERVATIVE
 	  For details, take a look at linux/Documentation/cpu-freq.
 
 	  If in doubt, say N.
+
+menu "x86 CPU frequency scaling drivers"
+depends on X86
+source "drivers/cpufreq/Kconfig.x86"
+endmenu
+
+menu "ARM CPU frequency scaling drivers"
+depends on ARM
+source "drivers/cpufreq/Kconfig.arm"
+endmenu
+
+menu "PowerPC CPU frequency scaling drivers"
+depends on PPC32 || PPC64
+source "drivers/cpufreq/Kconfig.powerpc"
+endmenu
 
 endif
 endmenu

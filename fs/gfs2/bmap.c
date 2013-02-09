@@ -780,6 +780,8 @@ static int do_strip(struct gfs2_inode *ip, struct buffer_head *dibh,
 	metadata = (height != ip->i_height - 1);
 	if (metadata)
 		revokes = (height) ? sdp->sd_inptrs : sdp->sd_diptrs;
+	else if (ip->i_depth)
+		revokes = sdp->sd_inptrs;
 
 	if (ip != GFS2_I(sdp->sd_rindex))
 		error = gfs2_rindex_hold(sdp, &ip->i_alloc->al_ri_gh);
@@ -852,11 +854,7 @@ static int do_strip(struct gfs2_inode *ip, struct buffer_head *dibh,
 			blen++;
 		else {
 			if (bstart) {
-				if (metadata)
-					__gfs2_free_meta(ip, bstart, blen);
-				else
-					__gfs2_free_data(ip, bstart, blen);
-
+				__gfs2_free_blocks(ip, bstart, blen, metadata);
 				btotal += blen;
 			}
 
@@ -868,11 +866,7 @@ static int do_strip(struct gfs2_inode *ip, struct buffer_head *dibh,
 		gfs2_add_inode_blocks(&ip->i_inode, -1);
 	}
 	if (bstart) {
-		if (metadata)
-			__gfs2_free_meta(ip, bstart, blen);
-		else
-			__gfs2_free_data(ip, bstart, blen);
-
+		__gfs2_free_blocks(ip, bstart, blen, metadata);
 		btotal += blen;
 	}
 
@@ -1221,6 +1215,8 @@ int gfs2_setattr_size(struct inode *inode, u64 newsize)
 	ret = inode_newsize_ok(inode, newsize);
 	if (ret)
 		return ret;
+
+	inode_dio_wait(inode);
 
 	oldsize = inode->i_size;
 	if (newsize >= oldsize)

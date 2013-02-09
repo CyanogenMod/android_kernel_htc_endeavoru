@@ -17,7 +17,6 @@
 #define DEBUG
 #endif
 
-#include <linux/version.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
@@ -449,11 +448,9 @@ enum nic_state {
 struct efx_nic;
 
 /* Pseudo bit-mask flow control field */
-enum efx_fc_type {
-	EFX_FC_RX = FLOW_CTRL_RX,
-	EFX_FC_TX = FLOW_CTRL_TX,
-	EFX_FC_AUTO = 4,
-};
+#define EFX_FC_RX	FLOW_CTRL_RX
+#define EFX_FC_TX	FLOW_CTRL_TX
+#define EFX_FC_AUTO	4
 
 /**
  * struct efx_link_state - Current state of the link
@@ -465,7 +462,7 @@ enum efx_fc_type {
 struct efx_link_state {
 	bool up;
 	bool fd;
-	enum efx_fc_type fc;
+	u8 fc;
 	unsigned int speed;
 };
 
@@ -647,7 +644,7 @@ struct efx_filter_state;
  * @irq_rx_moderation: IRQ moderation time for RX event queues
  * @msg_enable: Log message enable flags
  * @state: Device state flag. Serialised by the rtnl_lock.
- * @reset_pending: Pending reset method (normally RESET_TYPE_NONE)
+ * @reset_pending: Bitmask for pending resets
  * @tx_queue: TX DMA queues
  * @rx_queue: RX DMA queues
  * @channel: Channels
@@ -670,16 +667,14 @@ struct efx_filter_state;
  * @mtd_list: List of MTDs attached to the NIC
  * @nic_data: Hardware dependent state
  * @mac_lock: MAC access lock. Protects @port_enabled, @phy_mode,
- *	@port_inhibited, efx_monitor() and efx_reconfigure_port()
+ *	efx_monitor() and efx_reconfigure_port()
  * @port_enabled: Port enabled indicator.
  *	Serialises efx_stop_all(), efx_start_all(), efx_monitor() and
  *	efx_mac_work() with kernel interfaces. Safe to read under any
  *	one of the rtnl_lock, mac_lock, or netif_tx_lock, but all three must
  *	be held to modify it.
- * @port_inhibited: If set, the netif_carrier is always off. Hold the mac_lock
  * @port_initialized: Port initialized?
  * @net_dev: Operating system network device. Consider holding the rtnl lock
- * @rx_checksum_enabled: RX checksumming enabled
  * @stats_buffer: DMA buffer for statistics
  * @mac_op: MAC interface
  * @phy_type: PHY type
@@ -732,7 +727,7 @@ struct efx_nic {
 	u32 msg_enable;
 
 	enum nic_state state;
-	enum reset_type reset_pending;
+	unsigned long reset_pending;
 
 	struct efx_channel *channel[EFX_MAX_CHANNELS];
 	char channel_name[EFX_MAX_CHANNELS][IFNAMSIZ + 6];
@@ -765,18 +760,16 @@ struct efx_nic {
 	struct mutex mac_lock;
 	struct work_struct mac_work;
 	bool port_enabled;
-	bool port_inhibited;
 
 	bool port_initialized;
 	struct net_device *net_dev;
-	bool rx_checksum_enabled;
 
 	struct efx_buffer stats_buffer;
 
-	struct efx_mac_operations *mac_op;
+	const struct efx_mac_operations *mac_op;
 
 	unsigned int phy_type;
-	struct efx_phy_operations *phy_op;
+	const struct efx_phy_operations *phy_op;
 	void *phy_data;
 	struct mdio_if_info mdio;
 	unsigned int mdio_bus;
@@ -788,7 +781,7 @@ struct efx_nic {
 
 	bool promiscuous;
 	union efx_multicast_hash multicast_hash;
-	enum efx_fc_type wanted_fc;
+	u8 wanted_fc;
 
 	atomic_t rx_reset;
 	enum efx_loopback_mode loopback_mode;
@@ -834,6 +827,8 @@ static inline unsigned int efx_port_num(struct efx_nic *efx)
  * @init: Initialise the controller
  * @fini: Shut down the controller
  * @monitor: Periodic function for polling link state and hardware monitor
+ * @map_reset_reason: Map ethtool reset reason to a reset method
+ * @map_reset_flags: Map ethtool reset flags to a reset method, if possible
  * @reset: Reset the controller hardware and possibly the PHY.  This will
  *	be called while the controller is uninitialised.
  * @probe_port: Probe the MAC and PHY
@@ -871,8 +866,6 @@ static inline unsigned int efx_port_num(struct efx_nic *efx)
  * @rx_dc_base: Base address in SRAM of RX queue descriptor caches
  * @offload_features: net_device feature flags for protocol offload
  *	features implemented in hardware
- * @reset_world_flags: Flags for additional components covered by
- *	reset method RESET_TYPE_WORLD
  */
 struct efx_nic_type {
 	int (*probe)(struct efx_nic *efx);
@@ -880,6 +873,8 @@ struct efx_nic_type {
 	int (*init)(struct efx_nic *efx);
 	void (*fini)(struct efx_nic *efx);
 	void (*monitor)(struct efx_nic *efx);
+	enum reset_type (*map_reset_reason)(enum reset_type reason);
+	int (*map_reset_flags)(u32 *flags);
 	int (*reset)(struct efx_nic *efx, enum reset_type method);
 	int (*probe_port)(struct efx_nic *efx);
 	void (*remove_port)(struct efx_nic *efx);
@@ -897,7 +892,7 @@ struct efx_nic_type {
 	void (*resume_wol)(struct efx_nic *efx);
 	int (*test_registers)(struct efx_nic *efx);
 	int (*test_nvram)(struct efx_nic *efx);
-	struct efx_mac_operations *default_mac_ops;
+	const struct efx_mac_operations *default_mac_ops;
 
 	int revision;
 	unsigned int mem_map_size;
@@ -914,7 +909,6 @@ struct efx_nic_type {
 	unsigned int tx_dc_base;
 	unsigned int rx_dc_base;
 	u32 offload_features;
-	u32 reset_world_flags;
 };
 
 /**************************************************************************

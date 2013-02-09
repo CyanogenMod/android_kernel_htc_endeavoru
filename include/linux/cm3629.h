@@ -208,6 +208,8 @@ struct cm3629_platform_data {
 	uint8_t ps2_adc_offset;
 	uint8_t ps_debounce;
 	uint16_t ps_delay_time;
+	uint8_t dark_level;
 };
-
+int power_key_check_in_pocket(void);
+int psensor_enable_by_touch_driver(int on);
 #endif

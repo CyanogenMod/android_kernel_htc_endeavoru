@@ -162,10 +162,16 @@ struct sk_buff *__skb_recv_datagram(struct sock *sk, unsigned flags,
 {
 	struct sk_buff *skb;
 	long timeo;
+	int error;
 	/*
 	 * Caller is allowed not to check sk->sk_err before skb_recv_datagram()
 	 */
-	int error = sock_error(sk);
+	if (IS_ERR(sk) || !sk) {
+		printk("[NET] sk is NULL in %s\n", __func__);
+		return NULL;
+	}
+
+	error = sock_error(sk);
 
 	if (error)
 		goto no_packet;
@@ -183,7 +189,7 @@ struct sk_buff *__skb_recv_datagram(struct sock *sk, unsigned flags,
 
 		spin_lock_irqsave(&sk->sk_receive_queue.lock, cpu_flags);
 		skb = skb_peek(&sk->sk_receive_queue);
-		if (skb) {
+		if ((skb) && (!IS_ERR(skb))) {
 			*peeked = skb->peeked;
 			if (flags & MSG_PEEK) {
 				skb->peeked = 1;
@@ -193,7 +199,7 @@ struct sk_buff *__skb_recv_datagram(struct sock *sk, unsigned flags,
 		}
 		spin_unlock_irqrestore(&sk->sk_receive_queue.lock, cpu_flags);
 
-		if (skb)
+		if ((skb) && (!IS_ERR(skb)))
 			return skb;
 
 		/* User doesn't want to wait */

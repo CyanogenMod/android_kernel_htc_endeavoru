@@ -73,7 +73,7 @@ static inline struct scatterlist *ah_req_sg(struct crypto_ahash *ahash,
  * into IP header for icv calculation. Options are already checked
  * for validity, so paranoia is not required. */
 
-static int ip_clear_mutable_options(struct iphdr *iph, __be32 *daddr)
+static int ip_clear_mutable_options(const struct iphdr *iph, __be32 *daddr)
 {
 	unsigned char * optptr = (unsigned char*)(iph+1);
 	int  l = iph->ihl*4 - sizeof(struct iphdr);
@@ -135,8 +135,6 @@ static void ah_output_done(struct crypto_async_request *base, int err)
 		top_iph->daddr = iph->daddr;
 		memcpy(top_iph+1, iph+1, top_iph->ihl*4 - sizeof(struct iphdr));
 	}
-
-	err = ah->nexthdr;
 
 	kfree(AH_SKB_CB(skb)->tmp);
 	xfrm_output_resume(skb, err);
@@ -264,12 +262,12 @@ static void ah_input_done(struct crypto_async_request *base, int err)
 	if (err)
 		goto out;
 
+	err = ah->nexthdr;
+
 	skb->network_header += ah_hlen;
 	memcpy(skb_network_header(skb), work_iph, ihl);
 	__skb_pull(skb, ah_hlen + ihl);
 	skb_set_transport_header(skb, -ihl);
-
-	err = ah->nexthdr;
 out:
 	kfree(AH_SKB_CB(skb)->tmp);
 	xfrm_input_resume(skb, err);
@@ -371,8 +369,6 @@ static int ah_input(struct xfrm_state *x, struct sk_buff *skb)
 		if (err == -EINPROGRESS)
 			goto out;
 
-		if (err == -EBUSY)
-			err = NET_XMIT_DROP;
 		goto out_free;
 	}
 
@@ -396,7 +392,7 @@ out:
 static void ah4_err(struct sk_buff *skb, u32 info)
 {
 	struct net *net = dev_net(skb->dev);
-	struct iphdr *iph = (struct iphdr *)skb->data;
+	const struct iphdr *iph = (const struct iphdr *)skb->data;
 	struct ip_auth_hdr *ah = (struct ip_auth_hdr *)(skb->data+(iph->ihl<<2));
 	struct xfrm_state *x;
 
@@ -404,7 +400,8 @@ static void ah4_err(struct sk_buff *skb, u32 info)
 	    icmp_hdr(skb)->code != ICMP_FRAG_NEEDED)
 		return;
 
-	x = xfrm_state_lookup(net, skb->mark, (xfrm_address_t *)&iph->daddr, ah->spi, IPPROTO_AH, AF_INET);
+	x = xfrm_state_lookup(net, skb->mark, (const xfrm_address_t *)&iph->daddr,
+			      ah->spi, IPPROTO_AH, AF_INET);
 	if (!x)
 		return;
 	printk(KERN_DEBUG "pmtu discovery on SA AH/%08x/%08x\n",

@@ -122,10 +122,14 @@ struct drm_device;
  * using the DRM_DEBUG_KMS and DRM_DEBUG.
  */
 
-extern void drm_ut_debug_printk(unsigned int request_level,
+extern __attribute__((format (printf, 4, 5)))
+void drm_ut_debug_printk(unsigned int request_level,
 				const char *prefix,
 				const char *function_name,
 				const char *format, ...);
+extern __attribute__((format (printf, 2, 3)))
+int drm_err(const char *func, const char *format, ...);
+
 /***********************************************************************/
 /** \name DRM template customization defaults */
 /*@{*/
@@ -181,21 +185,11 @@ extern void drm_ut_debug_printk(unsigned int request_level,
  * \param fmt printf() like format string.
  * \param arg arguments
  */
-#define DRM_ERROR(fmt, arg...) \
-	printk(KERN_ERR "[" DRM_NAME ":%s] *ERROR* " fmt , __func__ , ##arg)
+#define DRM_ERROR(fmt, ...)				\
+	drm_err(__func__, fmt, ##__VA_ARGS__)
 
-/**
- * Memory error output.
- *
- * \param area memory area where the error occurred.
- * \param fmt printf() like format string.
- * \param arg arguments
- */
-#define DRM_MEM_ERROR(area, fmt, arg...) \
-	printk(KERN_ERR "[" DRM_NAME ":%s:%s] *ERROR* " fmt , __func__, \
-	       drm_mem_stats[area].name , ##arg)
-
-#define DRM_INFO(fmt, arg...)  printk(KERN_INFO "[" DRM_NAME "] " fmt , ##arg)
+#define DRM_INFO(fmt, ...)				\
+	printk(KERN_INFO "[" DRM_NAME "] " fmt, ##__VA_ARGS__)
 
 /**
  * Debug output.
@@ -892,6 +886,8 @@ struct drm_driver {
 	 */
 	int (*gem_init_object) (struct drm_gem_object *obj);
 	void (*gem_free_object) (struct drm_gem_object *obj);
+	int (*gem_open_object) (struct drm_gem_object *, struct drm_file *);
+	void (*gem_close_object) (struct drm_gem_object *, struct drm_file *);
 
 	/* vga arb irq handler */
 	void (*vgaarb_irq)(struct drm_device *dev, bool state);
@@ -999,6 +995,22 @@ struct drm_minor {
 	struct list_head master_list;
 	struct drm_mode_group mode_group;
 };
+
+/* mode specified on the command line */
+struct drm_cmdline_mode {
+	bool specified;
+	bool refresh_specified;
+	bool bpp_specified;
+	int xres, yres;
+	int bpp;
+	int refresh;
+	bool rb;
+	bool interlace;
+	bool cvt;
+	bool margins;
+	enum drm_connector_force force;
+};
+
 
 struct drm_pending_vblank_event {
 	struct drm_pending_event base;
@@ -1395,6 +1407,15 @@ extern int drm_calc_vbltimestamp_from_scanoutpos(struct drm_device *dev,
 						 struct drm_crtc *refcrtc);
 extern void drm_calc_timestamping_constants(struct drm_crtc *crtc);
 
+extern bool
+drm_mode_parse_command_line_for_connector(const char *mode_option,
+					  struct drm_connector *connector,
+					  struct drm_cmdline_mode *mode);
+
+extern struct drm_display_mode *
+drm_mode_create_from_cmdline_mode(struct drm_device *dev,
+				  struct drm_cmdline_mode *cmd);
+
 /* Modesetting support */
 extern void drm_vblank_pre_modeset(struct drm_device *dev, int crtc);
 extern void drm_vblank_post_modeset(struct drm_device *dev, int crtc);
@@ -1519,6 +1540,8 @@ void drm_gem_object_free(struct kref *kref);
 struct drm_gem_object *drm_gem_object_alloc(struct drm_device *dev,
 					    size_t size);
 int drm_gem_object_init(struct drm_device *dev,
+			struct drm_gem_object *obj, size_t size);
+int drm_gem_private_object_init(struct drm_device *dev,
 			struct drm_gem_object *obj, size_t size);
 void drm_gem_object_handle_free(struct drm_gem_object *obj);
 void drm_gem_vm_open(struct vm_area_struct *vma);
@@ -1652,13 +1675,6 @@ static __inline__ int drm_pci_device_is_agp(struct drm_device *dev)
 
 	return pci_find_capability(dev->pdev, PCI_CAP_ID_AGP);
 }
-
-
-static __inline__ int drm_pci_device_is_pcie(struct drm_device *dev)
-{
-	return pci_find_capability(dev->pdev, PCI_CAP_ID_EXP);
-}
-
 
 extern int drm_pci_init(struct drm_driver *driver, struct pci_driver *pdriver);
 extern void drm_pci_exit(struct drm_driver *driver, struct pci_driver *pdriver);

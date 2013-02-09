@@ -24,12 +24,11 @@
 #include <linux/syscalls.h>
 #include <linux/hrtimer.h>
 #include <linux/nct1008.h>
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
-	#include <linux/leds-lp5521_htc.h>
+#if defined(CONFIG_LEDS_LP5521_HTC)
+#include <linux/leds-lp5521_htc.h>
 #endif
 #include <mach/board_htc.h>
 #include <mach/restart.h>
-#include <htc/log.h>
 
 extern unsigned engineer_id;
 extern struct htc_reboot_params *reboot_params;
@@ -49,6 +48,7 @@ struct keyreset_state {
 	int key_up;
 	int restart_disabled;
 	int (*reset_fn)(void);
+	bool (*swResetCheck)(void);
 };
 
 static int restart_requested;
@@ -79,7 +79,7 @@ static enum hrtimer_restart led_timer_func(struct hrtimer *timer)
 	if (power_off_led_requested == 1) {
 		power_off_led_requested = 2;
 		pr_info("[PWR] power off led turn on\n");
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
+#if defined(CONFIG_LEDS_LP5521_HTC)
 		lp5521_led_current_set_for_key(1);
 #endif
 	}
@@ -116,7 +116,6 @@ static void keyreset_event(struct input_handle *handle, unsigned int type,
 {
 	unsigned long flags;
 	struct keyreset_state *state = handle->private;
-	int pcbid = htc_get_pcbid_info();
 
 	if (type != EV_KEY)
 		return;
@@ -134,58 +133,58 @@ static void keyreset_event(struct input_handle *handle, unsigned int type,
 
 	if (code == KEY_POWER) {
 		if (value) {
-			sp_pr_info("[PWR] start count for power off led\n");
+			pr_info("[PWR] start count for power off led\n");
 			hrtimer_start(&led_timer, ktime_set(5,0), HRTIMER_MODE_REL);
 			power_off_led_requested = 1;
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
-			if ( ( pcbid < PROJECT_PHASE_A ) || ( (pcbid == PROJECT_PHASE_A) && (engineer_id == 0x01 ))) {
-				sp_pr_info("[PWR] start count for power reset\n");
-				hrtimer_start(&reset_timer, ktime_set(5,500000000), HRTIMER_MODE_REL);
-				power_reset_requested = 1;
+			if (state->swResetCheck != NULL) {
+				if (state->swResetCheck) {
+					pr_info("[PWR] start count for power reset\n");
+					hrtimer_start(&reset_timer, ktime_set(5,500000000), HRTIMER_MODE_REL);
+					power_reset_requested = 1;
+	}
 			}
-#endif
-			sp_pr_info("[PWR] start count for read temp\n");
+			pr_info("[PWR] start count for read temp\n");
 			hrtimer_start(&temp_timer, ktime_set(5,0), HRTIMER_MODE_REL);
 			read_temp_requested = 1;
 		}
 		else {
 			if (power_off_led_requested) {
 				if (hrtimer_cancel(&led_timer)) {
-					sp_pr_info("[PWR] cancel power off led timer (%x)\n", power_off_led_requested);
+					pr_info("[PWR] cancel power off led timer (%x)\n", power_off_led_requested);
 				} else
-					sp_pr_info("[PWR] cancel power off led timer, timer has done (%x)\n", power_off_led_requested);
+					pr_info("[PWR] cancel power off led timer, timer has done (%x)\n", power_off_led_requested);
 
 				if (power_off_led_requested == 2) {
-					sp_pr_info("[PWR] power off led turn off\n");
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
+					pr_info("[PWR] power off led turn off\n");
+			#if defined(CONFIG_LEDS_LP5521_HTC)
 					lp5521_led_current_set_for_key(0);
-#endif
+			#endif
 				}
 				power_off_led_requested = 0;
 			}
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
-			if ( ( pcbid < PROJECT_PHASE_A ) || ( (pcbid == PROJECT_PHASE_A) && (engineer_id == 0x01 ))) {
-				if ( power_reset_requested ) {
-					if (hrtimer_cancel(&reset_timer)) {
-						sp_pr_info("[PWR] cancel power reset timer (%x).\n", power_reset_requested);
-					} else
-						sp_pr_info("[PWR] cancel power reset timer, timer has done (%x).\n", power_reset_requested);
-					if ( power_reset_requested == 2 ) {
-						sp_pr_info("[PWR] reset device\n");
-						schedule_work(&restart_work);
+			if (state->swResetCheck != NULL) {
+				if (state->swResetCheck) {
+					if ( power_reset_requested ) {
+						if (hrtimer_cancel(&reset_timer)) {
+							pr_info("[PWR] cancel power reset timer (%x).\n", power_reset_requested);
+						} else
+							pr_info("[PWR] cancel power reset timer, timer has done (%x).\n", power_reset_requested);
+						if ( power_reset_requested == 2 ) {
+							pr_info("[PWR] reset device\n");
+			schedule_work(&restart_work);
+						}
+						power_reset_requested = 0;
 					}
-					power_reset_requested = 0;
 				}
 			}
-#endif
 			if (read_temp_requested) {
 				if (hrtimer_cancel(&temp_timer)) {
-					sp_pr_info("[PWR] cancel read temp timer (%x)\n", read_temp_requested);
+					pr_info("[PWR] cancel read temp timer (%x)\n", read_temp_requested);
 				} else
-					sp_pr_info("[PWR] cancel read temp timer, timer has done (%x)\n", read_temp_requested);
+					pr_info("[PWR] cancel read temp timer, timer has done (%x)\n", read_temp_requested);
 
 				if (read_temp_requested == 2) {
-					sp_pr_info("[PWR] read temp turn off\n");
+					pr_info("[PWR] read temp turn off\n");
 					nct1008_read_temp_for_key(0);
 				}
 				read_temp_requested = 0;
@@ -213,14 +212,7 @@ static int keyreset_connect(struct input_handler *handler,
 	if (i == KEY_MAX)
 		return -ENODEV;
 
-	hrtimer_init(&led_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	led_timer.function = led_timer_func;
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
-	hrtimer_init(&reset_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	reset_timer.function = power_reset_func;
-#endif
-	hrtimer_init(&temp_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	temp_timer.function = temp_timer_func;
+
 
 	handle = kzalloc(sizeof(*handle), GFP_KERNEL);
 	if (!handle)
@@ -298,8 +290,20 @@ static int keyreset_probe(struct platform_device *pdev)
 		}
 	}
 
+	hrtimer_init(&led_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	led_timer.function = led_timer_func;
+#if defined(CONFIG_INPUT_POWERKEY_RESET_PATCH)
+	hrtimer_init(&reset_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	reset_timer.function = power_reset_func;
+#endif
+	hrtimer_init(&temp_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	temp_timer.function = temp_timer_func;
+
 	if (pdata->reset_fn)
 		state->reset_fn = pdata->reset_fn;
+
+	if (pdata->swResetCheck)
+		state->swResetCheck = pdata->swResetCheck;
 
 	state->input_handler.event = keyreset_event;
 	state->input_handler.connect = keyreset_connect;

@@ -158,9 +158,6 @@ unsigned long clk_get_rate(struct clk *c)
 	unsigned long flags;
 	unsigned long rate;
 
-	if (!c)
-		return -EINVAL;
-
 	clk_lock_save(c, &flags);
 
 	rate = clk_get_rate_locked(c);
@@ -186,7 +183,8 @@ static void __clk_set_cansleep(struct clk *c)
 
 		if (!possible_parent && child->inputs) {
 			for (i = 0; child->inputs[i].input; i++) {
-				if (child->inputs[i].input == c) {
+				if ((child->inputs[i].input == c) &&
+				    tegra_clk_is_parent_allowed(child, c)) {
 					possible_parent = true;
 					break;
 				}
@@ -240,16 +238,9 @@ void clk_init(struct clk *c)
 static int clk_enable_locked(struct clk *c)
 {
 	int ret = 0;
-	int rate = clk_get_rate_locked(c);
-	bool set_rate = false;
-
-	if (rate > c->max_rate) {
-		rate = c->max_rate;
-		set_rate = true;
-	}
 
 	if (clk_is_auto_dvfs(c)) {
-		ret = tegra_dvfs_set_rate(c, rate);
+		ret = tegra_dvfs_set_rate(c, clk_get_rate_locked(c));
 		if (ret)
 			return ret;
 	}
@@ -260,9 +251,6 @@ static int clk_enable_locked(struct clk *c)
 			if (ret)
 				return ret;
 		}
-
-		if (set_rate)
-			clk_set_rate_locked(c, rate);
 
 		if (c->ops && c->ops->enable) {
 			ret = c->ops->enable(c);
@@ -342,11 +330,13 @@ int clk_set_parent_locked(struct clk *c, struct clk *parent)
 	unsigned long old_rate;
 	bool disable = false;
 
-	if (!c || !parent)
-		return -EINVAL;
-
 	if (!c->ops || !c->ops->set_parent) {
 		ret = -ENOSYS;
+		goto out;
+	}
+
+	if (!tegra_clk_is_parent_allowed(c, parent)) {
+		ret = -EINVAL;
 		goto out;
 	}
 
@@ -525,12 +515,10 @@ unsigned long clk_get_rate_all_locked(struct clk *c)
 	return rate;
 }
 
-long clk_round_rate(struct clk *c, unsigned long rate)
+long clk_round_rate_locked(struct clk *c, unsigned long rate)
 {
-	unsigned long flags, max_rate;
+	unsigned long max_rate;
 	long ret;
-
-	clk_lock_save(c, &flags);
 
 	if (!c->ops || !c->ops->round_rate) {
 		ret = -ENOSYS;
@@ -544,6 +532,16 @@ long clk_round_rate(struct clk *c, unsigned long rate)
 	ret = c->ops->round_rate(c, rate);
 
 out:
+	return ret;
+}
+
+long clk_round_rate(struct clk *c, unsigned long rate)
+{
+	unsigned long flags;
+	long ret;
+
+	clk_lock_save(c, &flags);
+	ret = clk_round_rate_locked(c, rate);
 	clk_unlock_restore(c, &flags);
 	return ret;
 }
@@ -1248,9 +1246,39 @@ static int time_on_get(void *data, u64 *val)
 }
 DEFINE_SIMPLE_ATTRIBUTE(time_on_fops, time_on_get, NULL, "%llu\n");
 
+static int possible_rates_show(struct seq_file *s, void *data)
+{
+	struct clk *c = s->private;
+	long rate = 0;
+
+	/* shared bus clock must round up, unless top of range reached */
+	while (rate <= c->max_rate) {
+		long rounded_rate = c->ops->round_rate(c, rate);
+		if (IS_ERR_VALUE(rounded_rate) || (rounded_rate <= rate))
+			break;
+
+		rate = rounded_rate + 2000;	/* 2kHz resolution */
+		seq_printf(s, "%ld ", rounded_rate / 1000);
+	}
+	seq_printf(s, "(kHz)\n");
+	return 0;
+}
+
+static int possible_rates_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, possible_rates_show, inode->i_private);
+}
+
+static const struct file_operations possible_rates_fops = {
+	.open		= possible_rates_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 static int clk_debugfs_register_one(struct clk *c)
 {
-	struct dentry *d, *child, *child_tmp;
+	struct dentry *d;
 
 	d = debugfs_create_dir(c->name, clk_debugfs_root);
 	if (!d)
@@ -1266,6 +1294,10 @@ static int clk_debugfs_register_one(struct clk *c)
 		goto err_out;
 
 	d = debugfs_create_u32("max", S_IRUGO, c->dent, (u32 *)&c->max_rate);
+	if (!d)
+		goto err_out;
+
+	d = debugfs_create_u32("min", S_IRUGO, c->dent, (u32 *)&c->min_rate);
 	if (!d)
 		goto err_out;
 
@@ -1296,13 +1328,17 @@ static int clk_debugfs_register_one(struct clk *c)
 			goto err_out;
 	}
 
+	if (c->ops && c->ops->round_rate && c->ops->shared_bus_update) {
+		d = debugfs_create_file("possible_rates", S_IRUGO, c->dent,
+			c, &possible_rates_fops);
+		if (!d)
+			goto err_out;
+	}
+
 	return 0;
 
 err_out:
-	d = c->dent;
-	list_for_each_entry_safe(child, child_tmp, &d->d_subdirs, d_u.d_child)
-		debugfs_remove(child);
-	debugfs_remove(c->dent);
+	debugfs_remove_recursive(c->dent);
 	return -ENOMEM;
 }
 

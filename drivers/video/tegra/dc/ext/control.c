@@ -1,7 +1,7 @@
 /*
  * drivers/video/tegra/dc/ext/control.c
  *
- * Copyright (C) 2011, NVIDIA Corporation
+ * Copyright (c) 2011-2012, NVIDIA CORPORATION, All rights reserved.
  *
  * Author: Robert Morell <rmorell@nvidia.com>
  *
@@ -74,11 +74,8 @@ static int get_output_edid(struct tegra_dc_ext_control_output_edid *edid)
 		return -EINVAL;
 
 	dc = tegra_dc_get_dc(edid->handle);
-
-	if (!dc)
-		return -EINVAL;
-
-	dc_edid = tegra_dc_get_edid(dc);
+	if (dc)
+		dc_edid = tegra_dc_get_edid(dc);
 	if (IS_ERR(dc_edid))
 		return PTR_ERR(dc_edid);
 
@@ -131,6 +128,12 @@ static int set_event_mask(struct tegra_dc_ext_control_user *user, u32 mask)
 	return 0;
 }
 
+static int get_capabilities(struct tegra_dc_ext_control_capabilities *caps)
+{
+	caps->caps = TEGRA_DC_EXT_CAPABILITIES;
+	return 0;
+}
+
 static long tegra_dc_ext_control_ioctl(struct file *filp, unsigned int cmd,
 				       unsigned long arg)
 {
@@ -179,6 +182,18 @@ static long tegra_dc_ext_control_ioctl(struct file *filp, unsigned int cmd,
 	}
 	case TEGRA_DC_EXT_CONTROL_SET_EVENT_MASK:
 		return set_event_mask(user, (u32) arg);
+	case TEGRA_DC_EXT_CONTROL_GET_CAPABILITIES:
+	{
+		struct tegra_dc_ext_control_capabilities args;
+		int ret;
+
+		ret = get_capabilities(&args);
+
+		if (copy_to_user(user_arg, &args, sizeof(args)))
+			return -EFAULT;
+
+		return ret;
+	}
 	default:
 		return -EINVAL;
 	}
@@ -247,10 +262,7 @@ int tegra_dc_ext_control_init(void)
 		return ret;
 
 	control->dev = device_create(tegra_dc_ext_class,
-				     NULL,
-				     tegra_dc_ext_devno,
-				     NULL,
-				     "tegra_dc_ctrl");
+			NULL, tegra_dc_ext_devno, NULL, "tegra_dc_ctrl");
 	if (IS_ERR(control->dev)) {
 		ret = PTR_ERR(control->dev);
 		cdev_del(&control->cdev);

@@ -358,8 +358,7 @@ int tegra_pinmux_set_io(enum tegra_pingroup pg,
 int tegra_pinmux_get_pingroup(int gpio_nr);
 int tegra_pinmux_set_pullupdown(enum tegra_pingroup pg,
 	enum tegra_pullupdown pupd);
-int tegra_pinmux_set_io(enum tegra_pingroup pg,
-	enum tegra_pin_io io);
+
 int tegra_pinmux_get_io(enum tegra_pingroup pg);
 void tegra_pinmux_config_table(const struct tegra_pingroup_config *config,
 	int len);

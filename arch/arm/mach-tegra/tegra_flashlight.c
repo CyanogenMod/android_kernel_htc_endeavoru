@@ -33,6 +33,7 @@
 #include <linux/wakelock.h>
 #include <linux/slab.h>
 #include <media/aat1271.h>
+#include <mach/mfootprint.h>
 
 #define FLT_DEBUG				1
 
@@ -522,6 +523,7 @@ static void fl_lcdev_brightness_set(struct led_classdev *led_cdev,
 
 static void flashlight_early_suspend(struct early_suspend *handler)
 {
+	MF_DEBUG("00270000");
 	struct flashlight_struct *fl_str = container_of(handler,
 			struct flashlight_struct, early_suspend_flashlight);
 
@@ -529,12 +531,17 @@ static void flashlight_early_suspend(struct early_suspend *handler)
 	if (fl_str != NULL && fl_str->mode_status) {
 		if (fl_str->mode_status == FL_MODE_FLASH)
 			hrtimer_cancel(&fl_str->timer);
+	MF_DEBUG("00270001");
 		spin_lock_irqsave(&fl_str->spin_lock, fl_str->spinlock_flags);
+	MF_DEBUG("00270002");
 		flashlight_turn_off();
+	MF_DEBUG("00270003");
 		spin_unlock_irqrestore(&fl_str->spin_lock,
 						fl_str->spinlock_flags);
+	MF_DEBUG("00270004");
 	}
 	printk("[FLT] flashlight_early_suspend end\n");
+	MF_DEBUG("00270005");
 }
 
 static void flashlight_late_resume(struct early_suspend *handler)
@@ -553,7 +560,7 @@ static int flashlight_setup_gpio(struct flashlight_platform_data *flashlight,
 	int ret = 0;
 	if (flashlight->gpio_init)
 		flashlight->gpio_init();
-	// have been config gpio in board-enterprise.c
+	// have been config gpio in board-endeavor*.c
 	if (flashlight->torch) {
 		/*
 		ret = gpio_request(flashlight->torch, "fl_torch");
@@ -769,7 +776,7 @@ static long aat1271_ioctl(struct file *file,
 			return -1;
 		}
 	}
-	
+
 	return 0;
 }
 
@@ -857,7 +864,7 @@ static int flashlight_probe(struct platform_device *pdev)
 
 	this_fl_str = fl_str;
 	//FLT_INFO_LOG("%s: The Flashlight Driver is ready\n", __func__);
-	
+
 	printk("[FLT][PROBE] flashlight driver probe ---, led_count = %d\n", fl_str->led_count+1);
 	return 0;
 

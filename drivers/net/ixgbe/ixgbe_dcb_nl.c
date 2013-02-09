@@ -114,20 +114,19 @@ static u8 ixgbe_dcbnl_set_state(struct net_device *netdev, u8 state)
 	u8 err = 0;
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 
+	/* verify there is something to do, if not then exit */
+	if (!!state != !(adapter->flags & IXGBE_FLAG_DCB_ENABLED))
+		return err;
+
 	if (state > 0) {
 		/* Turn on DCB */
-		if (adapter->flags & IXGBE_FLAG_DCB_ENABLED)
-			goto out;
-
 		if (!(adapter->flags & IXGBE_FLAG_MSIX_ENABLED)) {
 			e_err(drv, "Enable failed, needs MSI-X\n");
 			err = 1;
 			goto out;
 		}
 
-		if (netif_running(netdev))
-			netdev->netdev_ops->ndo_stop(netdev);
-		ixgbe_clear_interrupt_scheme(adapter);
+		adapter->flags |= IXGBE_FLAG_DCB_ENABLED;
 
 		switch (adapter->hw.mac.type) {
 		case ixgbe_mac_82598EB:
@@ -137,46 +136,30 @@ static u8 ixgbe_dcbnl_set_state(struct net_device *netdev, u8 state)
 		case ixgbe_mac_82599EB:
 		case ixgbe_mac_X540:
 			adapter->flags &= ~IXGBE_FLAG_FDIR_HASH_CAPABLE;
-			adapter->flags &= ~IXGBE_FLAG_FDIR_PERFECT_CAPABLE;
 			break;
 		default:
 			break;
 		}
 
-		adapter->flags |= IXGBE_FLAG_DCB_ENABLED;
-		if (!netdev_get_num_tc(netdev))
-			ixgbe_setup_tc(netdev, MAX_TRAFFIC_CLASS);
-
-		ixgbe_init_interrupt_scheme(adapter);
-		if (netif_running(netdev))
-			netdev->netdev_ops->ndo_open(netdev);
+		ixgbe_setup_tc(netdev, MAX_TRAFFIC_CLASS);
 	} else {
 		/* Turn off DCB */
-		if (adapter->flags & IXGBE_FLAG_DCB_ENABLED) {
-			if (netif_running(netdev))
-				netdev->netdev_ops->ndo_stop(netdev);
-			ixgbe_clear_interrupt_scheme(adapter);
-
-			adapter->hw.fc.requested_mode = adapter->last_lfc_mode;
-			adapter->temp_dcb_cfg.pfc_mode_enable = false;
-			adapter->dcb_cfg.pfc_mode_enable = false;
-			adapter->flags &= ~IXGBE_FLAG_DCB_ENABLED;
-			switch (adapter->hw.mac.type) {
-			case ixgbe_mac_82599EB:
-			case ixgbe_mac_X540:
+		adapter->hw.fc.requested_mode = adapter->last_lfc_mode;
+		adapter->temp_dcb_cfg.pfc_mode_enable = false;
+		adapter->dcb_cfg.pfc_mode_enable = false;
+		adapter->flags &= ~IXGBE_FLAG_DCB_ENABLED;
+		switch (adapter->hw.mac.type) {
+		case ixgbe_mac_82599EB:
+		case ixgbe_mac_X540:
+			if (!(adapter->flags & IXGBE_FLAG_FDIR_PERFECT_CAPABLE))
 				adapter->flags |= IXGBE_FLAG_FDIR_HASH_CAPABLE;
-				break;
-			default:
-				break;
-			}
-
-			ixgbe_setup_tc(netdev, 0);
-
-			ixgbe_init_interrupt_scheme(adapter);
-			if (netif_running(netdev))
-				netdev->netdev_ops->ndo_open(netdev);
+			break;
+		default:
+			break;
 		}
+		ixgbe_setup_tc(netdev, 0);
 	}
+
 out:
 	return err;
 }
@@ -348,16 +331,22 @@ static u8 ixgbe_dcbnl_set_all(struct net_device *netdev)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	int ret;
-
-	if (!adapter->dcb_set_bitmap ||
-	    !(adapter->dcbx_cap & DCB_CAP_DCBX_VER_CEE))
-		return DCB_NO_HW_CHG;
+#ifdef IXGBE_FCOE
+	struct dcb_app app = {
+			      .selector = DCB_APP_IDTYPE_ETHTYPE,
+			      .protocol = ETH_P_FCOE,
+			     };
+	u8 up = dcb_getapp(netdev, &app);
+#endif
 
 	ret = ixgbe_copy_dcb_cfg(&adapter->temp_dcb_cfg, &adapter->dcb_cfg,
 				 MAX_TRAFFIC_CLASS);
-
 	if (ret)
 		return DCB_NO_HW_CHG;
+
+#ifdef IXGBE_FCOE
+	if (up && (up != (1 << adapter->fcoe.up)))
+		adapter->dcb_set_bitmap |= BIT_APP_UPCHG;
 
 	/*
 	 * Only take down the adapter if an app change occurred. FCoE
@@ -366,12 +355,15 @@ static u8 ixgbe_dcbnl_set_all(struct net_device *netdev)
 	 */
 	if (adapter->dcb_set_bitmap & BIT_APP_UPCHG) {
 		while (test_and_set_bit(__IXGBE_RESETTING, &adapter->state))
-			msleep(1);
+			usleep_range(1000, 2000);
+
+		adapter->fcoe.up = ffs(up) - 1;
 
 		if (netif_running(netdev))
 			netdev->netdev_ops->ndo_stop(netdev);
 		ixgbe_clear_interrupt_scheme(adapter);
 	}
+#endif
 
 	if (adapter->dcb_cfg.pfc_mode_enable) {
 		switch (adapter->hw.mac.type) {
@@ -399,12 +391,14 @@ static u8 ixgbe_dcbnl_set_all(struct net_device *netdev)
 		}
 	}
 
+#ifdef IXGBE_FCOE
 	if (adapter->dcb_set_bitmap & BIT_APP_UPCHG) {
 		ixgbe_init_interrupt_scheme(adapter);
 		if (netif_running(netdev))
 			netdev->netdev_ops->ndo_open(netdev);
 		ret = DCB_HW_CHG_RST;
 	}
+#endif
 
 	if (adapter->dcb_set_bitmap & BIT_PFC) {
 		u8 pfc_en;
@@ -558,68 +552,6 @@ static u8 ixgbe_dcbnl_getapp(struct net_device *netdev, u8 idtype, u16 id)
 	return dcb_getapp(netdev, &app);
 }
 
-/**
- * ixgbe_dcbnl_setapp - set the DCBX application user priority
- * @netdev : the corresponding netdev
- * @idtype : identifies the id as ether type or TCP/UDP port number
- * @id: id is either ether type or TCP/UDP port number
- * @up: the 802.1p user priority bitmap
- *
- * Returns : 0 on success or 1 on error
- */
-static u8 ixgbe_dcbnl_setapp(struct net_device *netdev,
-                             u8 idtype, u16 id, u8 up)
-{
-	struct ixgbe_adapter *adapter = netdev_priv(netdev);
-	u8 rval = 1;
-	struct dcb_app app = {
-			      .selector = idtype,
-			      .protocol = id,
-			      .priority = up
-			     };
-
-	if (!(adapter->dcbx_cap & DCB_CAP_DCBX_VER_CEE))
-		return rval;
-
-	rval = dcb_setapp(netdev, &app);
-
-	switch (idtype) {
-	case DCB_APP_IDTYPE_ETHTYPE:
-#ifdef IXGBE_FCOE
-		if (id == ETH_P_FCOE) {
-			u8 old_tc;
-
-			/* Get current programmed tc */
-			old_tc = adapter->fcoe.tc;
-			rval = ixgbe_fcoe_setapp(adapter, up);
-
-			if (rval ||
-			   !(adapter->flags & IXGBE_FLAG_DCB_ENABLED) ||
-			   !(adapter->flags & IXGBE_FLAG_FCOE_ENABLED))
-				break;
-
-			/* The FCoE application priority may be changed multiple
-			 * times in quick succession with switches that build up
-			 * TLVs. To avoid creating uneeded device resets this
-			 * checks the actual HW configuration and clears
-			 * BIT_APP_UPCHG if a HW configuration change is not
-			 * need
-			 */
-			if (old_tc == adapter->fcoe.tc)
-				adapter->dcb_set_bitmap &= ~BIT_APP_UPCHG;
-			else
-				adapter->dcb_set_bitmap |= BIT_APP_UPCHG;
-		}
-#endif
-		break;
-	case DCB_APP_IDTYPE_PORTNUM:
-		break;
-	default:
-		break;
-	}
-	return rval;
-}
-
 static int ixgbe_dcbnl_ieee_getets(struct net_device *dev,
 				   struct ieee_ets *ets)
 {
@@ -738,33 +670,73 @@ static int ixgbe_dcbnl_ieee_setpfc(struct net_device *dev,
 	return err;
 }
 
+#ifdef IXGBE_FCOE
+static void ixgbe_dcbnl_devreset(struct net_device *dev)
+{
+	struct ixgbe_adapter *adapter = netdev_priv(dev);
+
+	if (netif_running(dev))
+		dev->netdev_ops->ndo_stop(dev);
+
+	ixgbe_clear_interrupt_scheme(adapter);
+	ixgbe_init_interrupt_scheme(adapter);
+
+	if (netif_running(dev))
+		dev->netdev_ops->ndo_open(dev);
+}
+#endif
+
 static int ixgbe_dcbnl_ieee_setapp(struct net_device *dev,
 				   struct dcb_app *app)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(dev);
+	int err = -EINVAL;
+
+	if (!(adapter->dcbx_cap & DCB_CAP_DCBX_VER_IEEE))
+		return err;
+
+	err = dcb_ieee_setapp(dev, app);
+
+#ifdef IXGBE_FCOE
+	if (!err && app->selector == IEEE_8021QAZ_APP_SEL_ETHERTYPE &&
+	    app->protocol == ETH_P_FCOE) {
+		u8 app_mask = dcb_ieee_getapp_mask(dev, app);
+
+		if (app_mask & (1 << adapter->fcoe.up))
+			return err;
+
+		adapter->fcoe.up = app->priority;
+		ixgbe_dcbnl_devreset(dev);
+	}
+#endif
+	return 0;
+}
+
+static int ixgbe_dcbnl_ieee_delapp(struct net_device *dev,
+				   struct dcb_app *app)
+{
+	struct ixgbe_adapter *adapter = netdev_priv(dev);
+	int err;
 
 	if (!(adapter->dcbx_cap & DCB_CAP_DCBX_VER_IEEE))
 		return -EINVAL;
+
+	err = dcb_ieee_delapp(dev, app);
+
 #ifdef IXGBE_FCOE
-	if (app->selector == 1 && app->protocol == ETH_P_FCOE) {
-		if (adapter->fcoe.tc == app->priority)
-			goto setapp;
+	if (!err && app->selector == IEEE_8021QAZ_APP_SEL_ETHERTYPE &&
+	    app->protocol == ETH_P_FCOE) {
+		u8 app_mask = dcb_ieee_getapp_mask(dev, app);
 
-		/* In IEEE mode map up to tc 1:1 */
-		adapter->fcoe.tc = app->priority;
-		adapter->fcoe.up = app->priority;
+		if (app_mask & (1 << adapter->fcoe.up))
+			return err;
 
-		/* Force hardware reset required to push FCoE
-		 * setup on {tx|rx}_rings
-		 */
-		adapter->dcb_set_bitmap |= BIT_APP_UPCHG;
-		ixgbe_dcbnl_set_all(dev);
+		adapter->fcoe.up = app_mask ?
+				   ffs(app_mask) - 1 : IXGBE_FCOE_DEFTC;
+		ixgbe_dcbnl_devreset(dev);
 	}
-
-setapp:
 #endif
-	dcb_setapp(dev, app);
-	return 0;
+	return err;
 }
 
 static u8 ixgbe_dcbnl_getdcbx(struct net_device *dev)
@@ -818,6 +790,7 @@ const struct dcbnl_rtnl_ops dcbnl_ops = {
 	.ieee_getpfc	= ixgbe_dcbnl_ieee_getpfc,
 	.ieee_setpfc	= ixgbe_dcbnl_ieee_setpfc,
 	.ieee_setapp	= ixgbe_dcbnl_ieee_setapp,
+	.ieee_delapp	= ixgbe_dcbnl_ieee_delapp,
 	.getstate	= ixgbe_dcbnl_get_state,
 	.setstate	= ixgbe_dcbnl_set_state,
 	.getpermhwaddr	= ixgbe_dcbnl_get_perm_hw_addr,
@@ -838,7 +811,6 @@ const struct dcbnl_rtnl_ops dcbnl_ops = {
 	.getpfcstate	= ixgbe_dcbnl_getpfcstate,
 	.setpfcstate	= ixgbe_dcbnl_setpfcstate,
 	.getapp		= ixgbe_dcbnl_getapp,
-	.setapp		= ixgbe_dcbnl_setapp,
 	.getdcbx	= ixgbe_dcbnl_getdcbx,
 	.setdcbx	= ixgbe_dcbnl_setdcbx,
 };

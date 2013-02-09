@@ -6,13 +6,19 @@
 
 OBJS		=
 
-# Ensure that mmcif loader code appears early in the image
+# Ensure that MMCIF loader code appears early in the image
 # to minimise that number of bocks that have to be read in
 # order to load it.
 ifeq ($(CONFIG_ZBOOT_ROM_MMCIF),y)
-ifeq ($(CONFIG_ARCH_SH7372),y)
 OBJS		+= mmcif-sh7372.o
 endif
+
+# Ensure that SDHI loader code appears early in the image
+# to minimise that number of bocks that have to be read in
+# order to load it.
+ifeq ($(CONFIG_ZBOOT_ROM_SH_MOBILE_SDHI),y)
+OBJS		+= sdhi-shmobile.o
+OBJS		+= sdhi-sh7372.o
 endif
 
 AFLAGS_head.o += -DTEXT_OFFSET=$(TEXT_OFFSET)
@@ -79,7 +85,6 @@ endif
 
 SEDFLAGS	= s/TEXT_START/$(ZTEXTADDR)/;s/BSS_START/$(ZBSSADDR)/
 
-suffix_$(CONFIG_KERNEL_XZ)   = xzkern
 suffix_$(CONFIG_KERNEL_GZIP) = gzip
 suffix_$(CONFIG_KERNEL_LZO)  = lzo
 suffix_$(CONFIG_KERNEL_LZMA) = lzma
@@ -89,7 +94,7 @@ targets       := vmlinux vmlinux.lds \
 		 font.o font.c head.o misc.o $(OBJS)
 
 # Make sure files are removed during clean
-extra-y       += piggy.gzip piggy.lzo piggy.lzma piggy.xzkern lib1funcs.S ashldi3.S
+extra-y       += piggy.gzip piggy.lzo piggy.lzma lib1funcs.S
 
 ifeq ($(CONFIG_FUNCTION_TRACER),y)
 ORIG_CFLAGS := $(KBUILD_CFLAGS)
@@ -99,8 +104,6 @@ endif
 ccflags-y := -fpic -fno-builtin
 asflags-y := -Wa,-march=all
 
-# Provide size of uncompressed kernel to the decompressor via a linker symbol.
-LDFLAGS_vmlinux = --defsym _image_size=$(shell stat -c "%s" $(obj)/../Image)
 # Supply ZRELADDR to the decompressor via a linker symbol.
 ifneq ($(CONFIG_AUTO_ZRELADDR),y)
 LDFLAGS_vmlinux += --defsym zreladdr=$(ZRELADDR)
@@ -123,15 +126,23 @@ lib1funcs = $(obj)/lib1funcs.o
 $(obj)/lib1funcs.S: $(srctree)/arch/$(SRCARCH)/lib/lib1funcs.S FORCE
 	$(call cmd,shipped)
 
-# For __aeabi_llsl
-ashldi3 = $(obj)/ashldi3.o
-$(obj)/ashldi3.S: $(srctree)/arch/$(SRCARCH)/lib/ashldi3.S FORCE
-	$(call cmd,shipped)
+# We need to prevent any GOTOFF relocs being used with references
+# to symbols in the .bss section since we cannot relocate them
+# independently from the rest at run time.  This can be achieved by
+# ensuring that no private .bss symbols exist, as global symbols
+# always have a GOT entry which is what we need.
+# The .data section is already discarded by the linker script so no need
+# to bother about it here.
+check_for_bad_syms = \
+bad_syms=$$($(CROSS_COMPILE)nm $@ | sed -n 's/^.\{8\} [bc] \(.*\)/\1/p') && \
+[ -z "$$bad_syms" ] || \
+  ( echo "following symbols must have non local/private scope:" >&2; \
+    echo "$$bad_syms" >&2; rm -f $@; false )
 
 $(obj)/vmlinux: $(obj)/vmlinux.lds $(obj)/$(HEAD) $(obj)/piggy.$(suffix_y).o \
-	 	$(addprefix $(obj)/, $(OBJS)) $(lib1funcs) $(ashldi3) FORCE
+	 	$(addprefix $(obj)/, $(OBJS)) $(lib1funcs) FORCE
 	$(call if_changed,ld)
-	@:
+	@$(check_for_bad_syms)
 
 $(obj)/piggy.$(suffix_y): $(obj)/../Image FORCE
 	$(call if_changed,$(suffix_y))

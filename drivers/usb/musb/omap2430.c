@@ -51,9 +51,7 @@ static void musb_do_idle(unsigned long _musb)
 {
 	struct musb	*musb = (void *)_musb;
 	unsigned long	flags;
-#ifdef CONFIG_USB_MUSB_HDRC_HCD
 	u8	power;
-#endif
 	u8	devctl;
 
 	spin_lock_irqsave(&musb->lock, flags);
@@ -70,13 +68,12 @@ static void musb_do_idle(unsigned long _musb)
 			MUSB_HST_MODE(musb);
 		}
 		break;
-#ifdef CONFIG_USB_MUSB_HDRC_HCD
 	case OTG_STATE_A_SUSPEND:
 		/* finish RESUME signaling? */
 		if (musb->port1_status & MUSB_PORT_STAT_RESUME) {
 			power = musb_readb(musb->mregs, MUSB_POWER);
 			power &= ~MUSB_POWER_RESUME;
-			DBG(1, "root port resume stopped, power %02x\n", power);
+			dev_dbg(musb->controller, "root port resume stopped, power %02x\n", power);
 			musb_writeb(musb->mregs, MUSB_POWER, power);
 			musb->is_active = 1;
 			musb->port1_status &= ~(USB_PORT_STAT_SUSPEND
@@ -87,15 +84,12 @@ static void musb_do_idle(unsigned long _musb)
 			musb->xceiv->state = OTG_STATE_A_HOST;
 		}
 		break;
-#endif
-#ifdef CONFIG_USB_MUSB_HDRC_HCD
 	case OTG_STATE_A_HOST:
 		devctl = musb_readb(musb->mregs, MUSB_DEVCTL);
 		if (devctl &  MUSB_DEVCTL_BDEVICE)
 			musb->xceiv->state = OTG_STATE_B_IDLE;
 		else
 			musb->xceiv->state = OTG_STATE_A_WAIT_BCON;
-#endif
 	default:
 		break;
 	}
@@ -114,7 +108,8 @@ static void omap2430_musb_try_idle(struct musb *musb, unsigned long timeout)
 	/* Never idle if active, or when VBUS timeout is not set as host */
 	if (musb->is_active || ((musb->a_wait_bcon == 0)
 			&& (musb->xceiv->state == OTG_STATE_A_WAIT_BCON))) {
-		DBG(4, "%s active, deleting timer\n", otg_state_string(musb));
+		dev_dbg(musb->controller, "%s active, deleting timer\n",
+			otg_state_string(musb->xceiv->state));
 		del_timer(&musb_idle_timer);
 		last_timer = jiffies;
 		return;
@@ -124,14 +119,14 @@ static void omap2430_musb_try_idle(struct musb *musb, unsigned long timeout)
 		if (!timer_pending(&musb_idle_timer))
 			last_timer = timeout;
 		else {
-			DBG(4, "Longer idle timer already pending, ignoring\n");
+			dev_dbg(musb->controller, "Longer idle timer already pending, ignoring\n");
 			return;
 		}
 	}
 	last_timer = timeout;
 
-	DBG(4, "%s inactive, for idle timer for %lu ms\n",
-		otg_state_string(musb),
+	dev_dbg(musb->controller, "%s inactive, for idle timer for %lu ms\n",
+		otg_state_string(musb->xceiv->state),
 		(unsigned long)jiffies_to_msecs(timeout - jiffies));
 	mod_timer(&musb_idle_timer, timeout);
 }
@@ -193,9 +188,9 @@ static void omap2430_musb_set_vbus(struct musb *musb, int is_on)
 	}
 	musb_writeb(musb->mregs, MUSB_DEVCTL, devctl);
 
-	DBG(1, "VBUS %s, devctl %02x "
+	dev_dbg(musb->controller, "VBUS %s, devctl %02x "
 		/* otg %3x conf %08x prcm %08x */ "\n",
-		otg_state_string(musb),
+		otg_state_string(musb->xceiv->state),
 		musb_readb(musb->mregs, MUSB_DEVCTL));
 }
 
@@ -239,16 +234,14 @@ static int musb_otg_notifications(struct notifier_block *nb,
 
 	switch (event) {
 	case USB_EVENT_ID:
-		DBG(4, "ID GND\n");
+		dev_dbg(musb->controller, "ID GND\n");
 
 		if (is_otg_enabled(musb)) {
-#ifdef CONFIG_USB_GADGET_MUSB_HDRC
 			if (musb->gadget_driver) {
 				pm_runtime_get_sync(musb->controller);
 				otg_init(musb->xceiv);
 				omap2430_musb_set_vbus(musb, 1);
 			}
-#endif
 		} else {
 			pm_runtime_get_sync(musb->controller);
 			otg_init(musb->xceiv);
@@ -257,23 +250,18 @@ static int musb_otg_notifications(struct notifier_block *nb,
 		break;
 
 	case USB_EVENT_VBUS:
-		DBG(4, "VBUS Connect\n");
+		dev_dbg(musb->controller, "VBUS Connect\n");
 
-#ifdef CONFIG_USB_GADGET_MUSB_HDRC
 		if (musb->gadget_driver)
 			pm_runtime_get_sync(musb->controller);
-#endif
 		otg_init(musb->xceiv);
 		break;
 
 	case USB_EVENT_NONE:
-		DBG(4, "VBUS Disconnect\n");
+		dev_dbg(musb->controller, "VBUS Disconnect\n");
 
-#ifdef CONFIG_USB_GADGET_MUSB_HDRC
 		if (is_otg_enabled(musb) || is_peripheral_enabled(musb))
-			if (musb->gadget_driver)
-#endif
-			{
+			if (musb->gadget_driver) {
 				pm_runtime_mark_last_busy(musb->controller);
 				pm_runtime_put_autosuspend(musb->controller);
 			}
@@ -285,7 +273,7 @@ static int musb_otg_notifications(struct notifier_block *nb,
 		otg_shutdown(musb->xceiv);
 		break;
 	default:
-		DBG(4, "ID float\n");
+		dev_dbg(musb->controller, "ID float\n");
 		return NOTIFY_DONE;
 	}
 
@@ -339,7 +327,7 @@ static int omap2430_musb_init(struct musb *musb)
 	status = otg_register_notifier(musb->xceiv, &musb->nb);
 
 	if (status)
-		DBG(1, "notification register failed\n");
+		dev_dbg(musb->controller, "notification register failed\n");
 
 	setup_timer(&musb_idle_timer, musb_do_idle, (unsigned long) musb);
 

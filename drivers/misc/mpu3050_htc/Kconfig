@@ -40,6 +40,12 @@ config MPU_SENSORS_AK8975_HTC
     help
       This enables support for the AKM ak8975 compass
 
+config MPU_SENSORS_AK8963_HTC
+    bool "AKM ak8963"
+    depends on MPU_SENSORS_MPU6000 || MPU_SENSORS_MPU3050_HTC
+    help
+      This enables support for the AKM ak8963 compass
+
 endchoice
 
 config MPU_SENSORS_TIMERIRQ_HTC

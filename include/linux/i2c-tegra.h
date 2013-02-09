@@ -22,7 +22,7 @@
 
 #include <mach/pinmux.h>
 
-#define TEGRA_I2C_MAX_BUS 1 // originally = 3, we used only 1
+#define TEGRA_I2C_MAX_BUS 3
 
 struct tegra_i2c_platform_data {
 	int adapter_nr;
@@ -38,6 +38,8 @@ struct tegra_i2c_platform_data {
 	int scl_gpio[TEGRA_I2C_MAX_BUS];
 	int sda_gpio[TEGRA_I2C_MAX_BUS];
 	int (*arb_recovery)(int scl_gpio, int sda_gpio);
+	bool is_high_speed_enable;
+	u16 hs_master_code;
 };
 
 struct tegra_i2c_slave_platform_data {

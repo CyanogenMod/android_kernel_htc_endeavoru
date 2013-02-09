@@ -45,7 +45,7 @@ static void tegra_cpuplug_work_func(struct work_struct *work)
 	if(should_on_cpu <= 0)
 		return;
 
-	for (cpu = 0; cpu < 4, should_on_cpu != 0; cpu++) {
+	for (cpu = 3; cpu > 0 , should_on_cpu != 0; cpu--) {
 		if (!cpu_online(cpu)) {
 			cpu_up(cpu);
 			pr_info("[cpu] cpu %d is on", cpu);

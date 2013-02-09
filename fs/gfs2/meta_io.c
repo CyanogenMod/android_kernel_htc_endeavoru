@@ -31,12 +31,13 @@
 #include "rgrp.h"
 #include "trans.h"
 #include "util.h"
+#include "trace_gfs2.h"
 
 static int gfs2_aspace_writepage(struct page *page, struct writeback_control *wbc)
 {
 	struct buffer_head *bh, *head;
 	int nr_underway = 0;
-	int write_op = REQ_META |
+	int write_op = REQ_META | REQ_PRIO |
 		(wbc->sync_mode == WB_SYNC_ALL ? WRITE_SYNC : WRITE);
 
 	BUG_ON(!PageLocked(page));
@@ -224,7 +225,7 @@ int gfs2_meta_read(struct gfs2_glock *gl, u64 blkno, int flags,
 	}
 	bh->b_end_io = end_buffer_read_sync;
 	get_bh(bh);
-	submit_bh(READ_SYNC | REQ_META, bh);
+	submit_bh(READ_SYNC | REQ_META | REQ_PRIO, bh);
 	if (!(flags & DIO_WAIT))
 		return 0;
 
@@ -310,6 +311,7 @@ void gfs2_remove_from_journal(struct buffer_head *bh, struct gfs2_trans *tr, int
 	struct gfs2_bufdata *bd = bh->b_private;
 
 	if (test_clear_buffer_pinned(bh)) {
+		trace_gfs2_pin(bd, 0);
 		atomic_dec(&sdp->sd_log_pinned);
 		list_del_init(&bd->bd_le.le_list);
 		if (meta) {
@@ -433,7 +435,7 @@ struct buffer_head *gfs2_meta_ra(struct gfs2_glock *gl, u64 dblock, u32 extlen)
 	if (buffer_uptodate(first_bh))
 		goto out;
 	if (!buffer_locked(first_bh))
-		ll_rw_block(READ_SYNC | REQ_META, 1, &first_bh);
+		ll_rw_block(READ_SYNC | REQ_META | REQ_PRIO, 1, &first_bh);
 
 	dblock++;
 	extlen--;

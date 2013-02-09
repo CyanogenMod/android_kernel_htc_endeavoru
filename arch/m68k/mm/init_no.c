@@ -38,29 +38,11 @@
 #include <asm/system.h>
 #include <asm/machdep.h>
 
-#undef DEBUG
-
-extern void die_if_kernel(char *,struct pt_regs *,long);
-extern void free_initmem(void);
-
 /*
- * BAD_PAGE is the page that is used for page faults when linux
- * is out-of-memory. Older versions of linux just did a
- * do_exit(), but using this instead means there is less risk
- * for a process dying in kernel mode, possibly leaving a inode
- * unused etc..
- *
- * BAD_PAGETABLE is the accompanying page-table: it is initialized
- * to point to BAD_PAGE entries.
- *
  * ZERO_PAGE is a special page that is used for zero-initialized
  * data and COW.
  */
-static unsigned long empty_bad_page_table;
-
-static unsigned long empty_bad_page;
-
-unsigned long empty_zero_page;
+void *empty_zero_page;
 
 extern unsigned long memory_start;
 extern unsigned long memory_end;
@@ -77,43 +59,19 @@ void __init paging_init(void)
 	 * Make sure start_mem is page aligned, otherwise bootmem and
 	 * page_alloc get different views of the world.
 	 */
-#ifdef DEBUG
-	unsigned long start_mem = PAGE_ALIGN(memory_start);
-#endif
 	unsigned long end_mem   = memory_end & PAGE_MASK;
+	unsigned long zones_size[MAX_NR_ZONES] = {0, };
 
-#ifdef DEBUG
-	printk (KERN_DEBUG "start_mem is %#lx\nvirtual_end is %#lx\n",
-		start_mem, end_mem);
-#endif
-
-	/*
-	 * Initialize the bad page table and bad page to point
-	 * to a couple of allocated pages.
-	 */
-	empty_bad_page_table = (unsigned long)alloc_bootmem_pages(PAGE_SIZE);
-	empty_bad_page = (unsigned long)alloc_bootmem_pages(PAGE_SIZE);
-	empty_zero_page = (unsigned long)alloc_bootmem_pages(PAGE_SIZE);
-	memset((void *)empty_zero_page, 0, PAGE_SIZE);
+	empty_zero_page = alloc_bootmem_pages(PAGE_SIZE);
+	memset(empty_zero_page, 0, PAGE_SIZE);
 
 	/*
 	 * Set up SFC/DFC registers (user data space).
 	 */
 	set_fs (USER_DS);
 
-#ifdef DEBUG
-	printk (KERN_DEBUG "before free_area_init\n");
-
-	printk (KERN_DEBUG "free_area_init -> start_mem is %#lx\nvirtual_end is %#lx\n",
-		start_mem, end_mem);
-#endif
-
-	{
-		unsigned long zones_size[MAX_NR_ZONES] = {0, };
-
-		zones_size[ZONE_DMA] = (end_mem - PAGE_OFFSET) >> PAGE_SHIFT;
-		free_area_init(zones_size);
-	}
+	zones_size[ZONE_DMA] = (end_mem - PAGE_OFFSET) >> PAGE_SHIFT;
+	free_area_init(zones_size);
 }
 
 void __init mem_init(void)
@@ -162,12 +120,12 @@ void free_initrd_mem(unsigned long start, unsigned long end)
 		totalram_pages++;
 		pages++;
 	}
-	printk (KERN_NOTICE "Freeing initrd memory: %dk freed\n", pages * (PAGE_SIZE / 1024));
+	pr_notice("Freeing initrd memory: %luk freed\n",
+		  pages * (PAGE_SIZE / 1024));
 }
 #endif
 
-void
-free_initmem()
+void free_initmem(void)
 {
 #ifdef CONFIG_RAMKERNEL
 	unsigned long addr;
@@ -184,7 +142,7 @@ free_initmem()
 		free_page(addr);
 		totalram_pages++;
 	}
-	printk(KERN_NOTICE "Freeing unused kernel memory: %ldk freed (0x%x - 0x%x)\n",
+	pr_notice("Freeing unused kernel memory: %luk freed (0x%x - 0x%x)\n",
 			(addr - PAGE_ALIGN((long) &__init_begin)) >> 10,
 			(int)(PAGE_ALIGN((unsigned long)(&__init_begin))),
 			(int)(addr - PAGE_SIZE));

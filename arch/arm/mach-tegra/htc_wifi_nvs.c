@@ -96,7 +96,6 @@ int wifi_calibration_size_set(void)
 	return 0;
 }
 
-#ifdef CONFIG_WIFI_NVS_PROC_CREATE
 static int wifi_calibration_read_proc(char *page, char **start, off_t off,
 					int count, int *eof, void *data)
 {
@@ -108,7 +107,6 @@ static int wifi_calibration_read_proc(char *page, char **start, off_t off,
 	memcpy(page, ptr + NVS_DATA_OFFSET, len);
 	return len;
 }
-#endif
 
 static int wifi_data_read_proc(char *page, char **start, off_t off,
 					int count, int *eof, void *data)
@@ -122,14 +120,12 @@ static int wifi_data_read_proc(char *page, char **start, off_t off,
 
 static int __init wifi_nvs_init(void)
 {
-#ifdef CONFIG_WIFI_NVS_PROC_CREATE
 	wifi_calibration = create_proc_entry("calibration", 0444, NULL);
 	if (wifi_calibration != NULL) {
 		wifi_calibration->size = wifi_get_nvs_size();
 		wifi_calibration->read_proc = wifi_calibration_read_proc;
 		wifi_calibration->write_proc = NULL;
 	}
-#endif
 	wifi_data = create_proc_entry("wifi_data", 0444, NULL);
 	if (wifi_data != NULL) {
 		wifi_data->size = NVS_DATA_OFFSET;

@@ -12,8 +12,8 @@
 #ifndef CNIC_IF_H
 #define CNIC_IF_H
 
-#define CNIC_MODULE_VERSION	"2.2.13"
-#define CNIC_MODULE_RELDATE	"Jan 31, 2011"
+#define CNIC_MODULE_VERSION	"2.5.7"
+#define CNIC_MODULE_RELDATE	"July 20, 2011"
 
 #define CNIC_ULP_RDMA		0
 #define CNIC_ULP_ISCSI		1
@@ -85,6 +85,7 @@ struct kcqe {
 #define CNIC_CTL_STOP_CMD		1
 #define CNIC_CTL_START_CMD		2
 #define CNIC_CTL_COMPLETION_CMD		3
+#define CNIC_CTL_STOP_ISCSI_CMD		4
 
 #define DRV_CTL_IO_WR_CMD		0x101
 #define DRV_CTL_IO_RD_CMD		0x102
@@ -94,9 +95,12 @@ struct kcqe {
 #define DRV_CTL_START_L2_CMD		0x106
 #define DRV_CTL_STOP_L2_CMD		0x107
 #define DRV_CTL_RET_L2_SPQ_CREDIT_CMD	0x10c
+#define DRV_CTL_ISCSI_STOPPED_CMD	0x10d
 
 struct cnic_ctl_completion {
 	u32	cid;
+	u8	opcode;
+	u8	error;
 };
 
 struct cnic_ctl_info {
@@ -167,7 +171,7 @@ struct cnic_eth_dev {
 	struct pci_dev	*pdev;
 	void __iomem	*io_base;
 	void __iomem	*io_base2;
-	void		*iro_arr;
+	const void	*iro_arr;
 
 	u32		ctx_tbl_offset;
 	u32		ctx_tbl_len;
@@ -177,6 +181,11 @@ struct cnic_eth_dev {
 	u32		max_fcoe_conn;
 	u32		max_rdma_conn;
 	u32		fcoe_init_cid;
+	u32		fcoe_wwn_port_name_hi;
+	u32		fcoe_wwn_port_name_lo;
+	u32		fcoe_wwn_node_name_hi;
+	u32		fcoe_wwn_node_name_lo;
+
 	u16		iscsi_l2_client_id;
 	u16		iscsi_l2_cid;
 	u8		iscsi_mac[ETH_ALEN];
@@ -309,7 +318,7 @@ struct cnic_ulp_ops {
 	void (*cnic_stop)(void *ulp_ctx);
 	void (*indicate_kcqes)(void *ulp_ctx, struct kcqe *cqes[],
 				u32 num_cqes);
-	void (*indicate_netevent)(void *ulp_ctx, unsigned long event);
+	void (*indicate_netevent)(void *ulp_ctx, unsigned long event, u16 vid);
 	void (*cm_connect_complete)(struct cnic_sock *);
 	void (*cm_close_complete)(struct cnic_sock *);
 	void (*cm_abort_complete)(struct cnic_sock *);

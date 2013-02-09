@@ -9,6 +9,7 @@
 #include <linux/mm.h>
 #include <linux/pm.h>
 #include <linux/memblock.h>
+#include <linux/cpuidle.h>
 
 #include <asm/elf.h>
 #include <asm/vdso.h>
@@ -50,7 +51,7 @@ phys_addr_t xen_extra_mem_start, xen_extra_mem_size;
  */
 #define EXTRA_MEM_RATIO		(10)
 
-static __init void xen_add_extra_mem(unsigned long pages)
+static void __init xen_add_extra_mem(unsigned long pages)
 {
 	unsigned long pfn;
 
@@ -92,8 +93,6 @@ static unsigned long __init xen_release_chunk(phys_addr_t start_addr,
 	if (end <= start)
 		return 0;
 
-	printk(KERN_INFO "xen_release_chunk: looking at area pfn %lx-%lx: ",
-	       start, end);
 	for(pfn = start; pfn < end; pfn++) {
 		unsigned long mfn = pfn_to_mfn(pfn);
 
@@ -106,14 +105,14 @@ static unsigned long __init xen_release_chunk(phys_addr_t start_addr,
 
 		ret = HYPERVISOR_memory_op(XENMEM_decrease_reservation,
 					   &reservation);
-		WARN(ret != 1, "Failed to release memory %lx-%lx err=%d\n",
-		     start, end, ret);
+		WARN(ret != 1, "Failed to release pfn %lx err=%d\n", pfn, ret);
 		if (ret == 1) {
 			__set_phys_to_machine(pfn, INVALID_P2M_ENTRY);
 			len++;
 		}
 	}
-	printk(KERN_CONT "%ld pages freed\n", len);
+	printk(KERN_INFO "Freeing  %lx-%lx pfn range: %lu pages freed\n",
+	       start, end, len);
 
 	return len;
 }
@@ -139,7 +138,7 @@ static unsigned long __init xen_return_unused_memory(unsigned long max_pfn,
 	if (last_end < max_addr)
 		released += xen_release_chunk(last_end, max_addr);
 
-	printk(KERN_INFO "released %ld pages of unused memory\n", released);
+	printk(KERN_INFO "released %lu pages of unused memory\n", released);
 	return released;
 }
 
@@ -185,6 +184,31 @@ static unsigned long __init xen_set_identity(const struct e820entry *list,
 					PFN_UP(start_pci), PFN_DOWN(last));
 	return identity;
 }
+
+static unsigned long __init xen_get_max_pages(void)
+{
+	unsigned long max_pages = MAX_DOMAIN_PAGES;
+	domid_t domid = DOMID_SELF;
+	int ret;
+
+	/*
+	 * For the initial domain we use the maximum reservation as
+	 * the maximum page.
+	 *
+	 * For guest domains the current maximum reservation reflects
+	 * the current maximum rather than the static maximum. In this
+	 * case the e820 map provided to us will cover the static
+	 * maximum region.
+	 */
+	if (xen_initial_domain()) {
+		ret = HYPERVISOR_memory_op(XENMEM_maximum_reservation, &domid);
+		if (ret > 0)
+			max_pages = ret;
+	}
+
+	return min(max_pages, MAX_DOMAIN_PAGES);
+}
+
 /**
  * machine_specific_memory_setup - Hook for machine specific memory setup.
  **/
@@ -227,11 +251,7 @@ char * __init xen_memory_setup(void)
 
 	memcpy(map_raw, map, sizeof(map));
 	e820.nr_map = 0;
-#ifdef CONFIG_X86_32
 	xen_extra_mem_start = mem_end;
-#else
-	xen_extra_mem_start = max((1ULL << 32), mem_end);
-#endif
 	for (i = 0; i < memmap.nr_entries; i++) {
 		unsigned long long end;
 
@@ -266,6 +286,12 @@ char * __init xen_memory_setup(void)
 		if (map[i].size > 0)
 			e820_add_region(map[i].addr, map[i].size, map[i].type);
 	}
+	/* Align the balloon area so that max_low_pfn does not get set
+	 * to be at the _end_ of the PCI gap at the far end (fee01000).
+	 * Note that xen_extra_mem_start gets set in the loop above to be
+	 * past the last E820 region. */
+	if (xen_initial_domain() && (xen_extra_mem_start < (1ULL<<32)))
+		xen_extra_mem_start = (1ULL<<32);
 
 	/*
 	 * In domU, the ISA region is normal, usable memory, but we
@@ -290,6 +316,14 @@ char * __init xen_memory_setup(void)
 			"XEN START INFO");
 
 	sanitize_e820_map(e820.map, ARRAY_SIZE(e820.map), &e820.nr_map);
+
+	extra_limit = xen_get_max_pages();
+	if (max_pfn + extra_pages > extra_limit) {
+		if (extra_limit > max_pfn)
+			extra_pages = extra_limit - max_pfn;
+		else
+			extra_pages = 0;
+	}
 
 	extra_pages += xen_return_unused_memory(xen_start_info->nr_pages, &e820);
 
@@ -340,7 +374,7 @@ static void __init fiddle_vdso(void)
 #endif
 }
 
-static __cpuinit int register_callback(unsigned type, const void *func)
+static int __cpuinit register_callback(unsigned type, const void *func)
 {
 	struct callback_register callback = {
 		.type = type,
@@ -424,8 +458,8 @@ void __init xen_arch_setup(void)
 #ifdef CONFIG_X86_32
 	boot_cpu_data.hlt_works_ok = 1;
 #endif
-	pm_idle = default_idle;
+	disable_cpuidle();
 	boot_option_idle_override = IDLE_HALT;
-
+	WARN_ON(set_pm_idle_to_default());
 	fiddle_vdso();
 }

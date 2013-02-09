@@ -44,7 +44,7 @@
  * SMP torture testing
  */
 
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/byteorder.h>
 
 #include <linux/compiler.h>
@@ -83,8 +83,9 @@
 #include "atl1.h"
 
 #define ATLX_DRIVER_VERSION "2.1.3"
-MODULE_AUTHOR("Xiong Huang <xiong.huang@atheros.com>, \
-Chris Snook <csnook@redhat.com>, Jay Cliburn <jcliburn@gmail.com>");
+MODULE_AUTHOR("Xiong Huang <xiong.huang@atheros.com>, "
+	      "Chris Snook <csnook@redhat.com>, "
+	      "Jay Cliburn <jcliburn@gmail.com>");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(ATLX_DRIVER_VERSION);
 
@@ -1284,8 +1285,7 @@ static void atl1_setup_mac_ctrl(struct atl1_adapter *adapter)
 	value |= (((u32) adapter->hw.preamble_len
 		   & MAC_CTRL_PRMLEN_MASK) << MAC_CTRL_PRMLEN_SHIFT);
 	/* vlan */
-	if (adapter->vlgrp)
-		value |= MAC_CTRL_RMV_VLAN;
+	__atlx_vlan_mode(netdev->features, &value);
 	/* rx checksum
 	   if (adapter->rx_csum)
 	   value |= MAC_CTRL_RX_CHKSUM_EN;
@@ -2022,13 +2022,14 @@ rrd_ok:
 		atl1_rx_checksum(adapter, rrd, skb);
 		skb->protocol = eth_type_trans(skb, adapter->netdev);
 
-		if (adapter->vlgrp && (rrd->pkt_flg & PACKET_FLAG_VLAN_INS)) {
+		if (rrd->pkt_flg & PACKET_FLAG_VLAN_INS) {
 			u16 vlan_tag = (rrd->vlan_tag >> 4) |
 					((rrd->vlan_tag & 7) << 13) |
 					((rrd->vlan_tag & 8) << 9);
-			vlan_hwaccel_rx(skb, adapter->vlgrp, vlan_tag);
-		} else
-			netif_rx(skb);
+
+			__vlan_hwaccel_put_tag(skb, vlan_tag);
+		}
+		netif_rx(skb);
 
 		/* let protocol layer free skb */
 		buffer_info->skb = NULL;
@@ -2074,9 +2075,6 @@ static void atl1_intr_tx(struct atl1_adapter *adapter)
 	cmb_tpd_next_to_clean = le16_to_cpu(adapter->cmb.cmb->tpd_cons_idx);
 
 	while (cmb_tpd_next_to_clean != sw_tpd_next_to_clean) {
-		struct tx_packet_desc *tpd;
-
-		tpd = ATL1_TPD_DESC(tpd_ring, sw_tpd_next_to_clean);
 		buffer_info = &tpd_ring->buffer_info[sw_tpd_next_to_clean];
 		if (buffer_info->dma) {
 			pci_unmap_page(adapter->pdev, buffer_info->dma,
@@ -2572,7 +2570,7 @@ static s32 atl1_up(struct atl1_adapter *adapter)
 {
 	struct net_device *netdev = adapter->netdev;
 	int err;
-	int irq_flags = IRQF_SAMPLE_RANDOM;
+	int irq_flags = 0;
 
 	/* hardware has been reset, we need to reload some things */
 	atlx_set_multi(netdev);
@@ -2785,8 +2783,7 @@ static int atl1_suspend(struct device *dev)
 			ctrl |= MAC_CTRL_DUPLX;
 		ctrl |= (((u32)adapter->hw.preamble_len &
 			MAC_CTRL_PRMLEN_MASK) << MAC_CTRL_PRMLEN_SHIFT);
-		if (adapter->vlgrp)
-			ctrl |= MAC_CTRL_RMV_VLAN;
+		__atlx_vlan_mode(netdev->features, &ctrl);
 		if (wufc & ATLX_WUFC_MAG)
 			ctrl |= MAC_CTRL_BC_EN;
 		iowrite32(ctrl, hw->hw_addr + REG_MAC_CTRL);
@@ -2876,9 +2873,10 @@ static const struct net_device_ops atl1_netdev_ops = {
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= atl1_set_mac,
 	.ndo_change_mtu		= atl1_change_mtu,
+	.ndo_fix_features	= atlx_fix_features,
+	.ndo_set_features	= atlx_set_features,
 	.ndo_do_ioctl		= atlx_ioctl,
 	.ndo_tx_timeout		= atlx_tx_timeout,
-	.ndo_vlan_rx_register	= atlx_vlan_rx_register,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= atl1_poll_controller,
 #endif
@@ -2985,6 +2983,12 @@ static int __devinit atl1_probe(struct pci_dev *pdev,
 	netdev->features = NETIF_F_HW_CSUM;
 	netdev->features |= NETIF_F_SG;
 	netdev->features |= (NETIF_F_HW_VLAN_TX | NETIF_F_HW_VLAN_RX);
+
+	netdev->hw_features = NETIF_F_HW_CSUM | NETIF_F_SG | NETIF_F_TSO |
+			      NETIF_F_HW_VLAN_RX;
+
+	/* is this valid? see atl1_setup_mac_ctrl() */
+	netdev->features |= NETIF_F_RXCSUM;
 
 	/*
 	 * patch for some L1 of old version,
@@ -3229,13 +3233,13 @@ static int atl1_get_settings(struct net_device *netdev,
 	if (netif_carrier_ok(adapter->netdev)) {
 		u16 link_speed, link_duplex;
 		atl1_get_speed_and_duplex(hw, &link_speed, &link_duplex);
-		ecmd->speed = link_speed;
+		ethtool_cmd_speed_set(ecmd, link_speed);
 		if (link_duplex == FULL_DUPLEX)
 			ecmd->duplex = DUPLEX_FULL;
 		else
 			ecmd->duplex = DUPLEX_HALF;
 	} else {
-		ecmd->speed = -1;
+		ethtool_cmd_speed_set(ecmd, -1);
 		ecmd->duplex = -1;
 	}
 	if (hw->media_type == MEDIA_TYPE_AUTO_SENSOR ||
@@ -3266,7 +3270,8 @@ static int atl1_set_settings(struct net_device *netdev,
 	if (ecmd->autoneg == AUTONEG_ENABLE)
 		hw->media_type = MEDIA_TYPE_AUTO_SENSOR;
 	else {
-		if (ecmd->speed == SPEED_1000) {
+		u32 speed = ethtool_cmd_speed(ecmd);
+		if (speed == SPEED_1000) {
 			if (ecmd->duplex != DUPLEX_FULL) {
 				if (netif_msg_link(adapter))
 					dev_warn(&adapter->pdev->dev,
@@ -3275,7 +3280,7 @@ static int atl1_set_settings(struct net_device *netdev,
 				goto exit_sset;
 			}
 			hw->media_type = MEDIA_TYPE_1000M_FULL;
-		} else if (ecmd->speed == SPEED_100) {
+		} else if (speed == SPEED_100) {
 			if (ecmd->duplex == DUPLEX_FULL)
 				hw->media_type = MEDIA_TYPE_100M_FULL;
 			else
@@ -3595,12 +3600,6 @@ static int atl1_set_pauseparam(struct net_device *netdev,
 	return 0;
 }
 
-/* FIXME: is this right? -- CHS */
-static u32 atl1_get_rx_csum(struct net_device *netdev)
-{
-	return 1;
-}
-
 static void atl1_get_strings(struct net_device *netdev, u32 stringset,
 	u8 *data)
 {
@@ -3668,13 +3667,9 @@ static const struct ethtool_ops atl1_ethtool_ops = {
 	.set_ringparam		= atl1_set_ringparam,
 	.get_pauseparam		= atl1_get_pauseparam,
 	.set_pauseparam		= atl1_set_pauseparam,
-	.get_rx_csum		= atl1_get_rx_csum,
-	.set_tx_csum		= ethtool_op_set_tx_hw_csum,
 	.get_link		= ethtool_op_get_link,
-	.set_sg			= ethtool_op_set_sg,
 	.get_strings		= atl1_get_strings,
 	.nway_reset		= atl1_nway_reset,
 	.get_ethtool_stats	= atl1_get_ethtool_stats,
 	.get_sset_count		= atl1_get_sset_count,
-	.set_tso		= ethtool_op_set_tso,
 };

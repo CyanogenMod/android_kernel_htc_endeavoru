@@ -2,7 +2,7 @@
  * arch/arm/mach-tegra/common.c
  *
  * Copyright (C) 2010 Google, Inc.
- * Copyright (C) 2010-2011 NVIDIA Corporation
+ * Copyright (C) 2010-2012, NVIDIA Corporation. All rights reserved.
  *
  * Author:
  *	Colin Cross <ccross@android.com>
@@ -18,6 +18,7 @@
  *
  */
 
+#include <linux/platform_data/ram_console.h>
 #include <linux/platform_device.h>
 #include <linux/console.h>
 #include <linux/init.h>
@@ -28,6 +29,7 @@
 #include <linux/memblock.h>
 #include <linux/bitops.h>
 #include <linux/sched.h>
+#include <linux/cpufreq.h>
 
 #include <asm/hardware/cache-l2x0.h>
 #include <asm/system.h>
@@ -37,6 +39,7 @@
 #include <mach/pinmux.h>
 #include <mach/powergate.h>
 #include <mach/system.h>
+#include <mach/tegra_smmu.h>
 
 #include "apbio.h"
 #include "board.h"
@@ -44,12 +47,7 @@
 #include "fuse.h"
 #include "pm.h"
 #include "reset.h"
-#include "tegra_smmu.h"
-
-#if defined(CONFIG_RESET_REASON)
-#include <linux/interrupt.h>
-#include <mach/restart.h>
-#endif
+#include "devices.h"
 
 #define MC_SECURITY_CFG2	0x7c
 
@@ -62,6 +60,10 @@
 #define AHB_GIZMO_AHB_MEM		0xc
 #define   ENB_FAST_REARBITRATE	BIT(2)
 #define   DONT_SPLIT_AHB_WR     BIT(7)
+
+#define   RECOVERY_MODE	BIT(31)
+#define   BOOTLOADER_MODE	BIT(30)
+#define   FORCED_RECOVERY_MODE	BIT(1)
 
 #define AHB_GIZMO_USB		0x1c
 #define AHB_GIZMO_USB2		0x78
@@ -81,9 +83,6 @@
 #define   ADDR_BNDRY(x)	(((x) & 0xf) << 21)
 #define   INACTIVITY_TIMEOUT(x)	(((x) & 0xffff) << 0)
 
-#define BOOT_DEBUG_LOG_ENTER(fn) \
-	printk(KERN_NOTICE "[BOOT_LOG] Entering %s\n", fn);
-
 unsigned long tegra_bootloader_fb_start;
 unsigned long tegra_bootloader_fb_size;
 unsigned long tegra_fb_start;
@@ -96,7 +95,6 @@ unsigned long tegra_vpr_start;
 unsigned long tegra_vpr_size;
 unsigned long tegra_lp0_vec_start;
 unsigned long tegra_lp0_vec_size;
-unsigned long nvdumper_reserved;
 bool tegra_lp0_vec_relocate;
 unsigned long tegra_grhost_aperture = ~0ul;
 static   bool is_tegra_debug_uart_hsport;
@@ -111,11 +109,6 @@ static enum power_supply_type pow_supply_type = POWER_SUPPLY_TYPE_MAINS;
 
 void (*arch_reset)(char mode, const char *cmd) = tegra_assert_system_reset;
 
-extern unsigned reboot_battery_first_level;
-
-unsigned (*get_battery_level_cb)(void) = NULL;
-EXPORT_SYMBAL_GPL(get_battery_level_cb);
-
 #define NEVER_RESET 0
 
 void tegra_assert_system_reset(char mode, const char *cmd)
@@ -127,6 +120,23 @@ void tegra_assert_system_reset(char mode, const char *cmd)
 	void __iomem *reset = IO_ADDRESS(TEGRA_PMC_BASE + 0x00);
 	u32 reg;
 
+	reg = readl_relaxed(reset + PMC_SCRATCH0);
+	/* Writing recovery kernel or Bootloader mode in SCRATCH0 31:30:1 */
+	if (cmd) {
+		if (!strcmp(cmd, "recovery"))
+			reg |= RECOVERY_MODE;
+		else if (!strcmp(cmd, "bootloader"))
+			reg |= BOOTLOADER_MODE;
+		else if (!strcmp(cmd, "forced-recovery"))
+			reg |= FORCED_RECOVERY_MODE;
+		else
+			reg &= ~(BOOTLOADER_MODE | RECOVERY_MODE | FORCED_RECOVERY_MODE);
+	}
+	else {
+		/* Clearing SCRATCH0 31:30:1 on default reboot */
+		reg &= ~(BOOTLOADER_MODE | RECOVERY_MODE | FORCED_RECOVERY_MODE);
+	}
+	writel_relaxed(reg, reset + PMC_SCRATCH0);
 	/* use *_related to avoid spinlock since caches are off */
 	reg = readl_relaxed(reset);
 	reg |= 0x10;
@@ -134,17 +144,12 @@ void tegra_assert_system_reset(char mode, const char *cmd)
 #endif
 }
 static int modem_id;
+static int commchip_id;
+static int sku_override;
 static int debug_uart_port_id;
 static enum audio_codec_type audio_codec_name;
+static enum image_type board_image_type = system_image;
 static int max_cpu_current;
-
-void (*tegra_reset)(char mode, const char *cmd);
-
-#if defined(CONFIG_RESET_REASON)
-extern struct htc_reboot_params *reboot_params;
-static atomic_t restart_counter = ATOMIC_INIT(0);
-static int in_panic = 0;
-#endif
 
 /* WARNING: There is implicit client of pllp_out3 like i2c, uart, dsi
  * and so this clock (pllp_out3) should never be disabled.
@@ -152,13 +157,18 @@ static int in_panic = 0;
 static __initdata struct tegra_clk_init_table common_clk_init_table[] = {
 	/* name		parent		rate		enabled */
 	{ "clk_m",	NULL,		0,		true },
+	{ "emc",	NULL,		0,		true },
+	{ "cpu",	NULL,		0,		true },
+	{ "kfuse",	NULL,		0,		true },
+	{ "fuse",	NULL,		0,		true },
+	{ "sclk",	NULL,		0,		true },
 #ifdef CONFIG_TEGRA_SILICON_PLATFORM
 #ifdef CONFIG_ARCH_TEGRA_2x_SOC
 	{ "pll_p",	NULL,		216000000,	true },
 	{ "pll_p_out1",	"pll_p",	28800000,	true },
-	{ "pll_p_out2",	"pll_p",	48000000,	true },
+	{ "pll_p_out2",	"pll_p",	48000000,	false },
 	{ "pll_p_out3",	"pll_p",	72000000,	true },
-	{ "pll_p_out4",	"pll_p",	108000000,	true },
+	{ "pll_p_out4",	"pll_p",	108000000,	false },
 	{ "pll_m",	"clk_m",	0,		true },
 	{ "pll_m_out1",	"pll_m",	120000000,	true },
 	{ "sclk",	"pll_c_out1",	40000000,	true },
@@ -171,41 +181,45 @@ static __initdata struct tegra_clk_init_table common_clk_init_table[] = {
 	{ "2d",		"pll_c",	0,		false },
 	{ "3d",		"pll_c",	0,		false },
 #else
-	{ "pll_p",	NULL,		408000000,	true },
-	{ "pll_p_out1",	"pll_p",	9600000,	true },
-	{ "pll_p_out2",	"pll_p",	48000000,	true },
-	{ "pll_p_out3",	"pll_p",	102000000,	true },
+	{ "pll_p",	NULL,		0,		true },
+	{ "pll_p_out1",	"pll_p",	0,		false },
+	{ "pll_p_out2",	"pll_p",	48000000,	false },
+	{ "pll_p_out3",	"pll_p",	0,		true },
 	{ "pll_m_out1",	"pll_m",	275000000,	false },
 	{ "pll_p_out4",	"pll_p",	102000000,	true },
 	{ "sclk",	"pll_p_out4",	102000000,	true },
 	{ "hclk",	"sclk",		102000000,	true },
 	{ "pclk",	"hclk",		51000000,	true },
-	{ "cpu.sclk",	NULL,		80000000,	false },
 #endif
 #else
 	{ "pll_p",	NULL,		216000000,	true },
-	{ "pll_p_out1",	"pll_p",	28800000,	true },
-	{ "pll_p_out2",	"pll_p",	48000000,	true },
+	{ "pll_p_out1",	"pll_p",	28800000,	false },
+	{ "pll_p_out2",	"pll_p",	48000000,	false },
 	{ "pll_p_out3",	"pll_p",	72000000,	true },
 	{ "pll_m_out1",	"pll_m",	275000000,	true },
-	{ "pll_c",	NULL,		ULONG_MAX,	false },
-	{ "pll_c_out1",	"pll_c",	208000000,	false },
-	{ "pll_p_out4",	"pll_p",	108000000,	true },
+	{ "pll_p_out4",	"pll_p",	108000000,	false },
 	{ "sclk",	"pll_p_out4",	108000000,	true },
 	{ "hclk",	"sclk",		108000000,	true },
 	{ "pclk",	"hclk",		54000000,	true },
 #endif
-	{ "csite",	NULL,		4250000,	true },
-	{ "emc",	NULL,		0,		true },
-	{ "cpu",	NULL,		0,		true },
-	{ "kfuse",	NULL,		0,		true },
-	{ "fuse",	NULL,		0,		true },
+#ifdef CONFIG_TEGRA_SLOW_CSITE
+	{ "csite",	"clk_m",	1000000, 	true },
+#else
+	{ "csite",      NULL,           0,              true },
+#endif
 	{ "pll_u",	NULL,		480000000,	false },
 	{ "sdmmc1",	"pll_p",	48000000,	false},
 	{ "sdmmc3",	"pll_p",	48000000,	false},
 	{ "sdmmc4",	"pll_p",	48000000,	false},
-	{ "wake.sclk",	"sbus",		40000000,	true },
+	{ "sbc1.sclk",	NULL,		40000000,	false},
+	{ "sbc2.sclk",	NULL,		40000000,	false},
+	{ "sbc3.sclk",	NULL,		40000000,	false},
+	{ "sbc4.sclk",	NULL,		40000000,	false},
 #ifndef CONFIG_ARCH_TEGRA_2x_SOC
+	{ "sbc5.sclk",	NULL,		40000000,	false},
+	{ "sbc6.sclk",	NULL,		40000000,	false},
+	{ "wake.sclk",	NULL,		40000000,	true },
+	{ "cpu_mode.sclk", NULL,	80000000,	false },
 	{ "cbus",	"pll_c",	416000000,	false },
 	{ "pll_c_out1",	"pll_c",	208000000,	false },
 	{ "mselect",	"pll_p",	102000000,	true },
@@ -213,60 +227,11 @@ static __initdata struct tegra_clk_init_table common_clk_init_table[] = {
 	{ NULL,		NULL,		0,		0},
 };
 
-#if defined(CONFIG_TRUSTED_FOUNDATIONS) && defined(CONFIG_CACHE_L2X0)
-static void tegra_cache_smc(bool enable, u32 arg)
+#ifdef CONFIG_TRUSTED_FOUNDATIONS
+static inline void tegra_l2x0_disable_tz(void)
 {
-	void __iomem *p = IO_ADDRESS(TEGRA_ARM_PERIF_BASE) + 0x3000;
-	bool need_affinity_switch;
-	bool can_switch_affinity;
-	bool l2x0_enabled;
-	cpumask_t local_cpu_mask;
-	cpumask_t saved_cpu_mask;
-	unsigned long flags;
-	long ret;
-
-	/*
-	 * ISSUE : Some registers of PL310 controler must be written
-	 *              from Secure context (and from CPU0)!
-	 *
-	 * When called form Normal we obtain an abort or do nothing.
-	 * Instructions that must be called in Secure:
-	 *      - Write to Control register (L2X0_CTRL==0x100)
-	 *      - Write in Auxiliary controler (L2X0_AUX_CTRL==0x104)
-	 *      - Invalidate all entries (L2X0_INV_WAY==0x77C),
-	 *              mandatory at boot time.
-	 *      - Tag and Data RAM Latency Control Registers
-	 *              (0x108 & 0x10C) must be written in Secure.
-	 */
-	need_affinity_switch = (smp_processor_id() != 0);
-	can_switch_affinity = !irqs_disabled();
-
-	WARN_ON(need_affinity_switch && !can_switch_affinity);
-	if (need_affinity_switch && can_switch_affinity) {
-		cpu_set(0, local_cpu_mask);
-		sched_getaffinity(0, &saved_cpu_mask);
-		ret = sched_setaffinity(0, &local_cpu_mask);
-		WARN_ON(ret != 0);
-	}
-
-	local_irq_save(flags);
-	l2x0_enabled = readl_relaxed(p + L2X0_CTRL) & 1;
-	if (enable && !l2x0_enabled)
-		tegra_generic_smc(0xFFFFF100, 0x00000001, arg);
-	else if (!enable && l2x0_enabled)
-		tegra_generic_smc(0xFFFFF100, 0x00000002, arg);
-	local_irq_restore(flags);
-
-	if (need_affinity_switch && can_switch_affinity) {
-		ret = sched_setaffinity(0, &saved_cpu_mask);
-		WARN_ON(ret != 0);
-	}
-}
-
-static void tegra_l2x0_disable(void)
-{
-	unsigned long flags;
 	static u32 l2x0_way_mask;
+	BUG_ON(smp_processor_id() != 0);
 
 	if (!l2x0_way_mask) {
 		void __iomem *p = IO_ADDRESS(TEGRA_ARM_PERIF_BASE) + 0x3000;
@@ -277,33 +242,61 @@ static void tegra_l2x0_disable(void)
 		ways = (aux_ctrl & (1 << 16)) ? 16 : 8;
 		l2x0_way_mask = (1 << ways) - 1;
 	}
-
-	local_irq_save(flags);
-	tegra_cache_smc(false, l2x0_way_mask);
-	local_irq_restore(flags);
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	/* flush all ways on any disable */
+	tegra_generic_smc_uncached(0xFFFFF100, 0x00000002, l2x0_way_mask);
+#elif defined(CONFIG_ARCH_TEGRA_3x_SOC)
+	if (tegra_is_cpu_in_lp2(0) == false) {
+		/*
+		 * If entering LP0/LP1, ask secureos to fully flush and
+		 * disable the L2.
+		 *
+		 * If entering LP2, L2 disable is handled by the secureos
+		 * as part of the tegra_sleep_cpu() SMC. This SMC indicates
+		 * no more secureos tasks will be scheduled, allowing it
+		 * to optimize out L2 flushes on its side.
+		 */
+		tegra_generic_smc_uncached(0xFFFFF100,
+						0x00000002, l2x0_way_mask);
+	}
+#endif
 }
-#endif	/* CONFIG_TRUSTED_FOUNDATIONS && defined(CONFIG_CACHE_L2X0) */
 
-void tegra_init_cache(bool init)
+static inline void tegra_init_cache_tz(bool init)
 {
-#ifdef CONFIG_CACHE_L2X0
 	void __iomem *p = IO_ADDRESS(TEGRA_ARM_PERIF_BASE) + 0x3000;
 	u32 aux_ctrl;
-	u32 speedo;
-	u32 tmp;
 
+	BUG_ON(smp_processor_id() != 0);
+
+	if (init) {
+		/* init L2 from secureos */
+		tegra_generic_smc(0xFFFFF100, 0x00000001, 0x0);
+
+		/* common init called for outer call hookup */
+		aux_ctrl = readl_relaxed(p + L2X0_AUX_CTRL);
+		l2x0_init(p, aux_ctrl, 0xFFFFFFFF);
+
+		/* use our outer_disable() routine */
+		outer_cache.disable = tegra_l2x0_disable_tz;
+	} else {
+		/* reenable L2 in secureos */
+		aux_ctrl = readl_relaxed(p + L2X0_AUX_CTRL);
+		tegra_generic_smc_uncached(0xFFFFF100, 0x00000004, aux_ctrl);
+	}
+}
+#endif	/* CONFIG_TRUSTED_FOUNDATIONS  */
+
+#ifdef CONFIG_CACHE_L2X0
+void tegra_init_cache(bool init)
+{
 #ifdef CONFIG_TRUSTED_FOUNDATIONS
-	/* issue the SMC to enable the L2 */
-	aux_ctrl = readl_relaxed(p + L2X0_AUX_CTRL);
-	tegra_cache_smc(true, aux_ctrl);
-
-	/* after init, reread aux_ctrl and register handlers */
-	aux_ctrl = readl_relaxed(p + L2X0_AUX_CTRL);
-	l2x0_init(p, aux_ctrl, 0xFFFFFFFF);
-
-	/* override outer_disable() with our disable */
-	outer_cache.disable = tegra_l2x0_disable;
+	/* enable/re-enable of L2 handled by secureos */
+	return tegra_init_cache_tz(init);
 #else
+	void __iomem *p = IO_ADDRESS(TEGRA_ARM_PERIF_BASE) + 0x3000;
+	u32 aux_ctrl;
+
 #if defined(CONFIG_ARCH_TEGRA_2x_SOC)
 	writel_relaxed(0x331, p + L2X0_TAG_LATENCY_CTRL);
 	writel_relaxed(0x441, p + L2X0_DATA_LATENCY_CTRL);
@@ -317,9 +310,12 @@ void tegra_init_cache(bool init)
 		writel(0x221, p + L2X0_TAG_LATENCY_CTRL);
 		writel(0x221, p + L2X0_DATA_LATENCY_CTRL);
 	} else {
+		u32 speedo;
+
 		/* relax l2-cache latency for speedos 4,5,6 (T33's chips) */
 		speedo = tegra_cpu_speedo_id();
-		if (speedo == 4 || speedo == 5 || speedo == 6) {
+		if (speedo == 4 || speedo == 5 || speedo == 6 ||
+		    speedo == 12 || speedo == 13) {
 			writel(0x442, p + L2X0_TAG_LATENCY_CTRL);
 			writel(0x552, p + L2X0_DATA_LATENCY_CTRL);
 		} else {
@@ -332,12 +328,15 @@ void tegra_init_cache(bool init)
 	writel(0x770, p + L2X0_DATA_LATENCY_CTRL);
 #endif
 #endif
+	writel(0x3, p + L2X0_POWER_CTRL);
 	aux_ctrl = readl(p + L2X0_CACHE_TYPE);
 	aux_ctrl = (aux_ctrl & 0x700) << (17-8);
 	aux_ctrl |= 0x7C000001;
 	if (init) {
 		l2x0_init(p, aux_ctrl, 0x8200c3fe);
 	} else {
+		u32 tmp;
+
 		tmp = aux_ctrl;
 		aux_ctrl = readl(p + L2X0_AUX_CTRL);
 		aux_ctrl &= 0x8200c3fe;
@@ -346,8 +345,8 @@ void tegra_init_cache(bool init)
 	}
 	l2x0_enable();
 #endif
-#endif
 }
+#endif /* CONFIG_CACHE_L2X0 */
 
 static void __init tegra_init_power(void)
 {
@@ -415,235 +414,8 @@ static void __init tegra_init_ahb_gizmo_settings(void)
 	gizmo_writel(val, AHB_MEM_PREFETCH_CFG4);
 }
 
-static bool console_flushed;
-
-static void tegra_pm_flush_console(void)
-{
-	if (console_flushed)
-		return;
-	console_flushed = true;
-
-	pr_emerg("Restarting %s\n", linux_banner);
-	if (console_trylock()) {
-		console_unlock();
-		return;
-	}
-
-	mdelay(50);
-
-	local_irq_disable();
-	if (!console_trylock())
-		pr_emerg("%s: Console was locked! Busting\n", __func__);
-	else
-		pr_emerg("%s: Console was locked!\n", __func__);
-	console_unlock();
-}
-
-#if defined(CONFIG_RESET_REASON)
-static inline unsigned get_restart_reason(void)
-{
-	return reboot_params->reboot_reason;
-}
-/*
-	This function should not be called outside
-	to ensure that others do not change restart reason.
-	Use mode & cmd to set reason & msg in arch_reset().
-*/
-static inline void set_restart_reason(unsigned int reason)
-{
-	reboot_params->reboot_reason = reason;
-	//printk(KERN_NOTICE "%s: TEGRA_IRAM_BASE: 0x%x\n", __func__, TEGRA_IRAM_BASE);
-	//printk(KERN_NOTICE "%s: TEGRA_IRAM_OFFSET_REBOOT_PARAMS: 0x%x\n", __func__, TEGRA_IRAM_OFFSET_REBOOT_PARAMS);
-	//printk(KERN_NOTICE "%s: reboot_params: 0x%p\n", __func__, reboot_params);
-	//printk(KERN_NOTICE "%s: reason: 0x%x\n", __func__, reason);
-	//printk(KERN_NOTICE "%s: reboot_params->reboot_reason: 0x%x\n", __func__, reboot_params->reboot_reason);
-}
-
-/*
-	This function should not be called outsite
-	to ensure that others do no change restart reason.
-	Use mode & cmd to set reason & msg in arch_reset().
-*/
-static inline void set_restart_msg(const char *msg)
-{
-	strncpy(reboot_params->msg, msg, sizeof(reboot_params->msg)-1);
-}
-
-/* This function expose others to restart message for entering ramdump mode. */
-void set_ramdump_reason(const char *msg)
-{
-	if(!strcmp("Kernel panic", msg))
-		in_panic = 1;
-	/* only allow write msg before entering arch_rest */
-	if (atomic_read(&restart_counter) != 0)
-		return;
-
-	set_restart_reason(RESTART_REASON_RAMDUMP);
-	set_restart_msg(msg? msg: "");
-	//printk(KERN_NOTICE "%s: finished...\n", __func__);
-}
-
-/* This function is for setting hardware reset reason*/
-void set_hardware_reason(const char *msg)
-{
-	/* We redirect WatchDog to Ramdump for debug. */
-	if(!strcmp("WatchDog_marked", msg)) {
-		set_restart_reason(RESTART_REASON_HARDWARE);
-	} else if(!strcmp("WatchDog", msg)) {
-		set_restart_reason(RESTART_REASON_RAMDUMP);
-	} else if(!strcmp("offmode", msg)) {
-		set_restart_reason(RESTART_REASON_OFFMODE);
-	}
-	//printk(KERN_NOTICE "%s: finished...\n", __func__);
-}
-
-unsigned get_reboot_battery_level(void)
-{
-	unsigned signature;
-	unsigned level;
-
-	printk(KERN_INFO "[BATT]%s:the reboot_battery_first_level:0x%x\n"
-				, __func__, reboot_battery_first_level);
-	signature = (reboot_battery_first_level >> BATTERY_LEVEL_SIG_SHIFT)
-			& BATTERY_LEVEL_SIG_MASK;
-
-	if (signature != BATTERY_LEVEL_SIG)
-		return BATTERY_LEVEL_NO_VALUE;
-
-	level = reboot_battery_first_level & BATTERY_LEVEL_MASK;
-
-	if (level > 100)
-		return BATTERY_LEVEL_NO_VALUE;
-
-	return level;
-}
-
-void set_reboot_battery_level(unsigned level)
-{
-	if ((level >= 0 && level <= 100) || (level == BATTERY_LEVEL_NO_VALUE)) {
-		level |= BATTERY_LEVEL_SIG << BATTERY_LEVEL_SIG_SHIFT;
-		reboot_params->battery_level = level;
-		printk(KERN_INFO "[BATT]%s:record reboot_battery_first_level :0x%x\n"
-					, __func__, reboot_params->battery_level);
-	}
-}
-
-static void tegra_pm_restart(char mode, const char *cmd)
-{
-	printk("tegra_pm_restart(%c,%s)\n", mode, cmd);
-	/* arch_reset should only enter once*/
-	if(atomic_add_return(1, &restart_counter) != 1)
-		return;
-
-	printk(KERN_NOTICE "%s: Going down for restart now.\n", __func__);
-	printk(KERN_NOTICE "%s: mode %d\n", __func__, mode);
-	if (cmd) {
-		printk(KERN_NOTICE "%s: restart command `%s'.\n", __func__, cmd);
-		/* XXX: modem will set msg itself.
-		   Dying msg should be passed to this function directly. */
-		if (mode != RESTART_MODE_MODEM_CRASH)
-			set_restart_msg(cmd);
-	}
-	else
-		printk(KERN_NOTICE "%s: no command restart.\n", __func__);
-	if (in_panic) {
-		//printk(KERN_NOTICE "%s: in_panic, RESTART_REASON_RAMDUMP\n", __func__);
-		set_restart_reason(RESTART_REASON_RAMDUMP);
-		set_restart_msg("Kernel panic");
-	} else if (!cmd) {
-		//printk(KERN_NOTICE "%s: !cmd, RESTART_REASON_REBOOT\n", __func__);
-		set_restart_reason(RESTART_REASON_REBOOT);
-	} else if (!strcmp(cmd, "bootloader")) {
-		//printk(KERN_NOTICE "%s: bootloader, RESTART_REASON_BOOTLOADER\n", __func__);
-		set_restart_reason(RESTART_REASON_BOOTLOADER);
-	} else if (!strcmp(cmd, "recovery")) {
-		//printk(KERN_NOTICE "%s: recovery, RESTART_REASON_RECOVERY\n", __func__);
-		set_restart_reason(RESTART_REASON_RECOVERY);
-	} else if (!strcmp(cmd, "eraseflash")) {
-		//printk(KERN_NOTICE "%s: eraseflash, RESTART_REASON_ERASE_FLASH\n", __func__);
-		set_restart_reason(RESTART_REASON_ERASE_FLASH);
-	} else if(!strcmp(cmd, "offmode")) {
-		//printk(KERN_NOTICE "%s: offmode, RESTART_REASON_OFFMODE\n", __func__);
-		set_restart_reason(RESTART_REASON_OFFMODE);
-	} else if (!strncmp(cmd, "oem-", 4)) {
-		unsigned long code;
-
-		code = simple_strtoul(cmd + 4, 0, 16) & 0xff;
-
-		//printk(KERN_NOTICE "%s: oem-%u, RESTART_REASON_OEM_BASE\n", __func__, code);
-		/* oem-97, 98, 99 are RIL fatal */
-		if ((code == 0x97) || (code == 0x98))
-			code = 0x99;
-
-		set_restart_reason(RESTART_REASON_OEM_BASE | code);
-		if (!!get_battery_level_cb && (code == 0x11 || code == 0x33 || code == 0x88))
-			set_reboot_battery_level(get_battery_level_cb());
-
-	} else if (!strcmp(cmd, "force-hard") ||
-			(RESTART_MODE_LEGECY < mode && mode < RESTART_MODE_MAX)
-		  ) {
-		/* The only situation modem user triggers reset is NV restore after erasing EFS. */
-		if (mode == RESTART_MODE_MODEM_USER_INVOKED)
-			set_restart_reason(RESTART_REASON_REBOOT);
-		else
-			set_restart_reason(RESTART_REASON_RAMDUMP);
-	} else {
-		/* unknown command */
-		//printk(KERN_NOTICE "%s: unknown cmd, RESTART_REASON_REBOOT\n", __func__);
-		set_restart_reason(RESTART_REASON_REBOOT);
-	}
-
-	printk(KERN_NOTICE "%s: restart reason 0x%X.\n", __func__, get_restart_reason());
-
-	switch (get_restart_reason()) {
-		case RESTART_REASON_RIL_FATAL:
-		case RESTART_REASON_RAMDUMP:
-			if (!in_panic && mode != RESTART_MODE_APP_WATCHDOG_BARK) {
-				/* Suspend wdog until all stacks are printed */
-				//msm_watchdog_suspend();
-				dump_stack();
-				//show_state_filter(TASK_UNINTERRUPTIBLE); // TODO FIXME this maybe old kernel code
-				//print_workqueue();
-				//msm_watchdog_resume();
-			}
-			if (!!get_battery_level_cb)
-				set_reboot_battery_level(get_battery_level_cb());
-			break;
-		case RESTART_REASON_REBOOT:
-		case RESTART_REASON_OFFMODE:
-			if (!!get_battery_level_cb)
-				set_reboot_battery_level(get_battery_level_cb());
-			break;
-	}
-
-	arm_machine_restart(mode, cmd);
-}
-#else
-
-static void tegra_pm_restart(char mode, const char *cmd)
-{
-	tegra_pm_flush_console();
-	arm_machine_restart(mode, cmd);
-}
-
-#endif /* end of CONFIG_RESET_REASON */
-
 void __init tegra_init_early(void)
 {
-#if defined(CONFIG_RESET_REASON)
-/*
-	printk(KERN_NOTICE "tegra_common_init init reboot params start\n");
-
-	reboot_params = reboot_params=(void *)(IO_ADDRESS(nvdumper_reserved - 4096));
-	memset(reboot_params, 0x0, sizeof(struct htc_reboot_params));
-	//set_restart_reason(RESTART_REASON_RAMDUMP);
-	//reboot_params->radio_flag = get_radio_flag();
-
-	printk(KERN_NOTICE "tegra_common_init init reboot params end\n");
-*/
-#endif
-
-	arm_pm_restart = tegra_pm_restart;
 #ifndef CONFIG_SMP
 	/* For SMP system, initializing the reset handler here is too
 	   late. For non-SMP systems, the function that calls the reset
@@ -655,11 +427,10 @@ void __init tegra_init_early(void)
 	tegra_init_clock();
 	tegra_init_pinmux();
 	tegra_clk_init_from_table(common_clk_init_table);
-	BOOT_DEBUG_LOG_ENTER("<machine>_init_power");
 	tegra_init_power();
-	BOOT_DEBUG_LOG_ENTER("<machine>_init_cache");
 	tegra_init_cache(true);
 	tegra_init_ahb_gizmo_settings();
+	tegra_init_debug_uart_rate();
 }
 
 static int __init tegra_lp0_vec_arg(char *options)
@@ -678,15 +449,6 @@ static int __init tegra_lp0_vec_arg(char *options)
 }
 early_param("lp0_vec", tegra_lp0_vec_arg);
 
-static int __init tegra_nvdumper_arg(char *options)
-{
-	char *p = options;
-
-	nvdumper_reserved = memparse(p, &p);
-	return 0;
-}
-early_param("nvdumper_reserved", tegra_nvdumper_arg);
-
 static int __init tegra_bootloader_fb_arg(char *options)
 {
 	char *p = options;
@@ -701,6 +463,21 @@ static int __init tegra_bootloader_fb_arg(char *options)
 	return 0;
 }
 early_param("tegra_fbmem", tegra_bootloader_fb_arg);
+
+static int __init tegra_sku_override(char *id)
+{
+	char *p = id;
+
+	sku_override = memparse(p, &p);
+
+	return 0;
+}
+early_param("sku_override", tegra_sku_override);
+
+int tegra_get_sku_override(void)
+{
+	return sku_override;
+}
 
 static int __init tegra_vpr_arg(char *options)
 {
@@ -820,6 +597,21 @@ int get_tegra_uart_debug_port_id(void)
 }
 __setup("debug_uartport=", tegra_debug_uartport);
 
+static int __init tegra_image_type(char *options)
+{
+	if (!strcmp(options, "RCK"))
+		board_image_type = rck_image;
+
+	return 0;
+}
+
+enum image_type get_tegra_image_type(void)
+{
+	return board_image_type;
+}
+
+__setup("image=", tegra_image_type);
+
 static int __init tegra_audio_codec_type(char *info)
 {
 	char *p = info;
@@ -840,11 +632,7 @@ __setup("audio_codec=", tegra_audio_codec_type);
 
 void tegra_get_board_info(struct board_info *bi)
 {
-#if 0
 	bi->board_id = (system_serial_high >> 16) & 0xFFFF;
-#else
-	bi->board_id = 0x0C5B;
-#endif
 	bi->sku = (system_serial_high) & 0xFFFF;
 	bi->fab = (system_serial_low >> 24) & 0xFF;
 	bi->major_revision = (system_serial_low >> 16) & 0xFF;
@@ -920,7 +708,45 @@ int tegra_get_modem_id(void)
 
 __setup("modem_id=", tegra_modem_id);
 
+static int __init tegra_commchip_id(char *id)
+{
+	char *p = id;
 
+	if (get_option(&p, &commchip_id) != 1)
+		return 0;
+	return 1;
+}
+
+#ifdef CONFIG_ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
+static char *last_off_event = "NULL";
+static int __init pmic_last_off_event(char *opt)
+{
+	if (!opt || !*opt || *opt == '\0')
+		return 1;
+	pr_debug("ram_console: last_off_event=%s", opt);
+	last_off_event = opt;
+	return 1;
+}
+__setup("last_off_event=", pmic_last_off_event);
+
+static char *start_on_event = "NULL";
+static int __init pmic_start_on_event(char *opt)
+{
+	if (!opt || !*opt || *opt == '\0')
+		return 1;
+	pr_debug("ram_console: start_on_event=%s", opt);
+	start_on_event = opt;
+	return 1;
+}
+__setup("start_on_event=", pmic_start_on_event);
+#endif
+
+int tegra_get_commchip_id(void)
+{
+	return commchip_id;
+}
+
+__setup("commchip_id=", tegra_commchip_id);
 
 /*
  * Tegra has a protected aperture that prevents access by most non-CPU
@@ -989,28 +815,9 @@ out:
 	iounmap(to_io);
 }
 
-#ifdef CONFIG_TEGRA_SMMU_BASE_AT_E0000000
-#define FORCE_SMMU_BASE_FOR_TEGRA3_A01 1
-#else
-#define FORCE_SMMU_BASE_FOR_TEGRA3_A01 0
-#endif
-#if FORCE_SMMU_BASE_FOR_TEGRA3_A01 ||  \
-	(defined(CONFIG_TEGRA_IOVMM_SMMU) && defined(CONFIG_ARCH_TEGRA_3x_SOC))
-/* Support for Tegra3 A01 chip mask that needs to have SMMU IOVA reside in
- * the upper half of 4GB IOVA space. A02 and after use the bottom 1GB and
- * do not need to reserve memory.
- */
-#define SUPPORT_SMMU_BASE_FOR_TEGRA3_A01
-#endif
-
 void __init tegra_reserve(unsigned long carveout_size, unsigned long fb_size,
 	unsigned long fb2_size)
 {
-#ifdef SUPPORT_SMMU_BASE_FOR_TEGRA3_A01
-	int smmu_reserved = 0;
-	struct tegra_smmu_window *smmu_window = tegra_smmu_window(0);
-#endif
-
 	if (carveout_size) {
 		tegra_carveout_start = memblock_end_of_DRAM() - carveout_size;
 		if (memblock_remove(tegra_carveout_start, carveout_size)) {
@@ -1056,33 +863,6 @@ void __init tegra_reserve(unsigned long carveout_size, unsigned long fb_size,
 	if (tegra_carveout_size && tegra_carveout_start < tegra_grhost_aperture)
 		tegra_grhost_aperture = tegra_carveout_start;
 
-#ifdef SUPPORT_SMMU_BASE_FOR_TEGRA3_A01
-	if (!smmu_window) {
-		pr_err("No SMMU resource\n");
-	} else {
-		size_t smmu_window_size;
-
-		if (FORCE_SMMU_BASE_FOR_TEGRA3_A01 ||
-			(tegra_get_chipid() == TEGRA_CHIPID_TEGRA3 &&
-			tegra_get_revision() == TEGRA_REVISION_A01)) {
-			smmu_window->start = TEGRA_SMMU_BASE_TEGRA3_A01;
-			smmu_window->end   = TEGRA_SMMU_BASE_TEGRA3_A01 +
-						TEGRA_SMMU_SIZE_TEGRA3_A01 - 1;
-		}
-		smmu_window_size = smmu_window->end + 1 - smmu_window->start;
-		if (smmu_window->start >= 0x80000000) {
-			if (memblock_reserve(smmu_window->start,
-						smmu_window_size))
-				pr_err(
-			"Failed to reserve SMMU I/O VA window %08lx@%08lx\n",
-				(unsigned long)smmu_window_size,
-				(unsigned long)smmu_window->start);
-			else
-				smmu_reserved = 1;
-		}
-	}
-#endif
-
 	if (tegra_lp0_vec_size &&
 	   (tegra_lp0_vec_start < memblock_end_of_DRAM())) {
 		if (memblock_reserve(tegra_lp0_vec_start, tegra_lp0_vec_size)) {
@@ -1094,14 +874,6 @@ void __init tegra_reserve(unsigned long carveout_size, unsigned long fb_size,
 		tegra_lp0_vec_relocate = false;
 	} else
 		tegra_lp0_vec_relocate = true;
-
-	if (nvdumper_reserved) {
-		if (memblock_reserve(nvdumper_reserved, NVDUMPER_RESERVED_LEN)) {
-			pr_err("Failed to reserve nvdumper page %08lx@%08lx\n",
-			       nvdumper_reserved, NVDUMPER_RESERVED_LEN);
-			nvdumper_reserved = 0;
-		}
-	}
 
 	/*
 	 * We copy the bootloader's framebuffer to the framebuffer allocated
@@ -1144,18 +916,73 @@ void __init tegra_reserve(unsigned long carveout_size, unsigned long fb_size,
 		tegra_vpr_start,
 		tegra_vpr_size ?
 			tegra_vpr_start + tegra_vpr_size - 1 : 0);
-
-	if (nvdumper_reserved) {
-		pr_info("Nvdumper:               %08lx - %08lx\n",
-			nvdumper_reserved,
-			nvdumper_reserved + NVDUMPER_RESERVED_LEN);
-	}
-
-#ifdef SUPPORT_SMMU_BASE_FOR_TEGRA3_A01
-	if (smmu_reserved)
-		pr_info("SMMU:                   %08lx - %08lx\n",
-			smmu_window->start, smmu_window->end);
+#if defined(CONFIG_HTC_PROJECT)
+	nvdumper_reserve_init();
 #endif
+}
+
+static struct resource ram_console_resources[] = {
+	{
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+#ifdef CONFIG_ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
+#define PMIC_STATUS_MAX 100
+static char pmic_status_buffer[PMIC_STATUS_MAX] = {0};
+static struct ram_console_platform_data console_data = {
+	.bootinfo	= pmic_status_buffer,
+};
+#endif
+
+static struct platform_device ram_console_device = {
+	.name 		= "ram_console",
+	.id 		= -1,
+	.num_resources	= ARRAY_SIZE(ram_console_resources),
+	.resource	= ram_console_resources,
+#ifdef CONFIG_ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
+	.dev		= {
+		.platform_data = &console_data,
+	},
+#endif
+};
+
+void __init tegra_ram_console_debug_reserve(unsigned long ram_console_size)
+{
+	struct resource *res;
+	long ret;
+
+	res = platform_get_resource(&ram_console_device, IORESOURCE_MEM, 0);
+	if (!res)
+		goto fail;
+	res->start = memblock_end_of_DRAM() - ram_console_size;
+	res->end = res->start + ram_console_size - 1;
+	ret = memblock_remove(res->start, ram_console_size);
+	if (ret)
+		goto fail;
+
+	return;
+
+fail:
+	ram_console_device.resource = NULL;
+	ram_console_device.num_resources = 0;
+	pr_err("Failed to reserve memory block for ram console\n");
+}
+
+void __init tegra_ram_console_debug_init(void)
+{
+	int err;
+
+#ifdef CONFIG_ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
+	snprintf(pmic_status_buffer, sizeof(pmic_status_buffer),
+		"start_on_event=%s, last_off_event=%s\n",
+		start_on_event, last_off_event);
+#endif
+
+	err = platform_device_register(&ram_console_device);
+	if (err) {
+		pr_err("%s: ram console registration failed (%d)!\n", __func__, err);
+	}
 }
 
 void __init tegra_release_bootloader_fb(void)
@@ -1233,7 +1060,7 @@ static void cpufreq_read_governor_param(char *param_path, char *name, char *valu
 
 	sprintf(buf, CPUFREQ_GOV_PARAM, param_path, name);
 	gov_param = filp_open(buf, O_RDONLY, 0);
-	if (gov_param != NULL) {
+	if (!IS_ERR_OR_NULL(gov_param)) {
 		if (gov_param->f_op != NULL &&
 			gov_param->f_op->read != NULL)
 			gov_param->f_op->read(gov_param,
@@ -1263,35 +1090,7 @@ static void set_governor_param(char *param_path, char *name, char *value)
 
 	sprintf(buf, CPUFREQ_GOV_PARAM, param_path, name);
 	gov_param = filp_open(buf, O_RDWR, 0);
-	if (gov_param != NULL) {
-		if (gov_param->f_op != NULL &&
-			gov_param->f_op->write != NULL)
-			gov_param->f_op->write(gov_param,
-					value,
-					strlen(value),
-					&offset);
-		else
-			pr_err("f_op might be null\n");
-		
-		filp_close(gov_param, NULL);
-	}
-	set_fs(old_fs);
-}
-
-static void set_sysfs_param(char *param_path, char *name, char *value)
-{
-	struct file *gov_param = NULL;
-	mm_segment_t old_fs;
-	static char buf[128];
-	loff_t offset = 0;
-
-	/* change to KERNEL_DS address limit */
-	old_fs = get_fs();
-	set_fs(KERNEL_DS);
-
-	sprintf(buf, "%s%s", param_path, name);
-	gov_param = filp_open(buf, O_RDWR, 0);
-	if (gov_param != NULL) {
+	if (!IS_ERR_OR_NULL(gov_param)) {
 		if (gov_param->f_op != NULL &&
 			gov_param->f_op->write != NULL)
 			gov_param->f_op->write(gov_param,
@@ -1328,7 +1127,7 @@ void cpufreq_save_governor(void)
 	buf[127] = 0;
 	sprintf(buf, CPUFREQ_SYSFS_PLACE_HOLDER,0);
 	scaling_gov = filp_open(buf, O_RDONLY, 0);
-	if (scaling_gov != NULL) {
+	if (!IS_ERR_OR_NULL(scaling_gov)) {
 		if (scaling_gov->f_op != NULL &&
 			scaling_gov->f_op->read != NULL)
 			scaling_gov->f_op->read(scaling_gov,
@@ -1349,7 +1148,7 @@ void cpufreq_save_governor(void)
 		cpufreq_read_governor_param(INTERACTIVE_GOVERNOR, GO_MAXSPEED_LOAD,
 					saved_go_maxspeed_load);
 		cpufreq_read_governor_param(INTERACTIVE_GOVERNOR, MAX_BOOST,
-					saved_max_boost);	
+					saved_max_boost);
 		cpufreq_read_governor_param(INTERACTIVE_GOVERNOR, SUSTAIN_LOAD,
 					saved_sustain_load);
 	} else if (strncmp(cpufreq_gov_default, CONSERVATIVE_GOVERNOR,
@@ -1359,7 +1158,7 @@ void cpufreq_save_governor(void)
 		cpufreq_read_governor_param(CONSERVATIVE_GOVERNOR, DOWN_THRESHOLD,
 					saved_down_threshold);
 		cpufreq_read_governor_param(CONSERVATIVE_GOVERNOR, FREQ_STEP,
-					saved_freq_step);	
+					saved_freq_step);
 	} else {
 	}
 	set_fs(old_fs);
@@ -1369,21 +1168,14 @@ void cpufreq_restore_governor(void)
 {
 	cpufreq_set_governor(cpufreq_gov_default);
 
-
-	if (strncmp(cpufreq_gov_default, "ondemand",
-				strlen("ondemand")) == 0) {
-
-		set_sysfs_param("/sys/devices/system/cpu/cpu0/cpufreq/",
-				"scaling_max_freq", "1500000");
-
-	} else if (strncmp(cpufreq_gov_default,INTERACTIVE_GOVERNOR,
+	if (strncmp(cpufreq_gov_default,INTERACTIVE_GOVERNOR,
 				strlen(INTERACTIVE_GOVERNOR)) == 0) {
 		set_governor_param(INTERACTIVE_GOVERNOR, BOOST_FACTOR,
 					saved_boost_factor);
 		set_governor_param(INTERACTIVE_GOVERNOR, GO_MAXSPEED_LOAD,
 					saved_go_maxspeed_load);
 		set_governor_param(INTERACTIVE_GOVERNOR, MAX_BOOST,
-					saved_max_boost);	
+					saved_max_boost);
 		set_governor_param(INTERACTIVE_GOVERNOR, SUSTAIN_LOAD,
 					saved_sustain_load);
 	} else if (strncmp(cpufreq_gov_default, CONSERVATIVE_GOVERNOR,
@@ -1393,8 +1185,63 @@ void cpufreq_restore_governor(void)
 		set_governor_param(CONSERVATIVE_GOVERNOR, DOWN_THRESHOLD,
 					saved_down_threshold);
 		set_governor_param(CONSERVATIVE_GOVERNOR, FREQ_STEP,
-					saved_freq_step);	
+					saved_freq_step);
 	}
 }
 #endif /* TEGRA_CONSERVATIVE_GOV_ON_EARLY_SUSPEND ||
 		TEGRA_INTERACTIVE_GOV_ON_EARLY_SUSPEND*/
+
+
+#if defined(CONFIG_MEMORY_FOOTPRINT_DEBUGGING)
+static struct resource memory_footprint_resources[] = {
+	{
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+static struct platform_device memory_footprint_device = {
+	.name 		= "memory_footprint",
+	.id 		= -1,
+	.num_resources	= ARRAY_SIZE(memory_footprint_resources),
+	.resource	= memory_footprint_resources,
+};
+
+void __init htc_memory_footprint_space_reserve(unsigned long size)
+{
+	struct resource *res;
+	long ret;
+
+	pr_info("[MF] %s\n", __func__);
+
+	res = platform_get_resource(&memory_footprint_device, IORESOURCE_MEM, 0);
+	if (!res) {
+		pr_err("[MF] Failed to find memory resource for memory footprint");
+		goto fail;
+	}
+
+	res->start = memblock_end_of_DRAM() - size;
+	res->end = res->start + size - 1;
+	ret = memblock_remove(res->start, size);
+	if (ret) {
+		pr_err("[MF] Failed to reserve memory block for memory footprint\n");
+		goto fail;
+	} else
+		pr_info("[MF] memory_footprint_space_reserve  start=%zx, end=%zx\n", res->start, res->end);
+
+	return;
+fail:
+	memory_footprint_device.resource = NULL;
+	memory_footprint_device.num_resources = 0;
+}
+
+void __init htc_memory_footprint_init(void)
+{
+	int err;
+
+	pr_info("[MF] %s\n", __func__);
+
+	err = platform_device_register(&memory_footprint_device);
+	if (err)
+		pr_err("[MF] %s: memory footprint registeration failed (%d)!\n", __func__, err);
+}
+#endif

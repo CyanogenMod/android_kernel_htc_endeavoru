@@ -1,9 +1,4 @@
-ifdef CONFIG_WL12XX
-#We will build cfg80211.ko at vendor/ti/wlan/
-#obj-$(CONFIG_CFG80211) += cfg80211.o
-else
 obj-$(CONFIG_CFG80211) += cfg80211.o
-endif
 obj-$(CONFIG_LIB80211) += lib80211.o
 obj-$(CONFIG_LIB80211_CRYPT_WEP) += lib80211_crypt_wep.o
 obj-$(CONFIG_LIB80211_CRYPT_CCMP) += lib80211_crypt_ccmp.o

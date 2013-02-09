@@ -24,7 +24,8 @@
 #include <linux/workqueue.h>
 #include <linux/freezer.h>
 #include <linux/akm8975.h>
-#include<linux/earlysuspend.h>
+#include <linux/earlysuspend.h>
+#include <mach/mfootprint.h>
 
 #define DEBUG 0
 #define MAX_FAILURE_COUNT 3
@@ -579,7 +580,7 @@ akmd_ioctl(struct file *file, unsigned int cmd,
 
 	char msg[RBUFF_SIZE_8975 + 1] = "", rwbuf[RBUFF_SIZE_8975 + 1] = "";
 	int ret = -1, status;
-	short mode, value[12], delay;
+	short mode = 0, value[12] = {0}, delay = 0;
 	short layouts[4][3][3];
 	int i, j, k;
 
@@ -754,15 +755,21 @@ static irqreturn_t akm8975_interrupt(int irq, void *dev_id)
 static void akm8975_early_suspend(struct early_suspend *handler)
 {
 	DIF("%s", __func__);
-
+	MF_DEBUG("0008000");
 	if (!atomic_read(&PhoneOn_flag)) {
+	MF_DEBUG("0008001");
 		atomic_set(&suspend_flag, 1);
+	MF_DEBUG("0008002");
 		atomic_set(&reserve_open_flag, atomic_read(&open_flag));
+	MF_DEBUG("0008003");
 		atomic_set(&open_flag, 0);
+	MF_DEBUG("0008004");
 		wake_up(&open_wq);
+	MF_DEBUG("0008005");
 		disable_irq(this_client->irq);
 	} else
 		D("AKM8975 akm8975_early_suspend: PhoneOn_flag is set\n");
+	MF_DEBUG("0008006");
 }
 
 static void akm8975_early_resume(struct early_suspend *handler)

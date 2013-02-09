@@ -17,10 +17,10 @@
 #include <linux/buffer_head.h>
 #include <linux/rcupdate.h>
 #include <linux/rculist_bl.h>
+#include <linux/completion.h>
 
 #define DIO_WAIT	0x00000010
 #define DIO_METADATA	0x00000020
-#define DIO_ALL		0x00000100
 
 struct gfs2_log_operations;
 struct gfs2_log_element;
@@ -163,7 +163,6 @@ struct gfs2_glock_operations {
 	int (*go_dump)(struct seq_file *seq, const struct gfs2_glock *gl);
 	void (*go_callback) (struct gfs2_glock *gl);
 	const int go_type;
-	const unsigned long go_min_hold_time;
 	const unsigned long go_flags;
 #define GLOF_ASPACE 1
 };
@@ -200,6 +199,8 @@ enum {
 	GLF_INITIAL			= 10,
 	GLF_FROZEN			= 11,
 	GLF_QUEUED			= 12,
+	GLF_LRU				= 13,
+	GLF_OBJECT			= 14, /* Used only for tracing */
 };
 
 struct gfs2_glock {
@@ -219,6 +220,7 @@ struct gfs2_glock {
 
 	unsigned int gl_hash;
 	unsigned long gl_demote_time; /* time of first demote request */
+	long gl_hold_time;
 	struct list_head gl_holders;
 
 	const struct gfs2_glock_operations *gl_ops;
@@ -234,6 +236,7 @@ struct gfs2_glock {
 
 	struct list_head gl_ail_list;
 	atomic_t gl_ail_count;
+	atomic_t gl_revokes;
 	struct delayed_work gl_work;
 	struct work_struct gl_delete;
 	struct rcu_head gl_rcu;
@@ -282,6 +285,7 @@ struct gfs2_inode {
 	u64 i_goal;	/* goal block for allocations */
 	struct rw_semaphore i_rw_mutex;
 	struct list_head i_trunc_list;
+	__be64 *i_hash_cache;
 	u32 i_entries;
 	u32 i_diskflags;
 	u8 i_height;
@@ -374,8 +378,6 @@ struct gfs2_ail {
 	unsigned int ai_first;
 	struct list_head ai_ail1_list;
 	struct list_head ai_ail2_list;
-
-	u64 ai_sync_gen;
 };
 
 struct gfs2_journal_extent {
@@ -488,7 +490,6 @@ struct gfs2_sb_host {
 
 	char sb_lockproto[GFS2_LOCKNAME_LEN];
 	char sb_locktable[GFS2_LOCKNAME_LEN];
-	u8 sb_uuid[16];
 };
 
 /*
@@ -547,6 +548,7 @@ struct gfs2_sbd {
 	struct gfs2_glock *sd_trans_gl;
 	wait_queue_head_t sd_glock_wait;
 	atomic_t sd_glock_disposal;
+	struct completion sd_locking_init;
 
 	/* Inode Stuff */
 
@@ -654,7 +656,6 @@ struct gfs2_sbd {
 	spinlock_t sd_ail_lock;
 	struct list_head sd_ail1_list;
 	struct list_head sd_ail2_list;
-	u64 sd_ail_sync_gen;
 
 	/* Replay stuff */
 

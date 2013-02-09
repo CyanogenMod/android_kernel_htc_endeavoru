@@ -35,7 +35,6 @@
 #define MXC_CPU_MX50		50
 #define MXC_CPU_MX51		51
 #define MXC_CPU_MX53		53
-#define MXC_CPU_MXC91231	91231
 
 #define IMX_CHIP_REVISION_1_0		0x10
 #define IMX_CHIP_REVISION_1_1		0x11
@@ -69,7 +68,7 @@
 extern unsigned int __mxc_cpu_type;
 #endif
 
-#ifdef CONFIG_ARCH_MX1
+#ifdef CONFIG_SOC_IMX1
 # ifdef mxc_cpu_type
 #  undef mxc_cpu_type
 #  define mxc_cpu_type __mxc_cpu_type
@@ -81,7 +80,7 @@ extern unsigned int __mxc_cpu_type;
 # define cpu_is_mx1()		(0)
 #endif
 
-#ifdef CONFIG_MACH_MX21
+#ifdef CONFIG_SOC_IMX21
 # ifdef mxc_cpu_type
 #  undef mxc_cpu_type
 #  define mxc_cpu_type __mxc_cpu_type
@@ -93,7 +92,7 @@ extern unsigned int __mxc_cpu_type;
 # define cpu_is_mx21()		(0)
 #endif
 
-#ifdef CONFIG_ARCH_MX25
+#ifdef CONFIG_SOC_IMX25
 # ifdef mxc_cpu_type
 #  undef mxc_cpu_type
 #  define mxc_cpu_type __mxc_cpu_type
@@ -105,7 +104,7 @@ extern unsigned int __mxc_cpu_type;
 # define cpu_is_mx25()		(0)
 #endif
 
-#ifdef CONFIG_MACH_MX27
+#ifdef CONFIG_SOC_IMX27
 # ifdef mxc_cpu_type
 #  undef mxc_cpu_type
 #  define mxc_cpu_type __mxc_cpu_type
@@ -177,18 +176,6 @@ extern unsigned int __mxc_cpu_type;
 # define cpu_is_mx53()		(0)
 #endif
 
-#ifdef CONFIG_ARCH_MXC91231
-# ifdef mxc_cpu_type
-#  undef mxc_cpu_type
-#  define mxc_cpu_type __mxc_cpu_type
-# else
-#  define mxc_cpu_type MXC_CPU_MXC91231
-# endif
-# define cpu_is_mxc91231()	(mxc_cpu_type == MXC_CPU_MXC91231)
-#else
-# define cpu_is_mxc91231()	(0)
-#endif
-
 #ifndef __ASSEMBLY__
 
 struct cpu_op {
@@ -207,14 +194,7 @@ enum mxc_cpu_pwr_mode {
 extern struct cpu_op *(*get_cpu_op)(int *op);
 #endif
 
-#if defined(CONFIG_ARCH_MX3) || defined(CONFIG_ARCH_MX2)
-/* These are deprecated, use mx[23][157]_setup_weimcs instead. */
-#define CSCR_U(n) (IO_ADDRESS(WEIM_BASE_ADDR + n * 0x10))
-#define CSCR_L(n) (IO_ADDRESS(WEIM_BASE_ADDR + n * 0x10 + 0x4))
-#define CSCR_A(n) (IO_ADDRESS(WEIM_BASE_ADDR + n * 0x10 + 0x8))
-#endif
-
-#define cpu_is_mx3()	(cpu_is_mx31() || cpu_is_mx35() || cpu_is_mxc91231())
+#define cpu_is_mx3()	(cpu_is_mx31() || cpu_is_mx35())
 #define cpu_is_mx2()	(cpu_is_mx21() || cpu_is_mx27())
 
 #endif /*  __ASM_ARCH_MXC_H__ */

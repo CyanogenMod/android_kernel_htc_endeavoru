@@ -749,16 +749,15 @@ unsigned long apply_slack(struct timer_list *timer, unsigned long expires)
 	unsigned long expires_limit, mask;
 	int bit;
 
-	expires_limit = expires;
-
 	if (timer->slack >= 0) {
 		expires_limit = expires + timer->slack;
 	} else {
-		unsigned long now = jiffies;
+		long delta = expires - jiffies;
 
-		/* No slack, if already expired else auto slack 0.4% */
-		if (time_after(expires, now))
-			expires_limit = expires + (expires - now)/256;
+		if (delta < 256)
+			return expires;
+
+		expires_limit = expires + delta / 256;
 	}
 	mask = expires ^ expires_limit;
 	if (mask == 0)
@@ -795,6 +794,8 @@ unsigned long apply_slack(struct timer_list *timer, unsigned long expires)
  */
 int mod_timer(struct timer_list *timer, unsigned long expires)
 {
+	expires = apply_slack(timer, expires);
+
 	/*
 	 * This is a common optimization triggered by the
 	 * networking code - if the timer is re-modified
@@ -802,8 +803,6 @@ int mod_timer(struct timer_list *timer, unsigned long expires)
 	 */
 	if (timer_pending(timer) && timer->expires == expires)
 		return 1;
-
-	expires = apply_slack(timer, expires);
 
 	return __mod_timer(timer, expires, false, TIMER_NOT_PINNED);
 }
@@ -1598,6 +1597,7 @@ static int __cpuinit init_timers_cpu(int cpu)
 	int j;
 	struct tvec_base *base;
 	static char __cpuinitdata tvec_base_done[NR_CPUS];
+	unsigned long flags;
 
 	if (!tvec_base_done[cpu]) {
 		static char boot_done;
@@ -1629,12 +1629,13 @@ static int __cpuinit init_timers_cpu(int cpu)
 			boot_done = 1;
 			base = &boot_tvec_bases;
 		}
+		spin_lock_init(&base->lock);
 		tvec_base_done[cpu] = 1;
 	} else {
 		base = per_cpu(tvec_bases, cpu);
 	}
 
-	spin_lock_init(&base->lock);
+	spin_lock_irqsave(&base->lock, flags);
 
 	for (j = 0; j < TVN_SIZE; j++) {
 		INIT_LIST_HEAD(base->tv5.vec + j);
@@ -1647,6 +1648,9 @@ static int __cpuinit init_timers_cpu(int cpu)
 
 	base->timer_jiffies = jiffies;
 	base->next_timer = base->timer_jiffies;
+
+	spin_unlock_irqrestore(&base->lock, flags);
+
 	return 0;
 }
 

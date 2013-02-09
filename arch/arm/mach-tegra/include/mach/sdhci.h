@@ -20,12 +20,23 @@
 #include <linux/mmc/host.h>
 #include <asm/mach/mmc.h>
 
+/*
+ * MMC_OCR_1V8_MASK will be used in board sdhci file
+ * Example for cardhu it will be used in board-cardhu-sdhci.c
+ * for built_in = 0 devices enabling ocr_mask to MMC_OCR_1V8_MASK
+ * sets the voltage to 1.8V
+ */
+#define MMC_OCR_1V8_MASK    0x8
+
 struct tegra_sdhci_platform_data {
 	int cd_gpio;
 	int wp_gpio;
 	int power_gpio;
 	int is_8bit;
+	int pm_flags;
+	int pm_caps;
 	unsigned int max_clk_limit;
+	unsigned int ddr_clk_limit;
 	unsigned int tap_delay;
 	struct mmc_platform_data mmc_data;
 	int (*suspend_gpiocfg)(void);
@@ -70,4 +81,5 @@ static void inline disable_gpio_config(enum tegra_pingroup pg, int pin, enum teg
 	tegra_gpio_disable(pin);
 	gpio_free(pin);
 }
+
 #endif

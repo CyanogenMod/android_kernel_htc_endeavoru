@@ -1,6 +1,6 @@
 /*
  * arch/arm/mach-tegra/board-endeavoru-kbc.c
- * Keys configuration for Nvidia tegra3 enterprise platform.
+ * Keys configuration for Nvidia tegra3 endeavoru platform.
  *
  * Copyright (C) 2011 NVIDIA, Inc.
  *
@@ -30,8 +30,8 @@
 #include "board-endeavoru.h"
 #include "devices.h"
 
-#define ENTERPRISE_ROW_COUNT	3
-#define ENTERPRISE_COL_COUNT	3
+#define ENDEAVORU_ROW_COUNT	3
+#define ENDEAVORU_COL_COUNT	3
 
 static const u32 kbd_keymap[] = {
 	KEY(0, 0, KEY_POWER),
@@ -50,7 +50,7 @@ static const struct matrix_keymap_data keymap_data = {
 	.keymap_size	= ARRAY_SIZE(kbd_keymap),
 };
 
-static struct tegra_kbc_wake_key enterprise_wake_cfg[] = {
+static struct tegra_kbc_wake_key endeavoru_wake_cfg[] = {
 	[0] = {
 		.row = 0,
 		.col = 0,
@@ -69,30 +69,33 @@ static struct tegra_kbc_wake_key enterprise_wake_cfg[] = {
 	},
 };
 
-static struct tegra_kbc_platform_data enterprise_kbc_platform_data = {
-	.debounce_cnt = 20,
+static struct tegra_kbc_platform_data endeavoru_kbc_platform_data = {
+	.debounce_cnt = 20 * 32, /* 20 ms debaunce time */
 	.repeat_cnt = 1,
 	.scan_count = 30,
 	.wakeup = true,
 	.keymap_data = &keymap_data,
 	.wake_cnt = 4,
-	.wake_cfg = &enterprise_wake_cfg[0],
+	.wake_cfg = &endeavoru_wake_cfg[0],
+#ifdef CONFIG_ANDROID
+	.disable_ev_rep = true,
+#endif
 };
 
-int __init enterprise_kbc_init(void)
+int __init endeavoru_kbc_init(void)
 {
-	struct tegra_kbc_platform_data *data = &enterprise_kbc_platform_data;
+	struct tegra_kbc_platform_data *data = &endeavoru_kbc_platform_data;
 	int i;
-	tegra_kbc_device.dev.platform_data = &enterprise_kbc_platform_data;
+	tegra_kbc_device.dev.platform_data = &endeavoru_kbc_platform_data;
 	pr_info("Registering tegra-kbc\n");
 
 	BUG_ON((KBC_MAX_ROW + KBC_MAX_COL) > KBC_MAX_GPIO);
-	for (i = 0; i < ENTERPRISE_ROW_COUNT; i++) {
+	for (i = 0; i < ENDEAVORU_ROW_COUNT; i++) {
 		data->pin_cfg[i].num = i;
 		data->pin_cfg[i].is_row = true;
 		data->pin_cfg[i].en = true;
 	}
-	for (i = 0; i < ENTERPRISE_COL_COUNT; i++) {
+	for (i = 0; i < ENDEAVORU_COL_COUNT; i++) {
 		data->pin_cfg[i + KBC_PIN_GPIO_16].num = i;
 		data->pin_cfg[i + KBC_PIN_GPIO_16].en = true;
 	}

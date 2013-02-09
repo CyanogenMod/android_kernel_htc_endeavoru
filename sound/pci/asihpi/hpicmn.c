@@ -57,7 +57,7 @@ u16 hpi_validate_response(struct hpi_message *phm, struct hpi_response *phr)
 	}
 
 	if (phr->function != phm->function) {
-		HPI_DEBUG_LOG(ERROR, "header type %d invalid\n",
+		HPI_DEBUG_LOG(ERROR, "header function %d invalid\n",
 			phr->function);
 		return HPI_ERROR_INVALID_RESPONSE;
 	}
@@ -227,8 +227,9 @@ static unsigned int control_cache_alloc_check(struct hpi_control_cache *pC)
 			if (info->control_type) {
 				pC->p_info[info->control_index] = info;
 				cached++;
-			} else	/* dummy cache entry */
+			} else {	/* dummy cache entry */
 				pC->p_info[info->control_index] = NULL;
+			}
 
 			byte_count += info->size_in32bit_words * 4;
 
@@ -298,7 +299,7 @@ struct pad_ofs_size {
 	unsigned int field_size;
 };
 
-static struct pad_ofs_size pad_desc[] = {
+static const struct pad_ofs_size pad_desc[] = {
 	HPICMN_PAD_OFS_AND_SIZE(c_channel),	/* HPI_PAD_CHANNEL_NAME */
 	HPICMN_PAD_OFS_AND_SIZE(c_artist),	/* HPI_PAD_ARTIST */
 	HPICMN_PAD_OFS_AND_SIZE(c_title),	/* HPI_PAD_TITLE */
@@ -314,8 +315,7 @@ short hpi_check_control_cache(struct hpi_control_cache *p_cache,
 	short found = 1;
 	struct hpi_control_cache_info *pI;
 	struct hpi_control_cache_single *pC;
-	struct hpi_control_cache_pad *p_pad;
-
+	size_t response_size;
 	if (!find_control(phm->obj_index, p_cache, &pI)) {
 		HPI_DEBUG_LOG(VERBOSE,
 			"HPICMN find_control() failed for adap %d\n",
@@ -325,11 +325,15 @@ short hpi_check_control_cache(struct hpi_control_cache *p_cache,
 
 	phr->error = 0;
 
+	/* set the default response size */
+	response_size =
+		sizeof(struct hpi_response_header) +
+		sizeof(struct hpi_control_res);
+
 	/* pC is the default cached control strucure. May be cast to
 	   something else in the following switch statement.
 	 */
 	pC = (struct hpi_control_cache_single *)pI;
-	p_pad = (struct hpi_control_cache_pad *)pI;
 
 	switch (pI->control_type) {
 
@@ -528,9 +532,7 @@ short hpi_check_control_cache(struct hpi_control_cache *p_cache,
 		pI->control_index, pI->control_type, phm->u.c.attribute);
 
 	if (found)
-		phr->size =
-			sizeof(struct hpi_response_header) +
-			sizeof(struct hpi_control_res);
+		phr->size = (u16)response_size;
 
 	return found;
 }
@@ -617,6 +619,10 @@ void hpi_cmn_control_cache_sync_to_msg(struct hpi_control_cache *p_cache,
 	}
 }
 
+/** Allocate control cache.
+
+\return Cache pointer, or NULL if allocation fails.
+*/
 struct hpi_control_cache *hpi_alloc_control_cache(const u32 control_count,
 	const u32 size_in_bytes, u8 *p_dsp_control_buffer)
 {
@@ -625,13 +631,12 @@ struct hpi_control_cache *hpi_alloc_control_cache(const u32 control_count,
 	if (!p_cache)
 		return NULL;
 
-	p_cache->p_info =
-		kmalloc(sizeof(*p_cache->p_info) * control_count, GFP_KERNEL);
+	p_cache->p_info = kzalloc(sizeof(*p_cache->p_info) * control_count,
+				  GFP_KERNEL);
 	if (!p_cache->p_info) {
 		kfree(p_cache);
 		return NULL;
 	}
-	memset(p_cache->p_info, 0, sizeof(*p_cache->p_info) * control_count);
 	p_cache->cache_size_in_bytes = size_in_bytes;
 	p_cache->control_count = control_count;
 	p_cache->p_cache = p_dsp_control_buffer;
@@ -667,7 +672,6 @@ static void subsys_message(struct hpi_message *phm, struct hpi_response *phr)
 		phr->u.s.num_adapters = adapters.gw_num_adapters;
 		break;
 	case HPI_SUBSYS_CREATE_ADAPTER:
-	case HPI_SUBSYS_DELETE_ADAPTER:
 		break;
 	default:
 		phr->error = HPI_ERROR_INVALID_FUNC;
@@ -678,7 +682,7 @@ static void subsys_message(struct hpi_message *phm, struct hpi_response *phr)
 void HPI_COMMON(struct hpi_message *phm, struct hpi_response *phr)
 {
 	switch (phm->type) {
-	case HPI_TYPE_MESSAGE:
+	case HPI_TYPE_REQUEST:
 		switch (phm->object) {
 		case HPI_OBJ_SUBSYSTEM:
 			subsys_message(phm, phr);

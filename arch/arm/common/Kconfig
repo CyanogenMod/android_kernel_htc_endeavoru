@@ -7,7 +7,7 @@ config ARM_VIC
 config ARM_VIC_NR
 	int
 	default 4 if ARCH_S5PV210
-	default 3 if ARCH_S5P6442 || ARCH_S5PC100
+	default 3 if ARCH_S5PC100
 	default 2
 	depends on ARM_VIC
 	help
@@ -48,12 +48,11 @@ config FIQ_DEBUGGER
 	bool "FIQ Mode Serial Debugger"
 	select FIQ
 	select FIQ_GLUE
-	select KERNEL_DEBUGGER_CORE
 	default n
 	help
 	  The FIQ serial debugger can accept commands even when the
 	  kernel is unresponsive due to being stuck with interrupts
-	  disabled.  Depends on the kernel debugger core in drivers/misc.
+	  disabled.
 
 
 config FIQ_DEBUGGER_NO_SLEEP

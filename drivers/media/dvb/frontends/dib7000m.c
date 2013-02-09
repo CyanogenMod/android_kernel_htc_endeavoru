@@ -11,6 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
+#include <linux/mutex.h>
 
 #include "dvb_frontend.h"
 
@@ -50,6 +51,12 @@ struct dib7000m_state {
 	u16 revision;
 
 	u8 agc_state;
+
+	/* for the I2C transfer */
+	struct i2c_msg msg[2];
+	u8 i2c_write_buffer[4];
+	u8 i2c_read_buffer[2];
+	struct mutex i2c_buffer_lock;
 };
 
 enum dib7000m_power_mode {
@@ -64,29 +71,59 @@ enum dib7000m_power_mode {
 
 static u16 dib7000m_read_word(struct dib7000m_state *state, u16 reg)
 {
-	u8 wb[2] = { (reg >> 8) | 0x80, reg & 0xff };
-	u8 rb[2];
-	struct i2c_msg msg[2] = {
-		{ .addr = state->i2c_addr >> 1, .flags = 0,        .buf = wb, .len = 2 },
-		{ .addr = state->i2c_addr >> 1, .flags = I2C_M_RD, .buf = rb, .len = 2 },
-	};
+	u16 ret;
 
-	if (i2c_transfer(state->i2c_adap, msg, 2) != 2)
+	if (mutex_lock_interruptible(&state->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
+		return 0;
+	}
+
+	state->i2c_write_buffer[0] = (reg >> 8) | 0x80;
+	state->i2c_write_buffer[1] = reg & 0xff;
+
+	memset(state->msg, 0, 2 * sizeof(struct i2c_msg));
+	state->msg[0].addr = state->i2c_addr >> 1;
+	state->msg[0].flags = 0;
+	state->msg[0].buf = state->i2c_write_buffer;
+	state->msg[0].len = 2;
+	state->msg[1].addr = state->i2c_addr >> 1;
+	state->msg[1].flags = I2C_M_RD;
+	state->msg[1].buf = state->i2c_read_buffer;
+	state->msg[1].len = 2;
+
+	if (i2c_transfer(state->i2c_adap, state->msg, 2) != 2)
 		dprintk("i2c read error on %d",reg);
 
-	return (rb[0] << 8) | rb[1];
+	ret = (state->i2c_read_buffer[0] << 8) | state->i2c_read_buffer[1];
+	mutex_unlock(&state->i2c_buffer_lock);
+
+	return ret;
 }
 
 static int dib7000m_write_word(struct dib7000m_state *state, u16 reg, u16 val)
 {
-	u8 b[4] = {
-		(reg >> 8) & 0xff, reg & 0xff,
-		(val >> 8) & 0xff, val & 0xff,
-	};
-	struct i2c_msg msg = {
-		.addr = state->i2c_addr >> 1, .flags = 0, .buf = b, .len = 4
-	};
-	return i2c_transfer(state->i2c_adap, &msg, 1) != 1 ? -EREMOTEIO : 0;
+	int ret;
+
+	if (mutex_lock_interruptible(&state->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
+		return -EINVAL;
+	}
+
+	state->i2c_write_buffer[0] = (reg >> 8) & 0xff;
+	state->i2c_write_buffer[1] = reg & 0xff;
+	state->i2c_write_buffer[2] = (val >> 8) & 0xff;
+	state->i2c_write_buffer[3] = val & 0xff;
+
+	memset(&state->msg[0], 0, sizeof(struct i2c_msg));
+	state->msg[0].addr = state->i2c_addr >> 1;
+	state->msg[0].flags = 0;
+	state->msg[0].buf = state->i2c_write_buffer;
+	state->msg[0].len = 4;
+
+	ret = (i2c_transfer(state->i2c_adap, state->msg, 1) != 1 ?
+			-EREMOTEIO : 0);
+	mutex_unlock(&state->i2c_buffer_lock);
+	return ret;
 }
 static void dib7000m_write_tab(struct dib7000m_state *state, u16 *buf)
 {
@@ -1370,6 +1407,7 @@ struct dvb_frontend * dib7000m_attach(struct i2c_adapter *i2c_adap, u8 i2c_addr,
 	demod                   = &st->demod;
 	demod->demodulator_priv = st;
 	memcpy(&st->demod.ops, &dib7000m_ops, sizeof(struct dvb_frontend_ops));
+	mutex_init(&st->i2c_buffer_lock);
 
 	st->timf_default = cfg->bw->timf;
 

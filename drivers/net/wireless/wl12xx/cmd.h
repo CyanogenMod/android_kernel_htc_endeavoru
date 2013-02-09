@@ -32,7 +32,9 @@ struct acx_header;
 int wl1271_cmd_send(struct wl1271 *wl, u16 id, void *buf, size_t len,
 		    size_t res_len);
 int wl1271_cmd_general_parms(struct wl1271 *wl);
+int wl128x_cmd_general_parms(struct wl1271 *wl);
 int wl1271_cmd_radio_parms(struct wl1271 *wl);
+int wl128x_cmd_radio_parms(struct wl1271 *wl);
 int wl1271_cmd_ext_radio_parms(struct wl1271 *wl);
 int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type);
 int wl1271_cmd_test(struct wl1271 *wl, void *buf, size_t buf_len, u8 answer);
@@ -68,6 +70,9 @@ int wl1271_cmd_start_bss(struct wl1271 *wl);
 int wl1271_cmd_stop_bss(struct wl1271 *wl);
 int wl1271_cmd_add_sta(struct wl1271 *wl, struct ieee80211_sta *sta, u8 hlid);
 int wl1271_cmd_remove_sta(struct wl1271 *wl, u8 hlid);
+int wl12xx_cmd_config_fwlog(struct wl1271 *wl);
+int wl12xx_cmd_start_fwlog(struct wl1271 *wl);
+int wl12xx_cmd_stop_fwlog(struct wl1271 *wl);
 
 enum wl1271_commands {
 	CMD_INTERROGATE     = 1,    /*use this to read information elements*/
@@ -105,6 +110,9 @@ enum wl1271_commands {
 	CMD_START_PERIODIC_SCAN      = 50,
 	CMD_STOP_PERIODIC_SCAN       = 51,
 	CMD_SET_STA_STATE            = 52,
+	CMD_CONFIG_FWLOGGER          = 53,
+	CMD_START_FWLOGGER           = 54,
+	CMD_STOP_FWLOGGER            = 55,
 
 	/* AP mode commands */
 	CMD_BSS_START                = 60,
@@ -415,6 +423,21 @@ struct wl1271_general_parms_cmd {
 	u8 padding[3];
 } __packed;
 
+struct wl128x_general_parms_cmd {
+	struct wl1271_cmd_header header;
+
+	struct wl1271_cmd_test_header test;
+
+	struct wl128x_ini_general_params general_params;
+
+	u8 sr_debug_table[WL1271_INI_MAX_SMART_REFLEX_PARAM];
+	u8 sr_sen_n_p;
+	u8 sr_sen_n_p_gain;
+	u8 sr_sen_nrn;
+	u8 sr_sen_prn;
+	u8 padding[3];
+} __packed;
+
 struct wl1271_radio_parms_cmd {
 	struct wl1271_cmd_header header;
 
@@ -429,6 +452,23 @@ struct wl1271_radio_parms_cmd {
 	u8 padding2;
 	struct wl1271_ini_fem_params_5 dyn_params_5;
 	u8 padding3[2];
+} __packed;
+
+struct wl128x_radio_parms_cmd {
+	struct wl1271_cmd_header header;
+
+	struct wl1271_cmd_test_header test;
+
+	/* Static radio parameters */
+	struct wl128x_ini_band_params_2 static_params_2;
+	struct wl128x_ini_band_params_5 static_params_5;
+
+	u8 fem_vendor_and_options;
+
+	/* Dynamic radio parameters */
+	struct wl128x_ini_fem_params_2 dyn_params_2;
+	u8 padding2;
+	struct wl128x_ini_fem_params_5 dyn_params_5;
 } __packed;
 
 struct wl1271_ext_radio_parms_cmd {
@@ -539,6 +579,62 @@ struct wl1271_cmd_remove_sta {
 	u8 reason_opcode;
 	u8 send_deauth_flag;
 	u8 padding1;
+} __packed;
+
+/*
+ * Continuous mode - packets are transferred to the host periodically
+ * via the data path.
+ * On demand - Log messages are stored in a cyclic buffer in the
+ * firmware, and only transferred to the host when explicitly requested
+ */
+enum wl12xx_fwlogger_log_mode {
+	WL12XX_FWLOG_CONTINUOUS,
+	WL12XX_FWLOG_ON_DEMAND
+};
+
+/* Include/exclude timestamps from the log messages */
+enum wl12xx_fwlogger_timestamp {
+	WL12XX_FWLOG_TIMESTAMP_DISABLED,
+	WL12XX_FWLOG_TIMESTAMP_ENABLED
+};
+
+/*
+ * Logs can be routed to the debug pinouts (where available), to the host bus
+ * (SDIO/SPI), or dropped
+ */
+enum wl12xx_fwlogger_output {
+	WL12XX_FWLOG_OUTPUT_NONE,
+	WL12XX_FWLOG_OUTPUT_DBG_PINS,
+	WL12XX_FWLOG_OUTPUT_HOST,
+};
+
+struct wl12xx_cmd_config_fwlog {
+	struct wl1271_cmd_header header;
+
+	/* See enum wl12xx_fwlogger_log_mode */
+	u8 logger_mode;
+
+	/* Minimum log level threshold */
+	u8 log_severity;
+
+	/* Include/exclude timestamps from the log messages */
+	u8 timestamp;
+
+	/* See enum wl1271_fwlogger_output */
+	u8 output;
+
+	/* Regulates the frequency of log messages */
+	u8 threshold;
+
+	u8 padding[3];
+} __packed;
+
+struct wl12xx_cmd_start_fwlog {
+	struct wl1271_cmd_header header;
+} __packed;
+
+struct wl12xx_cmd_stop_fwlog {
+	struct wl1271_cmd_header header;
 } __packed;
 
 #endif /* __WL1271_CMD_H__ */

@@ -45,12 +45,23 @@
 
 #include <media/rawchip/linux_rawchip.h>
 #include <media/rawchip/Yushan_API.h>
+#include <media/rawchip/Yushan_HTC_Functions.h>
 
 struct rawchip_ctrl {
 	struct tegra_camera_rawchip_info *pdata;
+	struct cdev   cdev;
+
+	struct mutex raw_ioctl_lock;
+	int rawchip_init;
+
+	int error_interrupt_times[TOTAL_INTERRUPT_COUNT];
+	int total_error_interrupt_times;
 };
 
+
+
 struct rawchip_sensor_data {
+	const char *sensor_name;
 	uint8_t datatype;
 	uint8_t lane_cnt;
 	uint32_t pixel_clk;
@@ -63,17 +74,36 @@ struct rawchip_sensor_data {
 	uint16_t fullsize_line_length_pclk;
 	uint16_t fullsize_frame_length_lines;
 	int mirror_flip;
+	uint16_t x_addr_start;
+	uint16_t y_addr_start;
+	uint16_t x_addr_end;
+	uint16_t y_addr_end;
+	uint16_t x_even_inc;
+	uint16_t x_odd_inc;
+	uint16_t y_even_inc;
+	uint16_t y_odd_inc;
+	uint8_t binning_rawchip;
+	uint8_t use_rawchip;/* HTC_START_Simon.Ti_Liu_20120702_Enhance_bypass */
 };
 
-int rawchip_vreg_enable(void);
-int Yushan_common_init(void);
-int rawchip_vreg_disable(void);
+struct rawchip_id_info_t {
+	uint16_t rawchip_id_reg_addr;
+	uint32_t rawchip_id;
+};
+
+struct rawchip_info_t {
+	struct rawchip_id_info_t *rawchip_id_info;
+};
+
+struct yushan_int_t {
+	spinlock_t yushan_spin_lock;
+	wait_queue_head_t yushan_wait;
+};
+
 void rawchip_release(void);
 int rawchip_open_init(void);
-int rawchip_set_size(struct rawchip_sensor_data data);
-int Yushan_common_deinit(void);
+int rawchip_set_size(struct rawchip_sensor_data data, bool *clock_init_done);
 void tegra_rawchip_block_iotcl(bool_t);
 
-//XXX static inline void rawchip_dump_register(void) { Yushan_dump_register(); }
 
 #endif

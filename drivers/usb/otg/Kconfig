@@ -12,6 +12,14 @@ config USB_OTG_UTILS
 	  Select this to make sure the build includes objects from
 	  the OTG infrastructure directory.
 
+config USB_OTG_WAKELOCK
+	bool "Hold a wakelock when USB connected"
+	depends on WAKELOCK
+	select USB_OTG_UTILS
+	help
+	  Select this to automatically hold a wakelock when USB is
+	  connected, preventing suspend.
+
 if USB || USB_GADGET
 
 #
@@ -135,5 +143,18 @@ config USB_HOST_MODE
 	depends on USB_TEGRA_OTG
 	help
 	  HTC host mode
+
+config USB_OTG_HOST
+       boolean "USB Host Mode Support"
+       help
+         HTC host mode
+
+config FSL_USB2_OTG
+	bool "Freescale USB OTG Transceiver Driver"
+	depends on USB_EHCI_FSL && USB_GADGET_FSL_USB2
+	select USB_OTG
+	select USB_OTG_UTILS
+	help
+	  Enable this to support Freescale USB OTG transceiver.
 
 endif # USB || OTG

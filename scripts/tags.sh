@@ -5,7 +5,7 @@
 # mode may be any of: tags, TAGS, cscope
 #
 # Uses the following environment variables:
-# ARCH, SUBARCH, SRCARCH, srctree, src, obj
+# ARCH, SUBARCH, SRCARCH, srctree, src, obj, MACH
 
 if [ "$KBUILD_VERBOSE" = "1" ]; then
 	set -x
@@ -16,6 +16,13 @@ ignore="( -name SCCS -o -name BitKeeper -o -name .svn -o \
           -name CVS  -o -name .pc       -o -name .hg  -o \
           -name .git )                                   \
           -prune -o"
+
+if [ -n "$MACH" ]; then
+	ignore+=" \
+		( ( -path *mach-* -o -path *plat-* ) -a \
+		! -path *$MACH* ) \
+		-prune -o"
+fi
 
 # Do not use full path if we do not use O=.. builds
 # Use make O=. {tags|cscope}
@@ -132,7 +139,7 @@ exuberant()
 	--regex-asm='/^ENTRY\(([^)]*)\).*/\1/'                  \
 	--regex-c='/^SYSCALL_DEFINE[[:digit:]]?\(([^,)]*).*/sys_\1/' \
 	--regex-c++='/^TRACE_EVENT\(([^,)]*).*/trace_\1/'		\
-	--regex-c++='/^DEFINE_EVENT\(([^,)]*).*/trace_\1/'
+	--regex-c++='/^DEFINE_EVENT\([^,)]*, *([^,)]*).*/trace_\1/'
 
 	all_kconfigs | xargs $1 -a                              \
 	--langdef=kconfig --language-force=kconfig              \
@@ -152,7 +159,9 @@ emacs()
 {
 	all_sources | xargs $1 -a                               \
 	--regex='/^ENTRY(\([^)]*\)).*/\1/'                      \
-	--regex='/^SYSCALL_DEFINE[0-9]?(\([^,)]*\).*/sys_\1/'
+	--regex='/^SYSCALL_DEFINE[0-9]?(\([^,)]*\).*/sys_\1/'   \
+	--regex='/^TRACE_EVENT(\([^,)]*\).*/trace_\1/'		\
+	--regex='/^DEFINE_EVENT([^,)]*, *\([^,)]*\).*/trace_\1/'
 
 	all_kconfigs | xargs $1 -a                              \
 	--regex='/^[ \t]*\(\(menu\)*config\)[ \t]+\([a-zA-Z0-9_]+\)/\3/'

@@ -2,7 +2,7 @@
  * arch/arm/mach-tegra/include/mach/io.h
  *
  * Copyright (C) 2010 Google, Inc.
- * Copyright (C) 2011 NVIDIA Corporation.
+ * Copyright (C) 2011-2012 NVIDIA Corporation.
  *
  * Author:
  *	Colin Cross <ccross@google.com>
@@ -72,11 +72,23 @@
 
 #define IO_HOST1X_PHYS	0x54000000
 #define IO_HOST1X_VIRT	0xFE700000
-#define IO_HOST1X_SIZE	SZ_4M
+#define IO_HOST1X_SIZE	SZ_8M
 
-#define IO_PPCS_PHYS   0x7C000000
-#define IO_PPCS_VIRT   0xFE100000
-#define IO_PPCS_SIZE   SZ_1M
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+#define IO_PPCS_PHYS	0xC4000000
+#else
+#define IO_PPCS_PHYS	0x7C000000
+#endif
+#define IO_PPCS_VIRT	0xFE100000
+#define IO_PPCS_SIZE	SZ_1M
+
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+#define IO_PCIE_PHYS	0x80000000
+#else
+#define IO_PCIE_PHYS	0x00000000
+#endif
+#define IO_PCIE_VIRT	0xFB000000
+#define IO_PCIE_SIZE	(SZ_16M * 3)
 
 #define IO_TO_VIRT_BETWEEN(p, st, sz)	((p) >= (st) && (p) < ((st) + (sz)))
 #define IO_TO_VIRT_XLATE(p, pst, vst)	(((p) - (pst) + (vst)))
@@ -97,7 +109,9 @@
 	IO_TO_VIRT_BETWEEN((n), IO_SDMMC_PHYS, IO_SDMMC_SIZE) ?		\
 		IO_TO_VIRT_XLATE((n), IO_SDMMC_PHYS, IO_SDMMC_VIRT) :	\
 	IO_TO_VIRT_BETWEEN((n), IO_PPCS_PHYS, IO_PPCS_SIZE) ?		\
-	IO_TO_VIRT_XLATE((n), IO_PPCS_PHYS, IO_PPCS_VIRT) :		\
+		IO_TO_VIRT_XLATE((n), IO_PPCS_PHYS, IO_PPCS_VIRT) :	\
+	IO_TO_VIRT_BETWEEN((n), IO_PCIE_PHYS, IO_PCIE_SIZE) ?		\
+		IO_TO_VIRT_XLATE((n), IO_PCIE_PHYS, IO_PCIE_VIRT) :	\
 	0)
 
 #ifndef __ASSEMBLER__
@@ -110,7 +124,7 @@ void tegra_iounmap(volatile void __iomem *addr);
 
 #define IO_ADDRESS(n) ((void __iomem *) IO_TO_VIRT(n))
 
-#if (defined(CONFIG_TEGRA_PCI) && defined(CONFIG_ARCH_TEGRA_2x_SOC))
+#if defined(CONFIG_TEGRA_PCI)
 extern void __iomem *tegra_pcie_io_base;
 
 static inline void __iomem *__io(unsigned long addr)

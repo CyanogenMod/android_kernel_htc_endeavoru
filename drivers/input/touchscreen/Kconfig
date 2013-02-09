@@ -86,12 +86,6 @@ config TOUCHSCREEN_AD7879_SPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called ad7879-spi.
 
-config TOUCHSCREEN_NTRIG
-	tristate "NTRIG(G4.0) Touchscreen Interface"
-	help
-	  To compile this driver as a module, choose M here: the
-	  module will be called NTRIG.
-
 config TOUCHSCREEN_ATMEL_MXT
 	tristate "Atmel mXT I2C Touchscreen"
 	depends on I2C
@@ -253,6 +247,18 @@ config TOUCHSCREEN_LPC32XX
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called lpc32xx_ts.
+
+config TOUCHSCREEN_MAX11801
+	tristate "MAX11801 based touchscreens"
+	depends on I2C
+	help
+	  Say Y here if you have a MAX11801 based touchscreen
+	  controller.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called max11801_ts.
 
 config TOUCHSCREEN_MCS5000
 	tristate "MELFAS MCS-5000 touchscreen"
@@ -431,18 +437,6 @@ config TOUCHSCREEN_ATMEL_TSADCC
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called atmel_tsadcc.
-
-config TOUCHSCREEN_SYNAPTICS_3k
-	tristate "SYNAPTICS_3k Touchscreen Interface"
-	depends on I2C
-	help
-	  To compile this driver as a module, choose M here: the
-	  module will be called synaptics_3k.
-
-config TOUCHSCREEN_SYNAPTICS_SWEEP2WAKE
-        tristate "Sweep2Wake for SYNAPTICS_3k based touchscreens"
-        depends on TOUCHSCREEN_SYNAPTICS_3k
-        default n
 
 config TOUCHSCREEN_UCB1400
 	tristate "Philips UCB1400 touchscreen"
@@ -750,5 +744,28 @@ config TOUCHSCREEN_TPS6507X
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called tps6507x_ts.
+
+config TOUCHSCREEN_RM31080A
+	tristate "RAYDIUM_31080A based touchscreens"
+	depends on SPI_MASTER
+	help
+	  Say Y here if you have a touchscreen interface using the
+	  RAYDIUM_T31080A controller, and your board-specific initialization
+	  code includes that in its table of SPI devices.
+
+	  If unsure, say N (but it's safe to say "Y").
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called RAYDIUM_31080A.
+
+config TOUCHSCREEN_SYNAPTICS_3k
+	tristate "SYNAPTICS_3k"
+	depends on I2C
+	help
+	  Say Y here if you want to support SYNAPTICS_3k devices
+
+	  If unsure, say Y.
+
+	  To compile this driver as a module, choose M here.
 
 endif

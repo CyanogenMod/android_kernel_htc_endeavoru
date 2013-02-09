@@ -10,6 +10,8 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
+#include <linux/mutex.h>
+
 #include "dvb_math.h"
 
 #include "dvb_frontend.h"
@@ -35,6 +37,9 @@ MODULE_PARM_DESC(debug, "turn on debugging (default: 0)");
 struct i2c_device {
 	struct i2c_adapter *adap;
 	u8 addr;
+	u8 *i2c_write_buffer;
+	u8 *i2c_read_buffer;
+	struct mutex *i2c_buffer_lock;
 };
 
 struct dib8000_state {
@@ -70,6 +75,12 @@ struct dib8000_state {
 	u32 status;
 
 	struct dvb_frontend *fe[MAX_NUMBER_OF_FRONTENDS];
+
+	/* for the I2C transfer */
+	struct i2c_msg msg[2];
+	u8 i2c_write_buffer[4];
+	u8 i2c_read_buffer[2];
+	struct mutex i2c_buffer_lock;
 };
 
 enum dib8000_power_mode {
@@ -79,22 +90,59 @@ enum dib8000_power_mode {
 
 static u16 dib8000_i2c_read16(struct i2c_device *i2c, u16 reg)
 {
-	u8 wb[2] = { reg >> 8, reg & 0xff };
-	u8 rb[2];
+	u16 ret;
 	struct i2c_msg msg[2] = {
-		{.addr = i2c->addr >> 1,.flags = 0,.buf = wb,.len = 2},
-		{.addr = i2c->addr >> 1,.flags = I2C_M_RD,.buf = rb,.len = 2},
+		{.addr = i2c->addr >> 1, .flags = 0, .len = 2},
+		{.addr = i2c->addr >> 1, .flags = I2C_M_RD, .len = 2},
 	};
+
+	if (mutex_lock_interruptible(i2c->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
+		return 0;
+	}
+
+	msg[0].buf    = i2c->i2c_write_buffer;
+	msg[0].buf[0] = reg >> 8;
+	msg[0].buf[1] = reg & 0xff;
+	msg[1].buf    = i2c->i2c_read_buffer;
 
 	if (i2c_transfer(i2c->adap, msg, 2) != 2)
 		dprintk("i2c read error on %d", reg);
 
-	return (rb[0] << 8) | rb[1];
+	ret = (msg[1].buf[0] << 8) | msg[1].buf[1];
+	mutex_unlock(i2c->i2c_buffer_lock);
+	return ret;
 }
 
 static u16 dib8000_read_word(struct dib8000_state *state, u16 reg)
 {
-	return dib8000_i2c_read16(&state->i2c, reg);
+	u16 ret;
+
+	if (mutex_lock_interruptible(&state->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
+		return 0;
+	}
+
+	state->i2c_write_buffer[0] = reg >> 8;
+	state->i2c_write_buffer[1] = reg & 0xff;
+
+	memset(state->msg, 0, 2 * sizeof(struct i2c_msg));
+	state->msg[0].addr = state->i2c.addr >> 1;
+	state->msg[0].flags = 0;
+	state->msg[0].buf = state->i2c_write_buffer;
+	state->msg[0].len = 2;
+	state->msg[1].addr = state->i2c.addr >> 1;
+	state->msg[1].flags = I2C_M_RD;
+	state->msg[1].buf = state->i2c_read_buffer;
+	state->msg[1].len = 2;
+
+	if (i2c_transfer(state->i2c.adap, state->msg, 2) != 2)
+		dprintk("i2c read error on %d", reg);
+
+	ret = (state->i2c_read_buffer[0] << 8) | state->i2c_read_buffer[1];
+	mutex_unlock(&state->i2c_buffer_lock);
+
+	return ret;
 }
 
 static u32 dib8000_read32(struct dib8000_state *state, u16 reg)
@@ -109,19 +157,51 @@ static u32 dib8000_read32(struct dib8000_state *state, u16 reg)
 
 static int dib8000_i2c_write16(struct i2c_device *i2c, u16 reg, u16 val)
 {
-	u8 b[4] = {
-		(reg >> 8) & 0xff, reg & 0xff,
-		(val >> 8) & 0xff, val & 0xff,
-	};
-	struct i2c_msg msg = {
-		.addr = i2c->addr >> 1,.flags = 0,.buf = b,.len = 4
-	};
-	return i2c_transfer(i2c->adap, &msg, 1) != 1 ? -EREMOTEIO : 0;
+	struct i2c_msg msg = {.addr = i2c->addr >> 1, .flags = 0, .len = 4};
+	int ret = 0;
+
+	if (mutex_lock_interruptible(i2c->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
+		return -EINVAL;
+	}
+
+	msg.buf    = i2c->i2c_write_buffer;
+	msg.buf[0] = (reg >> 8) & 0xff;
+	msg.buf[1] = reg & 0xff;
+	msg.buf[2] = (val >> 8) & 0xff;
+	msg.buf[3] = val & 0xff;
+
+	ret = i2c_transfer(i2c->adap, &msg, 1) != 1 ? -EREMOTEIO : 0;
+	mutex_unlock(i2c->i2c_buffer_lock);
+
+	return ret;
 }
 
 static int dib8000_write_word(struct dib8000_state *state, u16 reg, u16 val)
 {
-	return dib8000_i2c_write16(&state->i2c, reg, val);
+	int ret;
+
+	if (mutex_lock_interruptible(&state->i2c_buffer_lock) < 0) {
+		dprintk("could not acquire lock");
+		return -EINVAL;
+	}
+
+	state->i2c_write_buffer[0] = (reg >> 8) & 0xff;
+	state->i2c_write_buffer[1] = reg & 0xff;
+	state->i2c_write_buffer[2] = (val >> 8) & 0xff;
+	state->i2c_write_buffer[3] = val & 0xff;
+
+	memset(&state->msg[0], 0, sizeof(struct i2c_msg));
+	state->msg[0].addr = state->i2c.addr >> 1;
+	state->msg[0].flags = 0;
+	state->msg[0].buf = state->i2c_write_buffer;
+	state->msg[0].len = 4;
+
+	ret = (i2c_transfer(state->i2c.adap, state->msg, 1) != 1 ?
+			-EREMOTEIO : 0);
+	mutex_unlock(&state->i2c_buffer_lock);
+
+	return ret;
 }
 
 static const s16 coeff_2k_sb_1seg_dqpsk[8] = {
@@ -980,30 +1060,31 @@ static void dib8000_update_timf(struct dib8000_state *state)
 	dprintk("Updated timing frequency: %d (default: %d)", state->timf, state->timf_default);
 }
 
+static const u16 adc_target_16dB[11] = {
+	(1 << 13) - 825 - 117,
+	(1 << 13) - 837 - 117,
+	(1 << 13) - 811 - 117,
+	(1 << 13) - 766 - 117,
+	(1 << 13) - 737 - 117,
+	(1 << 13) - 693 - 117,
+	(1 << 13) - 648 - 117,
+	(1 << 13) - 619 - 117,
+	(1 << 13) - 575 - 117,
+	(1 << 13) - 531 - 117,
+	(1 << 13) - 501 - 117
+};
+static const u8 permu_seg[] = { 6, 5, 7, 4, 8, 3, 9, 2, 10, 1, 11, 0, 12 };
+
 static void dib8000_set_channel(struct dib8000_state *state, u8 seq, u8 autosearching)
 {
 	u16 mode, max_constellation, seg_diff_mask = 0, nbseg_diff = 0;
 	u8 guard, crate, constellation, timeI;
-	u8 permu_seg[] = { 6, 5, 7, 4, 8, 3, 9, 2, 10, 1, 11, 0, 12 };
 	u16 i, coeff[4], P_cfr_left_edge = 0, P_cfr_right_edge = 0, seg_mask13 = 0x1fff;	// All 13 segments enabled
 	const s16 *ncoeff = NULL, *ana_fe;
 	u16 tmcc_pow = 0;
 	u16 coff_pow = 0x2800;
 	u16 init_prbs = 0xfff;
 	u16 ana_gain = 0;
-	u16 adc_target_16dB[11] = {
-		(1 << 13) - 825 - 117,
-		(1 << 13) - 837 - 117,
-		(1 << 13) - 811 - 117,
-		(1 << 13) - 766 - 117,
-		(1 << 13) - 737 - 117,
-		(1 << 13) - 693 - 117,
-		(1 << 13) - 648 - 117,
-		(1 << 13) - 619 - 117,
-		(1 << 13) - 575 - 117,
-		(1 << 13) - 531 - 117,
-		(1 << 13) - 501 - 117
-	};
 
 	if (state->ber_monitored_layer != LAYER_ALL)
 		dib8000_write_word(state, 285, (dib8000_read_word(state, 285) & 0x60) | state->ber_monitored_layer);
@@ -2379,9 +2460,28 @@ EXPORT_SYMBOL(dib8000_get_slave_frontend);
 
 int dib8000_i2c_enumeration(struct i2c_adapter *host, int no_of_demods, u8 default_addr, u8 first_addr)
 {
-	int k = 0;
+	int k = 0, ret = 0;
 	u8 new_addr = 0;
 	struct i2c_device client = {.adap = host };
+
+	client.i2c_write_buffer = kzalloc(4 * sizeof(u8), GFP_KERNEL);
+	if (!client.i2c_write_buffer) {
+		dprintk("%s: not enough memory", __func__);
+		return -ENOMEM;
+	}
+	client.i2c_read_buffer = kzalloc(4 * sizeof(u8), GFP_KERNEL);
+	if (!client.i2c_read_buffer) {
+		dprintk("%s: not enough memory", __func__);
+		ret = -ENOMEM;
+		goto error_memory_read;
+	}
+	client.i2c_buffer_lock = kzalloc(sizeof(struct mutex), GFP_KERNEL);
+	if (!client.i2c_buffer_lock) {
+		dprintk("%s: not enough memory", __func__);
+		ret = -ENOMEM;
+		goto error_memory_lock;
+	}
+	mutex_init(client.i2c_buffer_lock);
 
 	for (k = no_of_demods - 1; k >= 0; k--) {
 		/* designated i2c address */
@@ -2394,7 +2494,8 @@ int dib8000_i2c_enumeration(struct i2c_adapter *host, int no_of_demods, u8 defau
 			client.addr = default_addr;
 			if (dib8000_identify(&client) == 0) {
 				dprintk("#%d: not identified", k);
-				return -EINVAL;
+				ret  = -EINVAL;
+				goto error;
 			}
 		}
 
@@ -2420,7 +2521,14 @@ int dib8000_i2c_enumeration(struct i2c_adapter *host, int no_of_demods, u8 defau
 		dib8000_i2c_write16(&client, 1286, 0);
 	}
 
-	return 0;
+error:
+	kfree(client.i2c_buffer_lock);
+error_memory_lock:
+	kfree(client.i2c_read_buffer);
+error_memory_read:
+	kfree(client.i2c_write_buffer);
+
+	return ret;
 }
 
 EXPORT_SYMBOL(dib8000_i2c_enumeration);
@@ -2519,6 +2627,10 @@ struct dvb_frontend *dib8000_attach(struct i2c_adapter *i2c_adap, u8 i2c_addr, s
 	memcpy(&state->cfg, cfg, sizeof(struct dib8000_config));
 	state->i2c.adap = i2c_adap;
 	state->i2c.addr = i2c_addr;
+	state->i2c.i2c_write_buffer = state->i2c_write_buffer;
+	state->i2c.i2c_read_buffer = state->i2c_read_buffer;
+	mutex_init(&state->i2c_buffer_lock);
+	state->i2c.i2c_buffer_lock = &state->i2c_buffer_lock;
 	state->gpio_val = cfg->gpio_val;
 	state->gpio_dir = cfg->gpio_dir;
 

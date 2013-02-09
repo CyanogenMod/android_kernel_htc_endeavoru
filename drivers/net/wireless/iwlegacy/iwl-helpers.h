@@ -132,7 +132,16 @@ static inline void iwl_legacy_stop_queue(struct iwl_priv *priv,
 			ieee80211_stop_queue(priv->hw, ac);
 }
 
+#ifdef ieee80211_stop_queue
+#undef ieee80211_stop_queue
+#endif
+
 #define ieee80211_stop_queue DO_NOT_USE_ieee80211_stop_queue
+
+#ifdef ieee80211_wake_queue
+#undef ieee80211_wake_queue
+#endif
+
 #define ieee80211_wake_queue DO_NOT_USE_ieee80211_wake_queue
 
 static inline void iwl_legacy_disable_interrupts(struct iwl_priv *priv)
@@ -147,6 +156,12 @@ static inline void iwl_legacy_disable_interrupts(struct iwl_priv *priv)
 	iwl_write32(priv, CSR_INT, 0xffffffff);
 	iwl_write32(priv, CSR_FH_INT_STATUS, 0xffffffff);
 	IWL_DEBUG_ISR(priv, "Disabled interrupts\n");
+}
+
+static inline void iwl_legacy_enable_rfkill_int(struct iwl_priv *priv)
+{
+	IWL_DEBUG_ISR(priv, "Enabling rfkill interrupt\n");
+	iwl_write32(priv, CSR_INT_MASK, CSR_INT_BIT_RF_KILL);
 }
 
 static inline void iwl_legacy_enable_interrupts(struct iwl_priv *priv)

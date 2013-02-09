@@ -51,14 +51,8 @@ extern int htc_usb_enable_function(char *name, int ebl);
 
 extern void htc_mode_enable(int enable);
 extern int check_htc_mode_status(void);
-extern void android_switch_adb_ums(void);
+extern void android_switch_default(void);
 extern void android_switch_htc_mode(void);
-
-enum {
-	NOT_ON_AUTOBOT,
-	DOCK_ON_AUTOBOT,
-	HTC_MODE_RUNNING
-};
 
 #ifdef err
 #undef err

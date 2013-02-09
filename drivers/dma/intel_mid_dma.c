@@ -1292,8 +1292,7 @@ static int __devinit intel_mid_dma_probe(struct pci_dev *pdev,
 	if (err)
 		goto err_dma;
 
-	pm_runtime_set_active(&pdev->dev);
-	pm_runtime_enable(&pdev->dev);
+	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_allow(&pdev->dev);
 	return 0;
 
@@ -1322,6 +1321,9 @@ err_enable_device:
 static void __devexit intel_mid_dma_remove(struct pci_dev *pdev)
 {
 	struct middma_device *device = pci_get_drvdata(pdev);
+
+	pm_runtime_get_noresume(&pdev->dev);
+	pm_runtime_forbid(&pdev->dev);
 	middma_shutdown(pdev);
 	pci_dev_put(pdev);
 	kfree(device);
@@ -1349,7 +1351,6 @@ int dma_suspend(struct pci_dev *pci, pm_message_t state)
 			return -EAGAIN;
 	}
 	device->state = SUSPENDED;
-	pci_set_drvdata(pci, device);
 	pci_save_state(pci);
 	pci_disable_device(pci);
 	pci_set_power_state(pci, PCI_D3hot);
@@ -1378,20 +1379,26 @@ int dma_resume(struct pci_dev *pci)
 	}
 	device->state = RUNNING;
 	iowrite32(REG_BIT0, device->dma_base + DMA_CFG);
-	pci_set_drvdata(pci, device);
 	return 0;
 }
 
 static int dma_runtime_suspend(struct device *dev)
 {
 	struct pci_dev *pci_dev = to_pci_dev(dev);
-	return dma_suspend(pci_dev, PMSG_SUSPEND);
+	struct middma_device *device = pci_get_drvdata(pci_dev);
+
+	device->state = SUSPENDED;
+	return 0;
 }
 
 static int dma_runtime_resume(struct device *dev)
 {
 	struct pci_dev *pci_dev = to_pci_dev(dev);
-	return dma_resume(pci_dev);
+	struct middma_device *device = pci_get_drvdata(pci_dev);
+
+	device->state = RUNNING;
+	iowrite32(REG_BIT0, device->dma_base + DMA_CFG);
+	return 0;
 }
 
 static int dma_runtime_idle(struct device *dev)

@@ -61,10 +61,6 @@ config AD525X_DPOT_SPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called ad525x_dpot-spi.
 
-config ANDROID_PMEM
-	bool "Android pmem allocator"
-	default y
-
 config ATMEL_PWM
 	tristate "Atmel AT32/AT91 PWM support"
 	depends on AVR32 || ARCH_AT91SAM9263 || ARCH_AT91SAM9RL || ARCH_AT91CAP9
@@ -148,6 +144,20 @@ config PHANTOM
 	  If you choose to build module, its name will be phantom. If unsure,
 	  say N here.
 
+config INTEL_MID_PTI
+	tristate "Parallel Trace Interface for MIPI P1149.7 cJTAG standard"
+	depends on PCI
+	default n
+	help
+	  The PTI (Parallel Trace Interface) driver directs
+	  trace data routed from various parts in the system out
+	  through an Intel Penwell PTI port and out of the mobile
+	  device for analysis with a debugging tool (Lauterbach or Fido).
+
+	  You should select this driver if the target kernel is meant for
+	  an Intel Atom (non-netbook) mobile device containing a MIPI
+	  P1149.7 standard implementation.
+
 config SGI_IOC4
 	tristate "SGI IOC4 Base IO support"
 	depends on PCI
@@ -220,13 +230,6 @@ config ENCLOSURE_SERVICES
 	  driver (SCSI/ATA) which supports enclosures
 	  or a SCSI enclosure device (SES) to use these services.
 
-config KERNEL_DEBUGGER_CORE
-	bool "Kernel Debugger Core"
-	default n
-	---help---
-	  Generic kernel debugging command processor used by low level
-	  (interrupt context) platform-specific debuggers.
-
 config SGI_XP
 	tristate "Support communication between SGI SSIs"
 	depends on NET
@@ -243,8 +246,7 @@ config SGI_XP
 
 config CS5535_MFGPT
 	tristate "CS5535/CS5536 Geode Multi-Function General Purpose Timer (MFGPT) support"
-	depends on PCI
-	depends on X86
+	depends on PCI && X86 && MFD_CS5535
 	default n
 	help
 	  This driver provides access to MFGPT functionality for other
@@ -490,7 +492,7 @@ config BMP085
 	  module will be called bmp085.
 
 config PCH_PHUB
-	tristate "PCH Packet Hub of Intel Topcliff / OKI SEMICONDUCTOR ML7213"
+	tristate "Intel EG20T PCH/LAPIS Semicon IOH(ML7213/ML7223/ML7831) PHUB"
 	depends on PCI
 	help
 	  This driver is for PCH(Platform controller Hub) PHUB(Packet Hub) of
@@ -498,13 +500,25 @@ config PCH_PHUB
 	  processor. The Topcliff has MAC address and Option ROM data in SROM.
 	  This driver can access MAC address and Option ROM data in SROM.
 
-	  This driver also can be used for OKI SEMICONDUCTOR's ML7213 which is
-	  for IVI(In-Vehicle Infotainment) use.
-	  ML7213 is companion chip for Intel Atom E6xx series.
-	  ML7213 is completely compatible for Intel EG20T PCH.
+	  This driver also can be used for LAPIS Semiconductor's IOH,
+	  ML7213/ML7223/ML7831.
+	  ML7213 which is for IVI(In-Vehicle Infotainment) use.
+	  ML7223 IOH is for MP(Media Phone) use.
+	  ML7831 IOH is for general purpose use.
+	  ML7213/ML7223/ML7831 is companion chip for Intel Atom E6xx series.
+	  ML7213/ML7223/ML7831 is completely compatible for Intel EG20T PCH.
 
 	  To compile this driver as a module, choose M here: the module will
 	  be called pch_phub.
+
+config USB_SWITCH_FSA9480
+	tristate "FSA9480 USB Switch"
+	depends on I2C
+	help
+	  The FSA9480 is a USB port accessory detector and switch.
+	  The FSA9480 is fully controlled using I2C and enables USB data,
+	  stereo and mono audio, video, microphone and UART data to use
+	  a common connector port.
 
 config WL127X_RFKILL
 	tristate "Bluetooth power control driver for TI wl127x"
@@ -535,12 +549,6 @@ config BCM4329_RFKILL
 	---help---
 	Adds BCM4329 RFKILL driver for Broadcom BCM4329 chipset
 
-config BCM4330_RFKILL
-        bool "Enable BCM4330 RFKILL driver"
-        default n
-        ---help---
-        Adds BCM4330 RFKILL driver for Broadcom BCM4330 chipset
-
 config TEGRA_CRYPTO_DEV
 	bool "Device node to access tegra aes hardware"
 	---help---
@@ -554,18 +562,6 @@ config MAX1749_VIBRATOR
 	---help---
 	Adds a timed output vibrator device node for MAX1749 vibrator motor
 
-config TEGRA_HAPTIC2
-        bool "haptic vibrator device driver on Tegra"
-        default n
-        ---help---
-        Adds a haptic vibrator driver
-
-config QUATTRO_TEGRA_HAPTIC2
-        bool "haptic vibrator device driver on Tegra quattro"
-        default n
-        ---help---
-        Adds a haptic vibrator driver
-
 config TEGRA_VIBRATOR
 	bool "vibrator device driver on Tegra"
 	depends on ANDROID_TIMED_OUTPUT
@@ -574,11 +570,12 @@ config TEGRA_VIBRATOR
         Adds a vibrator driver
 
 config TEGRA_VIBRATOR_ENR
-	bool "vibrator device driver on Tegra for Endeavor"
-	depends on ANDROID_TIMED_OUTPUT
+        bool "vibrator device driver on Tegra for Endeavor"
+        depends on ANDROID_TIMED_OUTPUT
         default n
         ---help---
         Adds a vibrator driver
+
 
 config CABLE_DETECT_ACCESSORY
 	bool "USB accessory detection"
@@ -586,16 +583,30 @@ config CABLE_DETECT_ACCESSORY
 	---help---
         USB accessory detection
 
+config THERM_EST
+	bool "Thermal estimator driver"
+	default n
+	---help---
+	Thermal driver which estimates temperature based of other sensors.
+
+config TEGRA_THROUGHPUT
+	bool "Device node to set throughput target"
+	depends on TEGRA_DC && TEGRA_DC_EXTENSIONS
+	default y
+	---help---
+	Dev node /dev/tegra-throughput used to set a throughput target.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
 source "drivers/misc/iwmc3200top/Kconfig"
 source "drivers/misc/ti-st/Kconfig"
 source "drivers/misc/lis3lv02d/Kconfig"
+source "drivers/misc/carma/Kconfig"
 #source "drivers/misc/inv_mpu/Kconfig"
 source "drivers/misc/tegra-baseband/Kconfig"
 source "drivers/misc/mpu3050_htc/Kconfig"
-source "drivers/misc/ts27010mux_usb/Kconfig"
+source "drivers/misc/htc/Kconfig"
 source "drivers/misc/ts27010mux_uart/Kconfig"
 
 endif # MISC_DEVICES

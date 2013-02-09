@@ -167,6 +167,23 @@ static void v4l2_device_release(struct device *cd)
 
 	mutex_unlock(&videodev_lock);
 
+#if defined(CONFIG_MEDIA_CONTROLLER)
+	if (vdev->v4l2_dev && vdev->v4l2_dev->mdev &&
+	    vdev->vfl_type != VFL_TYPE_SUBDEV)
+		media_device_unregister_entity(&vdev->entity);
+#endif
+
+	/* Do not call v4l2_device_put if there is no release callback set.
+	 * Drivers that have no v4l2_device release callback might free the
+	 * v4l2_dev instance in the video_device release callback below, so we
+	 * must perform this check here.
+	 *
+	 * TODO: In the long run all drivers that use v4l2_device should use the
+	 * v4l2_device release callback. This check will then be unnecessary.
+	 */
+	if (v4l2_dev && v4l2_dev->release == NULL)
+		v4l2_dev = NULL;
+
 	/* Release video_device and perform other
 	   cleanups as needed. */
 	vdev->release(vdev);
@@ -183,10 +200,15 @@ static struct class video_class = {
 
 struct video_device *video_devdata(struct file *file)
 {
-	if(iminor(file->f_path.dentry->d_inode) < VIDEO_NUM_DEVICES)
+	/* HTC_START (klockwork issue)*/
+	if(iminor(file->f_path.dentry->d_inode)<VIDEO_NUM_DEVICES)
 		return video_device[iminor(file->f_path.dentry->d_inode)];
-	else
+	else{
+		printk(KERN_ERR "%s file->f_path.dentry->d_inode is out of VIDEO_NUM_DEVICES range \n",
+		       __func__);
 		return NULL;
+	}
+	/* HTC_END */
 }
 EXPORT_SYMBOL(video_devdata);
 
@@ -260,8 +282,6 @@ static ssize_t v4l2_read(struct file *filp, char __user *buf,
 	struct video_device *vdev = video_devdata(filp);
 	int ret = -ENODEV;
 
-	if (!vdev)
-		return -ENODEV;
 	if (!vdev->fops->read)
 		return -EINVAL;
 	if (vdev->lock && mutex_lock_interruptible(vdev->lock))
@@ -279,8 +299,6 @@ static ssize_t v4l2_write(struct file *filp, const char __user *buf,
 	struct video_device *vdev = video_devdata(filp);
 	int ret = -ENODEV;
 
-	if (!vdev)
-		return -ENODEV;
 	if (!vdev->fops->write)
 		return -EINVAL;
 	if (vdev->lock && mutex_lock_interruptible(vdev->lock))
@@ -297,8 +315,6 @@ static unsigned int v4l2_poll(struct file *filp, struct poll_table_struct *poll)
 	struct video_device *vdev = video_devdata(filp);
 	int ret = POLLERR | POLLHUP;
 
-	if (!vdev)
-		return -ENODEV;
 	if (!vdev->fops->poll)
 		return DEFAULT_POLLMASK;
 	if (vdev->lock)
@@ -315,8 +331,6 @@ static long v4l2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	struct video_device *vdev = video_devdata(filp);
 	int ret = -ENODEV;
 
-        if (!vdev)
-                return -ENODEV;
 	if (vdev->fops->unlocked_ioctl) {
 		if (vdev->lock && mutex_lock_interruptible(vdev->lock))
 			return -ERESTARTSYS;
@@ -363,13 +377,28 @@ static long v4l2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return ret;
 }
 
+#ifdef CONFIG_MMU
+#define v4l2_get_unmapped_area NULL
+#else
+static unsigned long v4l2_get_unmapped_area(struct file *filp,
+		unsigned long addr, unsigned long len, unsigned long pgoff,
+		unsigned long flags)
+{
+	struct video_device *vdev = video_devdata(filp);
+
+	if (!vdev->fops->get_unmapped_area)
+		return -ENOSYS;
+	if (!video_is_registered(vdev))
+		return -ENODEV;
+	return vdev->fops->get_unmapped_area(filp, addr, len, pgoff, flags);
+}
+#endif
+
 static int v4l2_mmap(struct file *filp, struct vm_area_struct *vm)
 {
 	struct video_device *vdev = video_devdata(filp);
 	int ret = -ENODEV;
 
-        if (!vdev)
-                return -ENODEV;
 	if (!vdev->fops->mmap)
 		return ret;
 	if (vdev->lock && mutex_lock_interruptible(vdev->lock))
@@ -385,9 +414,6 @@ static int v4l2_mmap(struct file *filp, struct vm_area_struct *vm)
 static int v4l2_open(struct inode *inode, struct file *filp)
 {
 	struct video_device *vdev;
-#if defined(CONFIG_MEDIA_CONTROLLER)
-	struct media_entity *entity = NULL;
-#endif
 	int ret = 0;
 
 	/* Check if the video device is available */
@@ -401,17 +427,6 @@ static int v4l2_open(struct inode *inode, struct file *filp)
 	/* and increase the device refcount */
 	video_get(vdev);
 	mutex_unlock(&videodev_lock);
-#if defined(CONFIG_MEDIA_CONTROLLER)
-	if (vdev->v4l2_dev && vdev->v4l2_dev->mdev &&
-	    vdev->vfl_type != VFL_TYPE_SUBDEV) {
-		entity = media_entity_get(&vdev->entity);
-		if (!entity) {
-			ret = -EBUSY;
-			video_put(vdev);
-			return ret;
-		}
-	}
-#endif
 	if (vdev->fops->open) {
 		if (vdev->lock && mutex_lock_interruptible(vdev->lock)) {
 			ret = -ERESTARTSYS;
@@ -427,14 +442,8 @@ static int v4l2_open(struct inode *inode, struct file *filp)
 
 err:
 	/* decrease the refcount in case of an error */
-	if (ret) {
-#if defined(CONFIG_MEDIA_CONTROLLER)
-		if (vdev->v4l2_dev && vdev->v4l2_dev->mdev &&
-		    vdev->vfl_type != VFL_TYPE_SUBDEV)
-			media_entity_put(entity);
-#endif
+	if (ret)
 		video_put(vdev);
-	}
 	return ret;
 }
 
@@ -444,8 +453,6 @@ static int v4l2_release(struct inode *inode, struct file *filp)
 	struct video_device *vdev = video_devdata(filp);
 	int ret = 0;
 
-        if (!vdev)
-                return -ENODEV;
 	if (vdev->fops->release) {
 		if (vdev->lock)
 			mutex_lock(vdev->lock);
@@ -453,11 +460,6 @@ static int v4l2_release(struct inode *inode, struct file *filp)
 		if (vdev->lock)
 			mutex_unlock(vdev->lock);
 	}
-#if defined(CONFIG_MEDIA_CONTROLLER)
-	if (vdev->v4l2_dev && vdev->v4l2_dev->mdev &&
-	    vdev->vfl_type != VFL_TYPE_SUBDEV)
-		media_entity_put(&vdev->entity);
-#endif
 	/* decrease the refcount unconditionally since the release()
 	   return value is ignored. */
 	video_put(vdev);
@@ -469,6 +471,7 @@ static const struct file_operations v4l2_fops = {
 	.read = v4l2_read,
 	.write = v4l2_write,
 	.open = v4l2_open,
+	.get_unmapped_area = v4l2_get_unmapped_area,
 	.mmap = v4l2_mmap,
 	.unlocked_ioctl = v4l2_ioctl,
 #ifdef CONFIG_COMPAT
@@ -750,12 +753,6 @@ void video_unregister_device(struct video_device *vdev)
 	/* Check if vdev was ever registered at all */
 	if (!vdev || !video_is_registered(vdev))
 		return;
-
-#if defined(CONFIG_MEDIA_CONTROLLER)
-	if (vdev->v4l2_dev && vdev->v4l2_dev->mdev &&
-	    vdev->vfl_type != VFL_TYPE_SUBDEV)
-		media_device_unregister_entity(&vdev->entity);
-#endif
 
 	mutex_lock(&videodev_lock);
 	/* This must be in a critical section to prevent a race with v4l2_open.

@@ -175,6 +175,13 @@ int notify_change(struct dentry * dentry, struct iattr * attr)
 			return -EPERM;
 	}
 
+	if ((ia_valid & ATTR_MODE)) {
+		mode_t amode = attr->ia_mode;
+		/* Flag setting protected by i_mutex */
+		if (is_sxid(amode))
+			inode->i_flags &= ~S_NOSEC;
+	}
+
 	now = current_fs_time(inode->i_sb);
 
 	attr->ia_ctime = now;
@@ -225,16 +232,10 @@ int notify_change(struct dentry * dentry, struct iattr * attr)
 	if (error)
 		return error;
 
-	if (ia_valid & ATTR_SIZE)
-		down_write(&dentry->d_inode->i_alloc_sem);
-
 	if (inode->i_op->setattr)
 		error = inode->i_op->setattr(dentry, attr);
 	else
 		error = simple_setattr(dentry, attr);
-
-	if (ia_valid & ATTR_SIZE)
-		up_write(&dentry->d_inode->i_alloc_sem);
 
 	if (!error)
 		fsnotify_change(dentry, ia_valid);

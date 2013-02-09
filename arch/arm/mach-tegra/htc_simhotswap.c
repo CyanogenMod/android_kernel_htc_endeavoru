@@ -24,24 +24,12 @@
 #include <linux/workqueue.h>
 #include "board.h"
 #include <mach/board_htc.h>
-#if defined(CONFIG_MACH_QUATTRO_U)
-#include "board-quattro.h"
-#elif defined(CONFIG_MACH_BLUE)
-#include "board-blue.h"
-#elif defined(CONFIG_MACH_EDGE)
-#include "board-edge.h"
-#elif defined(CONFIG_MACH_EDGE_TD)
-#include "board-edgetd.h"
-#elif defined(CONFIG_MACH_ENDEAVORU)
-#include "board-endeavoru.h"
-#endif
+//#include <mach/htc_asoc_pdata.h>
+#include <linux/mfd/tps80031.h>
+
 #include "gpio-names.h"
 #include "devices.h"
 #include <linux/delay.h>
-
-
-
-
 
 #define SIM_DETECT_LOW_ACTIVE TEGRA_GPIO_PI5
 #define SIM_DETECT SIM_DETECT_LOW_ACTIVE
@@ -101,20 +89,22 @@ static void hotswap_work_func(struct work_struct *work)
 		strncat(message, "REMOVE", 6);	
 		//pr_info("SIM_DETECT REMOVE\n");
 		newStatus=status;
-		}else{
+	}else{
 		strncat(message, "INSERT", 6);
 		//pr_info("SIM_DETECT INSERT\n");
 		newStatus=status;
-		}
-		pr_info("SIM_STATUS = %d oldStatus=%d --> newStatus=%d\n", status,oldStatus,newStatus);
+	}
+	pr_info("SIM_STATUS = %d oldStatus=%d --> newStatus=%d\n", status,oldStatus,newStatus);
 	if(oldStatus!=newStatus){
 		kobject_uevent_env(&htc_hotswap_info.simhotswap_kobj, KOBJ_CHANGE, envp);
 		pr_info("SIM_DETECT %s\n",status==1?"REMOVE":"INSERT");
 		oldStatus=newStatus;
+	} else {
+		memset(message, 0, 20);
+		sprintf(message, "SIMHOTSWAP=GPIO");
+		kobject_uevent_env(&htc_hotswap_info.simhotswap_kobj, KOBJ_CHANGE, envp);
 	}
-	//else{	
-	//	pr_info("SIM_DETECT DONOT SEND UEVENT SIM_SWAP\n");
-	//}
+
 	mutex_unlock(&htc_hotswap_info.lock);
 
 	return;

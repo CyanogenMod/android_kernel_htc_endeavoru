@@ -5,14 +5,9 @@ extern pmd_t *top_pmd;
 
 #define TOP_PTE(x)	pte_offset_kernel(top_pmd, x)
 
-static inline pmd_t *pmd_off(pgd_t *pgd, unsigned long virt)
-{
-	return pmd_offset(pud_offset(pgd, virt), virt);
-}
-
 static inline pmd_t *pmd_off_k(unsigned long virt)
 {
-	return pmd_off(pgd_offset_k(virt), virt);
+	return pmd_offset(pud_offset(pgd_offset_k(virt), virt), virt);
 }
 
 struct mem_type {
@@ -28,5 +23,16 @@ extern void __flush_dcache_page(struct address_space *mapping, struct page *page
 
 #endif
 
+#ifdef CONFIG_ZONE_DMA
+extern u32 arm_dma_limit;
+#else
+#define arm_dma_limit ((u32)~0)
+#endif
+
 void __init bootmem_init(void);
 void arm_mm_memblock_reserve(void);
+
+#ifdef CONFIG_NON_ALIASED_COHERENT_MEM
+void dma_coherent_reserve(void);
+void dma_coherent_mapping(void);
+#endif

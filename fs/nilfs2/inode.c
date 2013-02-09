@@ -74,14 +74,14 @@ int nilfs_get_block(struct inode *inode, sector_t blkoff,
 		    struct buffer_head *bh_result, int create)
 {
 	struct nilfs_inode_info *ii = NILFS_I(inode);
+	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	__u64 blknum = 0;
 	int err = 0, ret;
-	struct inode *dat = NILFS_I_NILFS(inode)->ns_dat;
 	unsigned maxblocks = bh_result->b_size >> inode->i_blkbits;
 
-	down_read(&NILFS_MDT(dat)->mi_sem);
+	down_read(&NILFS_MDT(nilfs->ns_dat)->mi_sem);
 	ret = nilfs_bmap_lookup_contig(ii->i_bmap, blkoff, &blknum, maxblocks);
-	up_read(&NILFS_MDT(dat)->mi_sem);
+	up_read(&NILFS_MDT(nilfs->ns_dat)->mi_sem);
 	if (ret >= 0) {	/* found */
 		map_bh(bh_result, inode->i_sb, blknum);
 		if (ret > 0)
@@ -259,8 +259,8 @@ nilfs_direct_IO(int rw, struct kiocb *iocb, const struct iovec *iov,
 		return 0;
 
 	/* Needs synchronization with the cleaner */
-	size = blockdev_direct_IO(rw, iocb, inode, inode->i_sb->s_bdev, iov,
-				  offset, nr_segs, nilfs_get_block, NULL);
+	size = blockdev_direct_IO(rw, iocb, inode, iov, offset, nr_segs,
+				  nilfs_get_block);
 
 	/*
 	 * In case of error extending write may have instantiated a few
@@ -596,6 +596,16 @@ void nilfs_write_inode_common(struct inode *inode,
 	raw_inode->i_flags = cpu_to_le32(ii->i_flags);
 	raw_inode->i_generation = cpu_to_le32(inode->i_generation);
 
+	if (NILFS_ROOT_METADATA_FILE(inode->i_ino)) {
+		struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
+
+		/* zero-fill unused portion in the case of super root block */
+		raw_inode->i_xattr = 0;
+		raw_inode->i_pad = 0;
+		memset((void *)raw_inode + sizeof(*raw_inode), 0,
+		       nilfs->ns_inode_size - sizeof(*raw_inode));
+	}
+
 	if (has_bmap)
 		nilfs_bmap_write(ii->i_bmap, raw_inode);
 	else if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
@@ -768,6 +778,8 @@ int nilfs_setattr(struct dentry *dentry, struct iattr *iattr)
 
 	if ((iattr->ia_valid & ATTR_SIZE) &&
 	    iattr->ia_size != i_size_read(inode)) {
+		inode_dio_wait(inode);
+
 		err = vmtruncate(inode, iattr->ia_size);
 		if (unlikely(err))
 			goto out_err;
@@ -789,19 +801,14 @@ out_err:
 	return err;
 }
 
-int nilfs_permission(struct inode *inode, int mask, unsigned int flags)
+int nilfs_permission(struct inode *inode, int mask)
 {
-	struct nilfs_root *root;
-
-	if (flags & IPERM_FLAG_RCU)
-		return -ECHILD;
-
-	root = NILFS_I(inode)->i_root;
+	struct nilfs_root *root = NILFS_I(inode)->i_root;
 	if ((mask & MAY_WRITE) && root &&
 	    root->cno != NILFS_CPTREE_CURRENT_CNO)
 		return -EROFS; /* snapshot is not writable */
 
-	return generic_permission(inode, mask, flags, NULL);
+	return generic_permission(inode, mask);
 }
 
 int nilfs_load_inode_block(struct inode *inode, struct buffer_head **pbh)
@@ -872,8 +879,7 @@ int nilfs_set_file_dirty(struct inode *inode, unsigned nr_dirty)
 			return -EINVAL; /* NILFS_I_DIRTY may remain for
 					   freeing inode */
 		}
-		list_del(&ii->i_dirty);
-		list_add_tail(&ii->i_dirty, &nilfs->ns_dirty_files);
+		list_move_tail(&ii->i_dirty, &nilfs->ns_dirty_files);
 		set_bit(NILFS_I_QUEUED, &ii->i_state);
 	}
 	spin_unlock(&nilfs->ns_inode_lock);
@@ -892,7 +898,7 @@ int nilfs_mark_inode_dirty(struct inode *inode)
 		return err;
 	}
 	nilfs_update_inode(inode, ibh);
-	nilfs_mdt_mark_buffer_dirty(ibh);
+	mark_buffer_dirty(ibh);
 	nilfs_mdt_mark_dirty(NILFS_I(inode)->i_root->ifile);
 	brelse(ibh);
 	return 0;
@@ -908,7 +914,7 @@ int nilfs_mark_inode_dirty(struct inode *inode)
  * construction. This function can be called both as a single operation
  * and as a part of indivisible file operations.
  */
-void nilfs_dirty_inode(struct inode *inode)
+void nilfs_dirty_inode(struct inode *inode, int flags)
 {
 	struct nilfs_transaction_info ti;
 	struct nilfs_mdt_info *mdi = NILFS_MDT(inode);
@@ -931,7 +937,7 @@ void nilfs_dirty_inode(struct inode *inode)
 int nilfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		 __u64 start, __u64 len)
 {
-	struct the_nilfs *nilfs = NILFS_I_NILFS(inode);
+	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	__u64 logical = 0, phys = 0, size = 0;
 	__u32 flags = 0;
 	loff_t isize;

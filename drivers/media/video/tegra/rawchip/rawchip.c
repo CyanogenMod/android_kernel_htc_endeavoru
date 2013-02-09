@@ -12,6 +12,8 @@
  */
 
 #include <media/rawchip/rawchip.h>
+#include <media/rawchip/Yushan_HTC_Functions.h>
+#include <media/camera_mfg.h>
 
 #ifdef YUSHAN_API_DEBUG
 #define CDBG(fmt, args...) pr_info(fmt, ##args)
@@ -21,42 +23,31 @@
 
 #define MSM_RAWCHIP_NAME "rawchip"
 
-struct tegra_rawchip_device {
-	struct platform_device *pdev;
-	struct resource        *mem;
-	int                     irq;
-	void                   *base;
-
-	struct device *device;
-	struct cdev   cdev;
-	struct mutex  lock;
-	char	  open_count;
-	uint8_t       op_mode;
-	wait_queue_head_t wait;
+static struct rawchip_id_info_t yushan_id_info = {
+	.rawchip_id_reg_addr = 0x5c04,
+	.rawchip_id = 0x02030200,
 };
 
-static struct rawchip_ctrl *rawchipCtrl;
+static struct rawchip_info_t rawchip_info = {
+	.rawchip_id_info = &yushan_id_info,
+};
 
-static struct mutex raw_ioctl_lock;
-static struct class *tegra_rawchip_class;
-static dev_t tegra_rawchip_devno;
-static struct tegra_rawchip_device *tegra_rawchip_device_p;
+static struct rawchip_ctrl *rawchipCtrl = NULL;
 
-struct platform_device *yushan_pdev;
+static struct class *rawchip_class;
+static dev_t rawchip_devno;
+
 
 int rawchip_intr0, rawchip_intr1;
 atomic_t interrupt, interrupt2;
 struct yushan_int_t yushan_int;
-struct yushan_int_t {
-	spinlock_t yushan_spin_lock;
-	wait_queue_head_t yushan_wait;
-};
 
-int rawchip_init;
+
 
 static irqreturn_t yushan_irq_handler(int irq, void *dev_id){
 
 	unsigned long flags;
+
 
 	//smp_mb();
 	spin_lock_irqsave(&yushan_int.yushan_spin_lock,flags);
@@ -67,7 +58,7 @@ static irqreturn_t yushan_irq_handler(int irq, void *dev_id){
 	atomic_set(&interrupt, 1);
 	CDBG("[CAM] %s after detect INT0, interrupt:%d \n",__func__, atomic_read(&interrupt));
 	//interrupt = 1;
-	//Yushan_ISR();
+	//Yushan_Interrupt_Manager_Pad0();
 	//CDBG("[CAM] %s atomic_set\n",__func__);
 	//Yushan_ClearInterruptEvent(1);
 	wake_up(&yushan_int.yushan_wait);
@@ -80,6 +71,7 @@ static irqreturn_t yushan_irq_handler2(int irq, void *dev_id){
 
 	unsigned long flags;
 
+
 	spin_lock_irqsave(&yushan_int.yushan_spin_lock,flags);
 	atomic_set(&interrupt2, 1);
 	CDBG("[CAM] %s after detect INT1, interrupt:%d \n", __func__, atomic_read(&interrupt2));
@@ -89,34 +81,17 @@ static irqreturn_t yushan_irq_handler2(int irq, void *dev_id){
 	return IRQ_HANDLED;
 }
 
-static int yushan_create_irq(void)
+int rawchip_set_size(struct rawchip_sensor_data data, bool *clock_init_done)
 {
+	int rc = 0;
 	struct tegra_camera_rawchip_info *pdata = rawchipCtrl->pdata;
-
-	CDBG("[CAM] yushan_create_irq");
-	//udwListOfInterrupts	= (uint32_t *) kmalloc(96, GFP_KERNEL);
-	return request_irq(TEGRA_GPIO_TO_IRQ(pdata->rawchip_intr0), yushan_irq_handler, IRQF_TRIGGER_RISING, "yushan_irq", 0);
-}
-
-static int yushan_create_irq2(void)
-{
-	struct tegra_camera_rawchip_info *pdata = rawchipCtrl->pdata;
-
-	CDBG("[CAM]yushan_create_irq2");
-	return  request_irq(TEGRA_GPIO_TO_IRQ(pdata->rawchip_intr1), yushan_irq_handler2, IRQF_TRIGGER_RISING, "yushan_irq2", 0);
-}
-
-
-int rawchip_set_size(struct rawchip_sensor_data data)
-{
-	struct tegra_camera_rawchip_info *sdata = yushan_pdev->dev.platform_data;
 	struct rawchip_sensor_init_data rawchip_init_data;
 	Yushan_New_Context_Config_t sYushanNewContextConfig;
-	struct timespec ts_start, ts_end;
+	Yushan_ImageChar_t	sImageChar_context;
 	int bit_cnt = 1;
 	static uint32_t pre_pixel_clk = 0;
 	uint8_t orientation;
-	pr_info("%s", __func__);
+	CDBG("%s", __func__);
 
 	if (data.mirror_flip == CAMERA_SENSOR_MIRROR_FLIP)
 		orientation = YUSHAN_ORIENTATION_MIRROR_FLIP;
@@ -127,7 +102,7 @@ int rawchip_set_size(struct rawchip_sensor_data data)
 	else
 		orientation = YUSHAN_ORIENTATION_NONE;
 
-	if (rawchip_init == 0 || pre_pixel_clk != data.pixel_clk) {
+	if (rawchipCtrl->rawchip_init == 0 || pre_pixel_clk != data.pixel_clk) {
 		pre_pixel_clk = data.pixel_clk;
 		switch (data.datatype) {
 		case CSI_RAW8:
@@ -140,36 +115,48 @@ int rawchip_set_size(struct rawchip_sensor_data data)
 			bit_cnt = 12;
 			break;
 		}
-		rawchip_init_data.spi_clk = sdata->rawchip_spi_freq;
-		rawchip_init_data.ext_clk = sdata->rawchip_mclk_freq;
+		rawchip_init_data.sensor_name = data.sensor_name;
+		rawchip_init_data.spi_clk = pdata->rawchip_spi_freq;
+		rawchip_init_data.ext_clk = pdata->rawchip_mclk_freq;
 		rawchip_init_data.lane_cnt = data.lane_cnt;
 		rawchip_init_data.orientation = orientation;
-		rawchip_init_data.use_ext_1v2 = sdata->rawchip_use_ext_1v2();
+		rawchip_init_data.use_ext_1v2 = pdata->rawchip_use_ext_1v2();
 		rawchip_init_data.bitrate = (data.pixel_clk * bit_cnt / data.lane_cnt) / 1000000;
-		rawchip_init_data.width = data.fullsize_width;
-		rawchip_init_data.height = data.fullsize_height;
-		rawchip_init_data.blk_pixels = data.fullsize_line_length_pclk - data.fullsize_width;
-		rawchip_init_data.blk_lines = data.fullsize_frame_length_lines - data.fullsize_height;
+		rawchip_init_data.width = data.width;
+		rawchip_init_data.height = data.height;
+		rawchip_init_data.blk_pixels = data.line_length_pclk - data.width;
+		rawchip_init_data.blk_lines = data.frame_length_lines - data.height;
+		rawchip_init_data.x_addr_start = data.x_addr_start;
+		rawchip_init_data.y_addr_start = data.y_addr_start;
+		rawchip_init_data.x_addr_end = data.x_addr_end;
+		rawchip_init_data.y_addr_end = data.y_addr_end;
+		rawchip_init_data.x_even_inc = data.x_even_inc;
+		rawchip_init_data.x_odd_inc = data.x_odd_inc;
+		rawchip_init_data.y_even_inc = data.y_even_inc;
+		rawchip_init_data.y_odd_inc = data.y_odd_inc;
+		rawchip_init_data.binning_rawchip = data.binning_rawchip;
 
 		pr_info("[CAM] rawchip init spi_clk=%d ext_clk=%d lane_cnt=%d bitrate=%d %d %d %d %d\n",
 			rawchip_init_data.spi_clk, rawchip_init_data.ext_clk,
 			rawchip_init_data.lane_cnt, rawchip_init_data.bitrate,
 			rawchip_init_data.width, rawchip_init_data.height,
 			rawchip_init_data.blk_pixels, rawchip_init_data.blk_lines);
-		if (rawchip_init) {
-			//XXX Yushan_common_deinit();
-			//XXX Yushan_common_init();
-			/*Reset_Yushan();*/
+		if (rawchipCtrl->rawchip_init) {
+			//rc = gpio_request(pdata->rawchip_reset, "rawchip");
+			if (rc < 0) {
+				pr_err("GPIO(%d) request failed\n", pdata->rawchip_reset);
+				return rc;
+			}
+			gpio_direction_output(pdata->rawchip_reset, 0);
+			mdelay(1);
+			gpio_direction_output(pdata->rawchip_reset, 1);
+			//gpio_free(pdata->rawchip_reset);
 		}
-		ktime_get_ts(&ts_start);
-		Yushan_sensor_open_init(rawchip_init_data);
-		ktime_get_ts(&ts_end);
-		pr_info("%s: %ld ms\n", __func__,
-			(ts_end.tv_sec-ts_start.tv_sec)*1000+(ts_end.tv_nsec-ts_start.tv_nsec)/1000000);
-		mdelay(100);
-		rawchip_init = 1;
+		rawchip_init_data.use_rawchip = data.use_rawchip;
+		rc = Yushan_sensor_open_init(rawchip_init_data, clock_init_done);
+		rawchipCtrl->rawchip_init = 1;
+		return rc;
 	}
-
 
 	pr_info("[CAM] rawchip set size %d %d %d %d\n",
 		data.width, data.height, data.line_length_pclk, data.frame_length_lines);
@@ -177,20 +164,31 @@ int rawchip_set_size(struct rawchip_sensor_data data)
 	sYushanNewContextConfig.uwActivePixels = data.width;
 	sYushanNewContextConfig.uwLineBlank = data.line_length_pclk - data.width;
 	sYushanNewContextConfig.uwActiveFrameLength = data.height;
-	sYushanNewContextConfig.bSelectStillVfMode = YUSHAN_FRAME_FORMAT_VF_MODE;
 	sYushanNewContextConfig.uwPixelFormat = 0x0A0A;
-	sYushanNewContextConfig.orientation = orientation;
 
-	Yushan_ContextUpdate_Wrapper(&sYushanNewContextConfig);
-	return 0;
+	sImageChar_context.bImageOrientation = orientation;
+	sImageChar_context.uwXAddrStart = data.x_addr_start;
+	sImageChar_context.uwYAddrStart = data.y_addr_start;
+	sImageChar_context.uwXAddrEnd= data.x_addr_end;
+	sImageChar_context.uwYAddrEnd= data.y_addr_end;
+	sImageChar_context.uwXEvenInc = data.x_even_inc;
+	sImageChar_context.uwXOddInc = data.x_odd_inc;
+	sImageChar_context.uwYEvenInc = data.y_even_inc;
+	sImageChar_context.uwYOddInc = data.y_odd_inc;
+	sImageChar_context.bBinning = data.binning_rawchip;
+
+	rc = Yushan_ContextUpdate_Wrapper(sYushanNewContextConfig, sImageChar_context);
+	return rc ? 0: -1;
 }
 
-static int rawchip_get_interrupt(struct tegra_rawchip_device *pgmn_dev, void __user *arg)
+static int rawchip_get_interrupt(struct rawchip_ctrl *raw_dev, void __user *arg)
 {
 	int rc = 0;
 	struct rawchip_stats_event_ctrl se;
 	int timeout;
 	uint8_t interrupt_type;
+	uint8_t interrupt0_type = 0;
+	uint8_t interrupt1_type = 0;
 
 	CDBG("%s\n", __func__);
 
@@ -205,7 +203,16 @@ static int rawchip_get_interrupt(struct tegra_rawchip_device *pgmn_dev, void __u
 
 	CDBG("[CAM] %s: timeout %d\n", __func__, timeout);
 
-	interrupt_type = Yushan_parse_interrupt();
+	interrupt0_type = Yushan_parse_interrupt(INTERRUPT_PAD_0, rawchipCtrl->error_interrupt_times);
+	interrupt1_type = Yushan_parse_interrupt(INTERRUPT_PAD_1, rawchipCtrl->error_interrupt_times);
+	interrupt_type = interrupt0_type | interrupt1_type;
+	if (interrupt_type & RAWCHIP_INT_TYPE_ERROR) {
+		rawchipCtrl->total_error_interrupt_times++;
+		if (rawchipCtrl->total_error_interrupt_times <= 10 || rawchipCtrl->total_error_interrupt_times % 1000 == 0) {
+			Yushan_Status_Snapshot();
+			//Yushan_dump_Dxo();
+		}
+	}
 	se.type = 10;
 	se.length = sizeof(interrupt_type);
 	if (copy_to_user((void *)(se.data),
@@ -225,13 +232,12 @@ end:
 	return rc;
 }
 
-static int rawchip_get_af_status(struct tegra_rawchip_device *pgmn_dev, void __user *arg)
+static int rawchip_get_af_status(struct rawchip_ctrl *raw_dev, void __user *arg)
 {
 	int rc = 0;
 	struct rawchip_stats_event_ctrl se;
 	int timeout;
-	uint32_t pAfStatsGreen[20];
-
+	rawchip_af_stats af_stats;
 	CDBG("%s\n", __func__);
 
 	if (copy_from_user(&se, arg,
@@ -244,18 +250,18 @@ static int rawchip_get_af_status(struct tegra_rawchip_device *pgmn_dev, void __u
 	timeout = (int)se.timeout_ms;
 
 	CDBG("[CAM] %s: timeout %d\n", __func__, timeout);
+	rc = Yushan_get_AFSU(&af_stats);
 
-	rc = Yushan_get_AFSU(pAfStatsGreen);
 	if (rc < 0) {
 		pr_err("[CAM] %s, Yushan_get_AFSU failed\n", __func__);
 		rc = -EFAULT;
 		goto end;
 	}
 	se.type = 5;
-	se.length = sizeof(pAfStatsGreen);
+	se.length = sizeof(af_stats);
 
 	if (copy_to_user((void *)(se.data),
-			pAfStatsGreen,
+			&af_stats,
 			se.length)) {
 			pr_err("[CAM] %s, ERR_COPY_TO_USER 1\n", __func__);
 		rc = -EFAULT;
@@ -272,7 +278,7 @@ end:
 	return rc;
 }
 
-static int rawchip_update_aec_awb_params(struct tegra_rawchip_device *pgmn_dev, void __user *arg)
+static int rawchip_update_aec_awb_params(struct rawchip_ctrl *raw_dev, void __user *arg)
 {
 	struct rawchip_stats_event_ctrl se;
 	rawchip_update_aec_awb_params_t *update_aec_awb_params;
@@ -310,7 +316,7 @@ static int rawchip_update_aec_awb_params(struct tegra_rawchip_device *pgmn_dev, 
 	return 0;
 }
 
-static int rawchip_update_af_params(struct tegra_rawchip_device *pgmn_dev, void __user *arg)
+static int rawchip_update_af_params(struct rawchip_ctrl *raw_dev, void __user *arg)
 {
 	struct rawchip_stats_event_ctrl se;
 	rawchip_update_af_params_t *update_af_params;
@@ -350,7 +356,7 @@ static int rawchip_update_af_params(struct tegra_rawchip_device *pgmn_dev, void 
 	return 0;
 }
 
-static int rawchip_update_3a_params(struct tegra_rawchip_device *pgmn_dev, void __user *arg)
+static int rawchip_update_3a_params(struct rawchip_ctrl *raw_dev, void __user *arg)
 {
 	struct rawchip_stats_event_ctrl se;
 	uint8_t *enable_newframe_ack;
@@ -385,23 +391,60 @@ static int rawchip_update_3a_params(struct tegra_rawchip_device *pgmn_dev, void 
 	return 0;
 }
 
+
+
+uint32_t rawchip_id;
+
+int rawchip_match_id(void)
+{
+	int rc = 0;
+	uint32_t chipid = 0;
+	int retry_spi_cnt = 0, retry_readid_cnt = 0;
+	pr_info("%s\n", __func__);
+
+	for (retry_spi_cnt = 0, retry_readid_cnt = 0; (retry_spi_cnt < 3 && retry_readid_cnt < 3); ) {
+		rc = SPI_Read(rawchip_info.rawchip_id_info->rawchip_id_reg_addr, 4, (uint8_t*)(&chipid));
+		if (rc < 0) {
+			pr_err("%s: read id failed\n", __func__);
+			retry_spi_cnt++;
+			pr_info("%s: retry: %d\n", __func__, retry_spi_cnt);
+			mdelay(5);
+			continue;
+		} else
+			rawchip_id = chipid;
+
+		pr_info("rawchip id: 0x%x requested id: 0x%x\n", chipid, rawchip_info.rawchip_id_info->rawchip_id);
+		if (chipid != rawchip_info.rawchip_id_info->rawchip_id) {
+			pr_err("rawchip_match_id chip id does not match\n");
+			retry_readid_cnt++;
+			pr_info("%s: retry: %d\n", __func__, retry_readid_cnt);
+			mdelay(5);
+			rc = -ENODEV;
+			continue;
+		} else
+			break;
+	}
+
+	return rc;
+}
+
 void rawchip_release(void)
 {
 	struct tegra_camera_rawchip_info *pdata = rawchipCtrl->pdata;
 
 	pr_info("[CAM] %s\n", __func__);
 
-	//XXX Yushan_common_deinit();
-
 	CDBG("[CAM] rawchip free irq");
 	free_irq(TEGRA_GPIO_TO_IRQ(pdata->rawchip_intr0), 0);
 	free_irq(TEGRA_GPIO_TO_IRQ(pdata->rawchip_intr1), 0);
+
 }
 
 int rawchip_open_init(void)
 {
-	int32_t rc = 0;
+	int rc = 0;
 	struct tegra_camera_rawchip_info *pdata = rawchipCtrl->pdata;
+	int i;
 
 	pr_info("[CAM] %s\n", __func__);
 
@@ -413,158 +456,53 @@ int rawchip_open_init(void)
 	atomic_set(&interrupt2, 0);
 
 	/*create irq*/
-	rc = yushan_create_irq();
-	if (rc < 0)
-		pr_err("[CAM] request GPIO irq error");
+	rc = request_irq(TEGRA_GPIO_TO_IRQ(pdata->rawchip_intr0), yushan_irq_handler,
+		IRQF_TRIGGER_RISING, "yushan_irq", 0);
+	if (rc < 0) {
+		pr_err("request irq intr0 failed\n");
+		goto open_init_failed;
+	}
 
-	rc = yushan_create_irq2();
-	if (rc < 0)
-		pr_err("[CAM] request GPIO irq 2 error");
+	rc = request_irq(TEGRA_GPIO_TO_IRQ(pdata->rawchip_intr1), yushan_irq_handler2,
+		IRQF_TRIGGER_RISING, "yushan_irq2", 0);
+	if (rc < 0) {
+		pr_err("request irq intr1 failed\n");
+		free_irq(TEGRA_GPIO_TO_IRQ(pdata->rawchip_intr0), 0);
+		goto open_init_failed;
+	}
 
-	rawchip_init = 0;
+	rawchipCtrl->rawchip_init = 0;
+
+	rawchipCtrl->total_error_interrupt_times = 0;
+	for (i = 0; i < TOTAL_INTERRUPT_COUNT; i++)
+	       rawchipCtrl->error_interrupt_times[i] = 0;
 	rawchip_intr0 = pdata->rawchip_intr0;
 	rawchip_intr1 = pdata->rawchip_intr1;
+
+	return rc;
+
+open_init_failed:
+	pr_err("%s: rawchip_open_init failed\n", __func__);
+
+	return rc;
+}
+
+/* read rawchip id and create kobject file for store it */
+
+
+
+
+static int rawchip_fops_open(struct inode *inode, struct file *filp)
+{
+	struct rawchip_ctrl *raw_dev = container_of(inode->i_cdev,
+		struct rawchip_ctrl, cdev);
+
+	filp->private_data = raw_dev;
 
 	return 0;
 }
 
-#if 0
-int rawchip_vreg_enable(void)
-{
-	struct tegra_camera_rawchip_info *sdata = yushan_pdev->dev.platform_data;
-	int rc;
-	pr_info("[CAM]%s camera vreg on\n", __func__);
-
-	if (tegra_rawchip_device_p == NULL) {
-		pr_err("already failed in __tegra_rawchip_probe\n");
-		return -EINVAL;
-	}
-
-	if (sdata->camera_rawchip_power_on == NULL) {
-		pr_err("[CAM]sensor platform_data didnt register\n");
-		return -EIO;
-	}
-	rc = sdata->camera_rawchip_power_on();
-	return rc;
-}
-
-int Yushan_common_init(void)
-{
-	int32_t rc = 0;
-	uint32_t check_yushan_id;
-	struct msm_camera_rawchip_info *sdata = yushan_pdev->dev.platform_data;
-
-	pr_info("%s\n", __func__);
-
-	//afsu_info.active_number = 0;
-
-	/*RESET*/
-	pr_info("request RAW_RSTN\n");
-	rc = gpio_request(sdata->rawchip_reset, "yushan");
-	if (!rc) {
-		gpio_direction_output(sdata->rawchip_reset, 1);
-	} else {
-		pr_err("GPIO (%d) request failed\n", sdata->rawchip_reset);
-		goto init_fail;
-	}
-	gpio_free(sdata->rawchip_reset);
-
-	yushan_spi_write(0x0008, 0x7f);
-
-	//mdelay(10);
-	msleep(1);
-
-	SPI_Read(0x5c04, 4, (uint8_t*)(&check_yushan_id));
-	pr_info("[CAM]Yushan power on id: 0x%x \n", check_yushan_id);
-
-	if (check_yushan_id == 0x02030200)
-	{
-		pr_info("[CAM]Yushan read ID correct\n");
-		goto init_done;
-	}
-	init_fail:
-		pr_err("[CAM]Yushan power on failed\n");
-	init_done:
-		return rc;
-}
-
-int rawchip_vreg_disable(void)
-{
-	struct tegra_camera_rawchip_info *sdata = yushan_pdev->dev.platform_data;
-	int rc;
-	pr_info("%s camera vreg off\n", __func__);
-
-	if (sdata->camera_rawchip_power_off == NULL) {
-		pr_err("sensor platform_data didnt register\n");
-		return -EIO;
-	}
-	rc = sdata->camera_rawchip_power_off();
-	return rc;
-}
-
-int Yushan_common_deinit(void)
-{
-	int32_t rc = 0;
-	struct tegra_camera_rawchip_info *sdata = yushan_pdev->dev.platform_data;
-
-	pr_info("%s\n", __func__);
-	/*FPGA's RESET to low*/
-	rc = gpio_request(sdata->rawchip_reset, "yushan");
-	if (!rc) {
-		gpio_direction_output(sdata->rawchip_reset, 0);
-	} else {
-		pr_err("GPIO (%d) request failed\n", sdata->rawchip_reset);
-		goto init_fail;
-	}
-	gpio_free(sdata->rawchip_reset);
-
-	msleep(1);
-	//rawchip_vreg_disable(yushan_pdev);
-	goto init_done;
-
-	init_fail:
-		pr_err("Yushan power off failed\n");
-	init_done:
-		return rc;
-}
-#endif
-
-static int tegra_rawchip_open(struct inode *inode, struct file *filp)
-{
-	int rc;
-
-	struct tegra_rawchip_device *pgmn_dev = container_of(inode->i_cdev,
-		struct tegra_rawchip_device, cdev);
-	filp->private_data = pgmn_dev;
-
-	pr_info("%s:%d]\n", __func__, __LINE__);
-
-	rc = 0;//Yushan_sensor_open_init();//__tegra_rawchip_open(pgmn_dev);
-
-	//pr_err(KERN_INFO "%s:%d] %s open_count = %d\n", __func__, __LINE__,
-	//	filp->f_path.dentry->d_name.name, pgmn_dev->open_count);
-
-	return rc;
-}
-
-#if 0
-static int tegra_rawchip_release(struct inode *inode, struct file *filp)
-{
-	int rc;
-
-	struct tegra_rawchip_device *pgmn_dev = filp->private_data;
-
-	pr_err(KERN_INFO "%s:%d]\n", __func__, __LINE__);
-
-	rc = __tegra_rawchip_release(pgmn_dev);
-
-	pr_err(KERN_INFO "%s:%d] %s open_count = %d\n", __func__, __LINE__,
-		filp->f_path.dentry->d_name.name, pgmn_dev->open_count);
-	return rc;
-}
-#endif
-
-static unsigned int tegra_rawchip_poll(struct file *filp,
+static unsigned int rawchip_fops_poll(struct file *filp,
 	struct poll_table_struct *pll_table)
 {
 	int rc = 0;
@@ -573,8 +511,11 @@ static unsigned int tegra_rawchip_poll(struct file *filp,
 	poll_wait(filp, &yushan_int.yushan_wait, pll_table);
 
 	spin_lock_irqsave(&yushan_int.yushan_spin_lock, flags);
-	if (atomic_read(&interrupt) || atomic_read(&interrupt2)) {
+	if (atomic_read(&interrupt)) {
 		atomic_set(&interrupt, 0);
+		rc = POLLIN | POLLRDNORM;
+	}
+	if (atomic_read(&interrupt2)) {
 		atomic_set(&interrupt2, 0);
 		rc = POLLIN | POLLRDNORM;
 	}
@@ -588,11 +529,11 @@ void tegra_rawchip_block_iotcl(bool_t blocked)
 {
 	block_iotcl = blocked;
 }
-static long tegra_rawchip_ioctl(struct file *filp, unsigned int cmd,
+static long rawchip_fops_ioctl(struct file *filp, unsigned int cmd,
 	unsigned long arg)
 {
 	int rc = 0;
-	struct tegra_rawchip_device *pgmn_dev = filp->private_data;
+	struct rawchip_ctrl *raw_dev = filp->private_data;
 	void __user *argp = (void __user *)arg;
 
 	if(block_iotcl)
@@ -601,138 +542,46 @@ static long tegra_rawchip_ioctl(struct file *filp, unsigned int cmd,
 		return rc;
 	}
 	CDBG("%s:%d cmd = %d\n", __func__, __LINE__, _IOC_NR(cmd));
-	mutex_lock(&raw_ioctl_lock);
+	mutex_lock(&raw_dev->raw_ioctl_lock);
 	switch (cmd) {
 	case RAWCHIP_IOCTL_GET_INT:
 		CDBG("RAWCHIP_IOCTL_GET_INT\n");
-		rawchip_get_interrupt(pgmn_dev, argp);
+		rawchip_get_interrupt(raw_dev, argp);
 		break;
 	case RAWCHIP_IOCTL_GET_AF_STATUS:
 		CDBG("RAWCHIP_IOCTL_GET_AF_STATUS\n");
-		rawchip_get_af_status(pgmn_dev, argp);
+		rawchip_get_af_status(raw_dev, argp);
 		break;
 	case RAWCHIP_IOCTL_UPDATE_AEC_AWB:
 		CDBG("RAWCHIP_IOCTL_UPDATE_AEC\n");
-		rawchip_update_aec_awb_params(pgmn_dev, argp);
+		rawchip_update_aec_awb_params(raw_dev, argp);
 		break;
 	case RAWCHIP_IOCTL_UPDATE_AF:
 		CDBG("RAWCHIP_IOCTL_UPDATE_AF\n");
-		rawchip_update_af_params(pgmn_dev, argp);
+		rawchip_update_af_params(raw_dev, argp);
 		break;
 	case RAWCHIP_IOCTL_UPDATE_3A:
 		CDBG("RAWCHIP_IOCTL_UPDATE_3A\n");
-		rawchip_update_3a_params(pgmn_dev, argp);
+		rawchip_update_3a_params(raw_dev, argp);
 		break;
 	}
-	mutex_unlock(&raw_ioctl_lock);
+	mutex_unlock(&raw_dev->raw_ioctl_lock);
 	return rc;
 }
 
-#if 0
-static long tegra_rawchip_ioctl(struct file *filp, unsigned int cmd,
-	unsigned long arg)
-{
-	int rc;
-	void __user *argp = (void __user *)arg;
-	//struct tegra_rawchip_device *pgmn_dev = filp->private_data;
-
-	//pr_err("%s:%d cmd = %d\n", __func__, __LINE__, _IOC_NR(cmd));
-
-	//rc = __tegra_rawchip_ioctl(pgmn_dev, cmd, arg);
-	switch (cmd) {
-		case MSM_CAM_IOCTL_SET_AFSU: {
-			if (copy_from_user(&afsu_info, argp, sizeof(struct tegra_AFSU_info))) {
-				pr_info("<ChenC>copy_from_user error\n");
-				rc = -EFAULT;
-			}
-			pr_info("<ChenC>tegra_rawchip_ioctl :AFSU:active number:%d, xstart:%d %d %d %d \n", afsu_info.active_number, afsu_info.sYushanAfRoi[0].bXStart, afsu_info.sYushanAfRoi[0].bYStart, afsu_info.sYushanAfRoi[0].bXEnd, afsu_info.sYushanAfRoi[0].bYEnd); 		
-			if(afsu_info.active_number == 0)
-			{
-				pr_info("<ChenC>stop AFSU\n");
-				//break;
-			}
-			Yushan_Dxo_Dop_Af_Run((Yushan_AF_ROI_t*)&afsu_info.sYushanAfRoi, (uint32_t *)&pAfStatsGreen, afsu_info.active_number);
-			AF_STAT_INT = 0;
-			break;
-		}
-		case MSM_CAM_IOCTL_GET_AFSU_DATA: {
-			uint8_t		bStatus = SUCCESS;
-
-			bStatus = WaitForInterruptEvent2(EVENT_DXODOP7_NEWFRAMEPROC_ACK, TIME_50MS);
-			if(bStatus)
-			{
-				Yushan_Read_AF_Statistics(pAfStatsGreen);
-				pr_info("<ChenC>kernal:GET_AFSU:G:%d, R:%d, B:%d, confi:%d\n",  pAfStatsGreen[0], pAfStatsGreen[1], pAfStatsGreen[2], pAfStatsGreen[3]);  		
-					if (copy_to_user((void *)argp,
-						pAfStatsGreen,
-						sizeof(uint32_t)*20))
-					{
-						pr_info("<ChenC>copy_from_user error\n");
-						rc = -EFAULT;
-					}
-			}
-			else
-				pr_info("<ChenC>kernal:%s:Get AFSU statistic data fail\n", __func__);
-			break;
-		}
-		case MSM_CAM_IOCTL_RAWCHIP_ISR: {
-				Yushan_ISR();
-				//pr_info("<ChenC>kernal:%s:MSM_CAM_IOCTL_RAWCHIP_ISR\n", __func__);
-			break;
-		}
-	}
-	//pr_err("%s:%d\n", __func__, __LINE__);
-	return rc;
-}
-#endif
-
-static  const struct  file_operations tegra_rawchip_fops = {
+static  const struct  file_operations rawchip_fops = {
 	.owner	  = THIS_MODULE,
-	.open	   = tegra_rawchip_open,
-//	.release	= tegra_rawchip_release,
-	.unlocked_ioctl = tegra_rawchip_ioctl,
-	.poll  = tegra_rawchip_poll,
+	.open	   = rawchip_fops_open,
+	.unlocked_ioctl = rawchip_fops_ioctl,
+	.poll  = rawchip_fops_poll,
 };
 
-int setup_rawchip_dev(int node, char *device_name)
+static int setup_rawchip_cdev(void)
 {
-	return 0;
-}
-
-struct tegra_rawchip_device *__tegra_rawchip_init(struct platform_device *pdev)
-{
-	struct tegra_rawchip_device *pgmn_dev;
-
-	pgmn_dev = kzalloc(sizeof(struct tegra_rawchip_device), GFP_ATOMIC);
-	if (!pgmn_dev) {
-		pr_err("%s:%d]no mem\n", __func__, __LINE__);
-		return NULL;
-	}
-
-	mutex_init(&pgmn_dev->lock);
-       mutex_init(&raw_ioctl_lock);
-	pgmn_dev->pdev = pdev;
-
-	init_waitqueue_head(&pgmn_dev->wait);
-
-	return pgmn_dev;
-}
-
-int __tegra_rawchip_exit(struct tegra_rawchip_device *pgmn_dev)
-{
-	pr_info("%s:%d]\n", __func__, __LINE__);
-	mutex_destroy(&raw_ioctl_lock);
-	mutex_destroy(&pgmn_dev->lock);
-	kfree(pgmn_dev);
-	return 0;
-}
-
-static int tegra_rawchip_init(struct platform_device *pdev)
-{
-	int rc = -1;
+	int rc = 0;
 	struct device *dev;
 
-	pr_info("%s:%d]\n", __func__, __LINE__);
+	pr_info("%s\n", __func__);
 
 	rc = rawchip_spi_init();
 	if (rc < 0) {
@@ -740,80 +589,69 @@ static int tegra_rawchip_init(struct platform_device *pdev)
 		goto fail;
 	}
 
-	tegra_rawchip_device_p = __tegra_rawchip_init(pdev);
-	if (tegra_rawchip_device_p == NULL) {
-		pr_err("%s: initialization failed\n", __func__);
-		goto fail;
-	}
 
-	rc = alloc_chrdev_region(&tegra_rawchip_devno, 0, 1, MSM_RAWCHIP_NAME);
+	rc = alloc_chrdev_region(&rawchip_devno, 0, 1, MSM_RAWCHIP_NAME);
 	if (rc < 0) {
 		pr_err("%s: failed to allocate chrdev\n", __func__);
-		goto fail_1;
+		goto alloc_chrdev_region_failed;
 	}
 
-	if (!tegra_rawchip_class) {
-		tegra_rawchip_class = class_create(THIS_MODULE, MSM_RAWCHIP_NAME);
-		if (IS_ERR(tegra_rawchip_class)) {
-			rc = PTR_ERR(tegra_rawchip_class);
+	if (!rawchip_class) {
+		rawchip_class = class_create(THIS_MODULE, MSM_RAWCHIP_NAME);
+		if (IS_ERR(rawchip_class)) {
+			rc = PTR_ERR(rawchip_class);
 			pr_err("%s: create device class failed\n",
 				__func__);
-			goto fail_2;
+			goto class_create_failed;
 		}
 	}
 
-	dev = device_create(tegra_rawchip_class, NULL,
-		MKDEV(MAJOR(tegra_rawchip_devno), MINOR(tegra_rawchip_devno)), NULL,
+	dev = device_create(rawchip_class, NULL,
+		MKDEV(MAJOR(rawchip_devno), MINOR(rawchip_devno)), NULL,
 		"%s%d", MSM_RAWCHIP_NAME, 0);
 	if (IS_ERR(dev)) {
 		pr_err("%s: error creating device\n", __func__);
 		rc = -ENODEV;
-		goto fail_3;
+		goto device_create_failed;
 	}
-	cdev_init(&tegra_rawchip_device_p->cdev, &tegra_rawchip_fops);
-	tegra_rawchip_device_p->cdev.owner = THIS_MODULE;
-	tegra_rawchip_device_p->cdev.ops   =
-		(const struct file_operations *) &tegra_rawchip_fops;
-	rc = cdev_add(&tegra_rawchip_device_p->cdev, tegra_rawchip_devno, 1);
+
+	cdev_init(&rawchipCtrl->cdev, &rawchip_fops);
+	rawchipCtrl->cdev.owner = THIS_MODULE;
+	rawchipCtrl->cdev.ops   =
+		(const struct file_operations *) &rawchip_fops;
+	rc = cdev_add(&rawchipCtrl->cdev, rawchip_devno, 1);
 	if (rc < 0) {
 		pr_err("%s: error adding cdev\n", __func__);
 		rc = -ENODEV;
-		goto fail_4;
+		goto cdev_add_failed;
 	}
 	printk(KERN_INFO "%s %s: success\n", __func__, MSM_RAWCHIP_NAME);
 
-      rawchip_open_init();
-
 	return rc;
 
-fail_4:
-	device_destroy(tegra_rawchip_class, tegra_rawchip_devno);
-
-fail_3:
-	class_destroy(tegra_rawchip_class);
-
-fail_2:
-	unregister_chrdev_region(tegra_rawchip_devno, 1);
-
-fail_1:
-	__tegra_rawchip_exit(tegra_rawchip_device_p);
+cdev_add_failed:
+	device_destroy(rawchip_class, rawchip_devno);
+device_create_failed:
+	class_destroy(rawchip_class);
+class_create_failed:
+	unregister_chrdev_region(rawchip_devno, 1);
+alloc_chrdev_region_failed:
 
 fail:
 	return rc;
 }
 
-static void tegra_rawchip_exit(void)
+static void rawchip_tear_down_cdev(void)
 {
-	cdev_del(&tegra_rawchip_device_p->cdev);
-	device_destroy(tegra_rawchip_class, tegra_rawchip_devno);
-	class_destroy(tegra_rawchip_class);
-	unregister_chrdev_region(tegra_rawchip_devno, 1);
-	__tegra_rawchip_exit(tegra_rawchip_device_p);
+	cdev_del(&rawchipCtrl->cdev);
+	device_destroy(rawchip_class, rawchip_devno);
+	class_destroy(rawchip_class);
+	unregister_chrdev_region(rawchip_devno, 1);
 }
 
-static int __tegra_rawchip_probe(struct platform_device *pdev)
+static int rawchip_driver_probe(struct platform_device *pdev)
 {
-	int rc;
+	int rc = 0;
 	pr_info("%s\n", __func__);
 
 	rawchipCtrl = kzalloc(sizeof(struct rawchip_ctrl), GFP_ATOMIC);
@@ -828,51 +666,53 @@ static int __tegra_rawchip_probe(struct platform_device *pdev)
 		kfree(rawchipCtrl);
 		return -EFAULT;
 	}
-
-	yushan_pdev = pdev;
-	rc = tegra_rawchip_init(pdev);
-
+	rc = setup_rawchip_cdev();
 	if (rc < 0) {
 		kfree(rawchipCtrl);
 		return rc;
 	}
 
+	mutex_init(&rawchipCtrl->raw_ioctl_lock);
+	
+	MFG_READ_RAWCHIP_ID();
 
 	return rc;
 }
 
-static int __tegra_rawchip_remove(struct platform_device *pdev)
+static int rawchip_driver_remove(struct platform_device *pdev)
 {
-	pr_info("%s:%d]\n", __func__, __LINE__);
-	tegra_rawchip_exit();
+	rawchip_tear_down_cdev();
+
+	mutex_destroy(&rawchipCtrl->raw_ioctl_lock);
+
 	kfree(rawchipCtrl);
+
 	return 0;
 }
 
-static struct  platform_driver tegra_rawchip_driver = {
-	.probe  = __tegra_rawchip_probe,
-	.remove = __tegra_rawchip_remove,
+static struct  platform_driver rawchip_driver = {
+	.probe  = rawchip_driver_probe,
+	.remove = rawchip_driver_remove,
 	.driver = {
 		.name = "rawchip",
 		.owner = THIS_MODULE,
 	},
 };
 
-static int __init tegra_rawchip_driver_init(void)
+static int __init rawchip_driver_init(void)
 {
 	int rc;
-	rc = platform_driver_register(&tegra_rawchip_driver);
+	rc = platform_driver_register(&rawchip_driver);
 	return rc;
 }
 
-static void __exit tegra_rawchip_driver_exit(void)
+static void __exit rawchip_driver_exit(void)
 {
-	platform_driver_unregister(&tegra_rawchip_driver);
+	platform_driver_unregister(&rawchip_driver);
 }
 
-MODULE_DESCRIPTION("tegra rawchip driver");
-MODULE_VERSION("tegra rawchip 0.1");
+MODULE_DESCRIPTION("rawchip driver");
+MODULE_VERSION("rawchip 0.1");
 
-module_init(tegra_rawchip_driver_init);
-module_exit(tegra_rawchip_driver_exit);
-
+module_init(rawchip_driver_init);
+module_exit(rawchip_driver_exit);

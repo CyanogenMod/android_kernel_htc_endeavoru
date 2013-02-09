@@ -3,6 +3,7 @@
  */
 #ifndef _SKGE_H
 #define _SKGE_H
+#include <linux/interrupt.h>
 
 /* PCI config registers */
 #define PCI_DEV_REG1	0x40
@@ -2460,7 +2461,6 @@ struct skge_port {
 	struct timer_list    link_timer;
 	enum pause_control   flow_control;
 	enum pause_status    flow_status;
-	u8		     rx_csum;
 	u8		     blink_on;
 	u8		     wol;
 	u8		     autoneg;	/* AUTONEG_ENABLE, AUTONEG_DISABLE */

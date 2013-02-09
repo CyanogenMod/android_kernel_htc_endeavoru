@@ -34,7 +34,7 @@ struct android_usb_product {
 	 */
 	__u16 vendor_id;
 
-	/* Product ID for this set of functions. */
+	/* Default product ID. */
 	__u16 product_id;
 
 	/* List of function names associated with this product.
@@ -88,9 +88,16 @@ struct android_usb_platform_data {
 	int (*update_pid_and_serial_num)(uint32_t, const char *);
 
 	/* For multiple serial function support
-	 * "Ex: tty:serial[,sdio:modem_mdm][,smd:modem]"
+	 * Ex: "tty:serial[,sdio:modem_mdm][,smd:modem]"
 	 */
 	char *fserial_init_string;
+
+	/* the ctrl/data interface name for rmnet interface.
+	 * format(per port):"ctrl0,data0,ctrl1,data1..."
+	 * Ex: "smd,bam" or  "hsic,hsic"
+	 */
+	char *usb_rmnet_interface;
+	char *usb_diag_interface;
 
 	/* The gadget driver need to initial at beginning
 	 */
@@ -117,6 +124,18 @@ struct android_usb_platform_data {
 	 * @param intrsharing: 1 for internet sharing, 0 for internet pass through
 	 */
 	int (*match)(int product_id, int intrsharing);
+	/* in some cpu architecture, the sfab freq is not fixed.
+	  * it will impact USB perforamnce,
+	  * add callback function to lock sfab manaully.
+	 */
+	void (*sfab_lock)(int lock);
+	u32 swfi_latency;
+
+	bool support_modem;
+	/* hold a performance lock while adb_read a maximum data to keep
+	 * adb throughput level
+	 */
+	int mtp_perf_lock_on;
 };
 
 /* Platform data for "usb_mass_storage" driver. */
@@ -141,6 +160,7 @@ struct usb_ether_platform_data {
 #if defined(CONFIG_MACH_HOLIDAY)
 extern u8 in_usb_tethering;
 #endif
+int htc_usb_enable_function(char *name, int ebl);
 
 #if 0
 extern void android_register_function(struct android_usb_function *f);

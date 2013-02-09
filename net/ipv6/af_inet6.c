@@ -289,6 +289,10 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 	if (addr_len < SIN6_LEN_RFC2133)
 		return -EINVAL;
+
+	if (addr->sin6_family != AF_INET6)
+		return -EAFNOSUPPORT;
+
 	addr_type = ipv6_addr_type(&addr->sin6_addr);
 	if ((addr_type & IPV6_ADDR_MULTICAST) && sock->type == SOCK_STREAM)
 		return -EINVAL;
@@ -774,7 +778,7 @@ static int ipv6_gso_pull_exthdrs(struct sk_buff *skb, int proto)
 
 static int ipv6_gso_send_check(struct sk_buff *skb)
 {
-	struct ipv6hdr *ipv6h;
+	const struct ipv6hdr *ipv6h;
 	const struct inet6_protocol *ops;
 	int err = -EINVAL;
 
@@ -905,6 +909,7 @@ static struct sk_buff **ipv6_gro_receive(struct sk_buff **head,
 		skb_reset_transport_header(skb);
 		__skb_push(skb, skb_gro_offset(skb));
 
+		ops = rcu_dereference(inet6_protos[proto]);
 		if (!ops || !ops->gro_receive)
 			goto out_unlock;
 

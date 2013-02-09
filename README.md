@@ -1,2 +1,2 @@
-HTC-Kernel-EndeavorU-Vanilla
-============================
+android_kernel_htc_endeavoru_jb
+===============================

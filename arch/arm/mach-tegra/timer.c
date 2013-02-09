@@ -31,6 +31,7 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/syscore_ops.h>
+#include <linux/rtc.h>
 
 #include <asm/mach/time.h>
 #include <asm/localtimer.h>
@@ -92,25 +93,12 @@ static void tegra_timer_set_mode(enum clock_event_mode mode,
 	}
 }
 
-static cycle_t tegra_clocksource_read(struct clocksource *cs)
-{
-	return timer_readl(TIMERUS_CNTR_1US);
-}
-
 static struct clock_event_device tegra_clockevent = {
 	.name		= "timer0",
 	.rating		= 300,
 	.features	= CLOCK_EVT_FEAT_ONESHOT | CLOCK_EVT_FEAT_PERIODIC,
 	.set_next_event	= tegra_timer_set_next_event,
 	.set_mode	= tegra_timer_set_mode,
-};
-
-static struct clocksource tegra_clocksource = {
-	.name	= "timer_us",
-	.rating	= 300,
-	.read	= tegra_clocksource_read,
-	.mask	= CLOCKSOURCE_MASK(32),
-	.flags	= CLOCK_SOURCE_IS_CONTINUOUS,
 };
 
 static DEFINE_CLOCK_DATA(cd);
@@ -148,9 +136,7 @@ static void notrace tegra_update_sched_clock(void)
  * tegra_rtc driver could be executing to avoid race conditions
  * on the RTC shadow register
  */
-//Original: static u64 tegra_rtc_read_ms(void);
-//modified for DVFS profile statistics,
-u64 tegra_rtc_read_ms(void)
+static u64 tegra_rtc_read_ms(void)
 {
 	u32 ms = readl(rtc_base + RTC_MILLISECONDS);
 	u32 s = readl(rtc_base + RTC_SHADOW_SECONDS);
@@ -219,6 +205,15 @@ static struct syscore_ops tegra_timer_syscore_ops = {
 };
 
 #ifdef CONFIG_HAVE_ARM_TWD
+int tegra_twd_get_state(struct tegra_twd_context *context)
+{
+	context->twd_ctrl = readl(twd_base + TWD_TIMER_CONTROL);
+	context->twd_load = readl(twd_base + TWD_TIMER_LOAD);
+	context->twd_cnt = readl(twd_base + TWD_TIMER_COUNTER);
+
+	return 0;
+}
+
 void tegra_twd_suspend(struct tegra_twd_context *context)
 {
 	context->twd_ctrl = readl(twd_base + TWD_TIMER_CONTROL);
@@ -241,6 +236,96 @@ void tegra_twd_resume(struct tegra_twd_context *context)
 				     TWD_TIMER_CONTROL_IT_ENABLE)));
 	writel(context->twd_load, twd_base + TWD_TIMER_LOAD);
 	writel(context->twd_ctrl, twd_base + TWD_TIMER_CONTROL);
+}
+#endif
+
+#ifdef CONFIG_RTC_CLASS
+/**
+ * has_readtime - check rtc device has readtime ability
+ * @dev: current device
+ * @name_ptr: name to be returned
+ *
+ * This helper function checks to see if the rtc device can be
+ * used for reading time
+ */
+static int has_readtime(struct device *dev, void *name_ptr)
+{
+	struct rtc_device *candidate = to_rtc_device(dev);
+
+	if (!candidate->ops->read_time)
+		return 0;
+
+	return 1;
+}
+
+/**
+ * tegra_get_linear_age - helper function to return linear age
+ * from Jan 2012.
+ *
+ * @return
+ * 1 - Jan 2012,
+ * 2 - Feb 2012,
+ * .....
+ * 13 - Jan 2013
+ */
+int tegra_get_linear_age(void)
+{
+	struct rtc_time tm;
+	int year, month, linear_age;
+	struct rtc_device *rtc_dev = NULL;
+	const char *name = NULL;
+	int ret;
+	struct device *dev = NULL;
+
+	linear_age = -1;
+	year = month = 0;
+	dev = class_find_device(rtc_class, NULL, &name, has_readtime);
+
+	if (!dev) {
+		pr_err("DVFS: No device with readtime capability\n");
+		goto done;
+	}
+
+	name = dev_name(dev);
+
+	pr_info("DVFS: Got RTC device name:%s\n", name);
+
+	if (name)
+		rtc_dev = rtc_class_open((char *)name);
+
+	if (!rtc_dev) {
+		pr_err("DVFS: No RTC device\n");
+		goto error_dev;
+	}
+
+	ret = rtc_read_time(rtc_dev, &tm);
+
+	if (ret < 0) {
+		pr_err("DVFS: Can't read RTC time\n");
+		goto error_rtc;
+	}
+
+	year = tm.tm_year;
+	/*Normalize it to 2012*/
+	year -= 112;
+	month = tm.tm_mon + 1;
+
+	if (year >= 0)
+		linear_age = year * 12 + month;
+
+error_rtc:
+	rtc_class_close(rtc_dev);
+error_dev:
+	put_device(dev);
+done:
+	return linear_age;
+
+}
+
+#else
+int tegra_get_linear_age()
+{
+	return -1;
 }
 #endif
 
@@ -274,7 +359,8 @@ static void __init tegra_init_timer(void)
 	init_fixed_sched_clock(&cd, tegra_update_sched_clock, 32,
 			       1000000, SC_MULT, SC_SHIFT);
 
-	if (clocksource_register_hz(&tegra_clocksource, 1000000)) {
+	if (clocksource_mmio_init(timer_reg_base + TIMERUS_CNTR_1US,
+		"timer_us", 1000000, 300, 32, clocksource_mmio_readl_up)) {
 		printk(KERN_ERR "Failed to register clocksource\n");
 		BUG();
 	}

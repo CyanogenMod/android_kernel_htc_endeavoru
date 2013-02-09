@@ -34,6 +34,7 @@
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/mm.h>
 #include <linux/pm.h>
 #include <linux/ethtool.h>
@@ -42,7 +43,7 @@
 #include <linux/ipv6.h>
 #include <linux/slab.h>
 #include <asm/hvcall.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/vio.h>
 #include <asm/iommu.h>
 #include <asm/firmware.h>
@@ -394,7 +395,7 @@ static inline struct sk_buff *ibmveth_rxq_get_buffer(struct ibmveth_adapter *ada
 }
 
 /* recycle the current buffer on the rx queue */
-static void ibmveth_rxq_recycle_buffer(struct ibmveth_adapter *adapter)
+static int ibmveth_rxq_recycle_buffer(struct ibmveth_adapter *adapter)
 {
 	u32 q_index = adapter->rx_queue.index;
 	u64 correlator = adapter->rx_queue.queue_addr[q_index].correlator;
@@ -402,6 +403,7 @@ static void ibmveth_rxq_recycle_buffer(struct ibmveth_adapter *adapter)
 	unsigned int index = correlator & 0xffffffffUL;
 	union ibmveth_buf_desc desc;
 	unsigned long lpar_rc;
+	int ret = 1;
 
 	BUG_ON(pool >= IBMVETH_NUM_BUFF_POOLS);
 	BUG_ON(index >= adapter->rx_buff_pool[pool].size);
@@ -409,7 +411,7 @@ static void ibmveth_rxq_recycle_buffer(struct ibmveth_adapter *adapter)
 	if (!adapter->rx_buff_pool[pool].active) {
 		ibmveth_rxq_harvest_buffer(adapter);
 		ibmveth_free_buffer_pool(adapter, &adapter->rx_buff_pool[pool]);
-		return;
+		goto out;
 	}
 
 	desc.fields.flags_len = IBMVETH_BUF_VALID |
@@ -422,12 +424,16 @@ static void ibmveth_rxq_recycle_buffer(struct ibmveth_adapter *adapter)
 		netdev_dbg(adapter->netdev, "h_add_logical_lan_buffer failed "
 			   "during recycle rc=%ld", lpar_rc);
 		ibmveth_remove_buffer_from_pool(adapter, adapter->rx_queue.queue_addr[adapter->rx_queue.index].correlator);
+		ret = 0;
 	}
 
 	if (++adapter->rx_queue.index == adapter->rx_queue.num_slots) {
 		adapter->rx_queue.index = 0;
 		adapter->rx_queue.toggle = !adapter->rx_queue.toggle;
 	}
+
+out:
+	return ret;
 }
 
 static void ibmveth_rxq_harvest_buffer(struct ibmveth_adapter *adapter)
@@ -630,8 +636,8 @@ static int ibmveth_open(struct net_device *netdev)
 		netdev_err(netdev, "unable to request irq 0x%x, rc %d\n",
 			   netdev->irq, rc);
 		do {
-			rc = h_free_logical_lan(adapter->vdev->unit_address);
-		} while (H_IS_LONG_BUSY(rc) || (rc == H_BUSY));
+			lpar_rc = h_free_logical_lan(adapter->vdev->unit_address);
+		} while (H_IS_LONG_BUSY(lpar_rc) || (lpar_rc == H_BUSY));
 
 		goto err_out;
 	}
@@ -710,7 +716,7 @@ static int netdev_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 				SUPPORTED_FIBRE);
 	cmd->advertising = (ADVERTISED_1000baseT_Full | ADVERTISED_Autoneg |
 				ADVERTISED_FIBRE);
-	cmd->speed = SPEED_1000;
+	ethtool_cmd_speed_set(cmd, SPEED_1000);
 	cmd->duplex = DUPLEX_FULL;
 	cmd->port = PORT_FIBRE;
 	cmd->phy_address = 0;
@@ -729,50 +735,29 @@ static void netdev_get_drvinfo(struct net_device *dev,
 		sizeof(info->version) - 1);
 }
 
-static void ibmveth_set_rx_csum_flags(struct net_device *dev, u32 data)
+static u32 ibmveth_fix_features(struct net_device *dev, u32 features)
 {
-	struct ibmveth_adapter *adapter = netdev_priv(dev);
+	/*
+	 * Since the ibmveth firmware interface does not have the
+	 * concept of separate tx/rx checksum offload enable, if rx
+	 * checksum is disabled we also have to disable tx checksum
+	 * offload. Once we disable rx checksum offload, we are no
+	 * longer allowed to send tx buffers that are not properly
+	 * checksummed.
+	 */
 
-	if (data) {
-		adapter->rx_csum = 1;
-	} else {
-		/*
-		 * Since the ibmveth firmware interface does not have the
-		 * concept of separate tx/rx checksum offload enable, if rx
-		 * checksum is disabled we also have to disable tx checksum
-		 * offload. Once we disable rx checksum offload, we are no
-		 * longer allowed to send tx buffers that are not properly
-		 * checksummed.
-		 */
-		adapter->rx_csum = 0;
-		dev->features &= ~NETIF_F_IP_CSUM;
-		dev->features &= ~NETIF_F_IPV6_CSUM;
-	}
+	if (!(features & NETIF_F_RXCSUM))
+		features &= ~NETIF_F_ALL_CSUM;
+
+	return features;
 }
 
-static void ibmveth_set_tx_csum_flags(struct net_device *dev, u32 data)
-{
-	struct ibmveth_adapter *adapter = netdev_priv(dev);
-
-	if (data) {
-		if (adapter->fw_ipv4_csum_support)
-			dev->features |= NETIF_F_IP_CSUM;
-		if (adapter->fw_ipv6_csum_support)
-			dev->features |= NETIF_F_IPV6_CSUM;
-		adapter->rx_csum = 1;
-	} else {
-		dev->features &= ~NETIF_F_IP_CSUM;
-		dev->features &= ~NETIF_F_IPV6_CSUM;
-	}
-}
-
-static int ibmveth_set_csum_offload(struct net_device *dev, u32 data,
-				    void (*done) (struct net_device *, u32))
+static int ibmveth_set_csum_offload(struct net_device *dev, u32 data)
 {
 	struct ibmveth_adapter *adapter = netdev_priv(dev);
 	unsigned long set_attr, clr_attr, ret_attr;
 	unsigned long set_attr6, clr_attr6;
-	long ret, ret6;
+	long ret, ret4, ret6;
 	int rc1 = 0, rc2 = 0;
 	int restart = 0;
 
@@ -785,6 +770,8 @@ static int ibmveth_set_csum_offload(struct net_device *dev, u32 data,
 
 	set_attr = 0;
 	clr_attr = 0;
+	set_attr6 = 0;
+	clr_attr6 = 0;
 
 	if (data) {
 		set_attr = IBMVETH_ILLAN_IPV4_TCP_CSUM;
@@ -799,16 +786,20 @@ static int ibmveth_set_csum_offload(struct net_device *dev, u32 data,
 	if (ret == H_SUCCESS && !(ret_attr & IBMVETH_ILLAN_ACTIVE_TRUNK) &&
 	    !(ret_attr & IBMVETH_ILLAN_TRUNK_PRI_MASK) &&
 	    (ret_attr & IBMVETH_ILLAN_PADDED_PKT_CSUM)) {
-		ret = h_illan_attributes(adapter->vdev->unit_address, clr_attr,
+		ret4 = h_illan_attributes(adapter->vdev->unit_address, clr_attr,
 					 set_attr, &ret_attr);
 
-		if (ret != H_SUCCESS) {
+		if (ret4 != H_SUCCESS) {
 			netdev_err(dev, "unable to change IPv4 checksum "
 					"offload settings. %d rc=%ld\n",
-					data, ret);
+					data, ret4);
 
-			ret = h_illan_attributes(adapter->vdev->unit_address,
-						 set_attr, clr_attr, &ret_attr);
+			h_illan_attributes(adapter->vdev->unit_address,
+					   set_attr, clr_attr, &ret_attr);
+
+			if (data == 1)
+				dev->features &= ~NETIF_F_IP_CSUM;
+
 		} else {
 			adapter->fw_ipv4_csum_support = data;
 		}
@@ -819,16 +810,19 @@ static int ibmveth_set_csum_offload(struct net_device *dev, u32 data,
 		if (ret6 != H_SUCCESS) {
 			netdev_err(dev, "unable to change IPv6 checksum "
 					"offload settings. %d rc=%ld\n",
-					data, ret);
+					data, ret6);
 
-			ret = h_illan_attributes(adapter->vdev->unit_address,
-						 set_attr6, clr_attr6,
-						 &ret_attr);
+			h_illan_attributes(adapter->vdev->unit_address,
+					   set_attr6, clr_attr6, &ret_attr);
+
+			if (data == 1)
+				dev->features &= ~NETIF_F_IPV6_CSUM;
+
 		} else
 			adapter->fw_ipv6_csum_support = data;
 
-		if (ret == H_SUCCESS || ret6 == H_SUCCESS)
-			done(dev, data);
+		if (ret4 == H_SUCCESS || ret6 == H_SUCCESS)
+			adapter->rx_csum = data;
 		else
 			rc1 = -EIO;
 	} else {
@@ -844,39 +838,20 @@ static int ibmveth_set_csum_offload(struct net_device *dev, u32 data,
 	return rc1 ? rc1 : rc2;
 }
 
-static int ibmveth_set_rx_csum(struct net_device *dev, u32 data)
+static int ibmveth_set_features(struct net_device *dev, u32 features)
 {
 	struct ibmveth_adapter *adapter = netdev_priv(dev);
+	int rx_csum = !!(features & NETIF_F_RXCSUM);
+	int rc;
 
-	if ((data && adapter->rx_csum) || (!data && !adapter->rx_csum))
+	if (rx_csum == adapter->rx_csum)
 		return 0;
 
-	return ibmveth_set_csum_offload(dev, data, ibmveth_set_rx_csum_flags);
-}
-
-static int ibmveth_set_tx_csum(struct net_device *dev, u32 data)
-{
-	struct ibmveth_adapter *adapter = netdev_priv(dev);
-	int rc = 0;
-
-	if (data && (dev->features & (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM)))
-		return 0;
-	if (!data && !(dev->features & (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM)))
-		return 0;
-
-	if (data && !adapter->rx_csum)
-		rc = ibmveth_set_csum_offload(dev, data,
-					      ibmveth_set_tx_csum_flags);
-	else
-		ibmveth_set_tx_csum_flags(dev, data);
+	rc = ibmveth_set_csum_offload(dev, rx_csum);
+	if (rc && !adapter->rx_csum)
+		dev->features = features & ~(NETIF_F_ALL_CSUM | NETIF_F_RXCSUM);
 
 	return rc;
-}
-
-static u32 ibmveth_get_rx_csum(struct net_device *dev)
-{
-	struct ibmveth_adapter *adapter = netdev_priv(dev);
-	return adapter->rx_csum;
 }
 
 static void ibmveth_get_strings(struct net_device *dev, u32 stringset, u8 *data)
@@ -914,13 +889,9 @@ static const struct ethtool_ops netdev_ethtool_ops = {
 	.get_drvinfo		= netdev_get_drvinfo,
 	.get_settings		= netdev_get_settings,
 	.get_link		= ethtool_op_get_link,
-	.set_tx_csum		= ibmveth_set_tx_csum,
-	.get_rx_csum		= ibmveth_get_rx_csum,
-	.set_rx_csum		= ibmveth_set_rx_csum,
 	.get_strings		= ibmveth_get_strings,
 	.get_sset_count		= ibmveth_get_sset_count,
 	.get_ethtool_stats	= ibmveth_get_ethtool_stats,
-	.set_sg			= ethtool_op_set_sg,
 };
 
 static int ibmveth_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
@@ -968,6 +939,7 @@ static netdev_tx_t ibmveth_start_xmit(struct sk_buff *skb,
 	union ibmveth_buf_desc descs[6];
 	int last, i;
 	int force_bounce = 0;
+	dma_addr_t dma_addr;
 
 	/*
 	 * veth handles a maximum of 6 segments including the header, so
@@ -1032,17 +1004,16 @@ retry_bounce:
 	}
 
 	/* Map the header */
-	descs[0].fields.address = dma_map_single(&adapter->vdev->dev, skb->data,
-						 skb_headlen(skb),
-						 DMA_TO_DEVICE);
-	if (dma_mapping_error(&adapter->vdev->dev, descs[0].fields.address))
+	dma_addr = dma_map_single(&adapter->vdev->dev, skb->data,
+				  skb_headlen(skb), DMA_TO_DEVICE);
+	if (dma_mapping_error(&adapter->vdev->dev, dma_addr))
 		goto map_failed;
 
 	descs[0].fields.flags_len = desc_flags | skb_headlen(skb);
+	descs[0].fields.address = dma_addr;
 
 	/* Map the frags */
 	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
-		unsigned long dma_addr;
 		skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
 
 		dma_addr = dma_map_page(&adapter->vdev->dev, frag->page,
@@ -1064,7 +1035,12 @@ retry_bounce:
 		netdev->stats.tx_bytes += skb->len;
 	}
 
-	for (i = 0; i < skb_shinfo(skb)->nr_frags + 1; i++)
+	dma_unmap_single(&adapter->vdev->dev,
+			 descs[0].fields.address,
+			 descs[0].fields.flags_len & IBMVETH_BUF_LEN_MASK,
+			 DMA_TO_DEVICE);
+
+	for (i = 1; i < skb_shinfo(skb)->nr_frags + 1; i++)
 		dma_unmap_page(&adapter->vdev->dev, descs[i].fields.address,
 			       descs[i].fields.flags_len & IBMVETH_BUF_LEN_MASK,
 			       DMA_TO_DEVICE);
@@ -1127,8 +1103,9 @@ restart_poll:
 				if (rx_flush)
 					ibmveth_flush_buffer(skb->data,
 						length + offset);
+				if (!ibmveth_rxq_recycle_buffer(adapter))
+					kfree_skb(skb);
 				skb = new_skb;
-				ibmveth_rxq_recycle_buffer(adapter);
 			} else {
 				ibmveth_rxq_harvest_buffer(adapter);
 				skb_reserve(skb, offset);
@@ -1345,6 +1322,8 @@ static const struct net_device_ops ibmveth_netdev_ops = {
 	.ndo_set_multicast_list	= ibmveth_set_multicast_list,
 	.ndo_do_ioctl		= ibmveth_ioctl,
 	.ndo_change_mtu		= ibmveth_change_mtu,
+	.ndo_fix_features	= ibmveth_fix_features,
+	.ndo_set_features	= ibmveth_set_features,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= eth_mac_addr,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -1412,7 +1391,9 @@ static int __devinit ibmveth_probe(struct vio_dev *dev,
 	netdev->netdev_ops = &ibmveth_netdev_ops;
 	netdev->ethtool_ops = &netdev_ethtool_ops;
 	SET_NETDEV_DEV(netdev, &dev->dev);
-	netdev->features |= NETIF_F_SG;
+	netdev->hw_features = NETIF_F_SG | NETIF_F_RXCSUM |
+		NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
+	netdev->features |= netdev->hw_features;
 
 	memcpy(netdev->dev_addr, &adapter->mac_addr, netdev->addr_len);
 
@@ -1437,7 +1418,7 @@ static int __devinit ibmveth_probe(struct vio_dev *dev,
 
 	netdev_dbg(netdev, "registering netdev...\n");
 
-	ibmveth_set_csum_offload(netdev, 1, ibmveth_set_tx_csum_flags);
+	ibmveth_set_features(netdev, netdev->features);
 
 	rc = register_netdev(netdev);
 

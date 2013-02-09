@@ -44,6 +44,7 @@ static struct map_desc u5500_io_desc[] __initdata = {
 	__IO_DEV_DESC(U5500_GPIO3_BASE, SZ_4K),
 	__IO_DEV_DESC(U5500_GPIO4_BASE, SZ_4K),
 	__IO_DEV_DESC(U5500_PRCMU_BASE, SZ_4K),
+	__IO_DEV_DESC(U5500_PRCMU_TCDM_BASE, SZ_4K),
 };
 
 static struct resource db5500_pmu_resources[] = {
@@ -188,6 +189,8 @@ void __init u5500_map_io(void)
 	ux500_map_io();
 
 	iotable_init(u5500_io_desc, ARRAY_SIZE(u5500_io_desc));
+
+	_PRCMU_BASE = __io_address(U5500_PRCMU_BASE);
 }
 
 static int usb_db5500_rx_dma_cfg[] = {

@@ -29,8 +29,7 @@
  *		Alan Cox <alan@lxorguk.ukuu.org.uk>
  ****************************************************************************/
 
-#include <linux/version.h>
-
+#define CPIA_VERSION "3.0.1"
 
 #include <linux/module.h>
 #include <linux/time.h>
@@ -80,6 +79,7 @@ MODULE_AUTHOR("Steve Miller (STMicroelectronics) <steve.miller@st.com>");
 MODULE_DESCRIPTION("V4L-driver for STMicroelectronics CPiA2 based cameras");
 MODULE_SUPPORTED_DEVICE("video");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(CPIA_VERSION);
 
 #define ABOUT "V4L-Driver for Vision CPiA2 based cameras"
 
@@ -438,7 +438,7 @@ static int cpia2_querycap(struct file *file, void *fh, struct v4l2_capability *v
 		strcat(vc->card, " (676/");
 		break;
 	default:
-		strcat(vc->card, " (???/");
+		strcat(vc->card, " (XXX/");
 		break;
 	}
 	switch (cam->params.version.sensor_flags) {
@@ -458,15 +458,12 @@ static int cpia2_querycap(struct file *file, void *fh, struct v4l2_capability *v
 		strcat(vc->card, "500)");
 		break;
 	default:
-		strcat(vc->card, "???)");
+		strcat(vc->card, "XXX)");
 		break;
 	}
 
 	if (usb_make_path(cam->dev, vc->bus_info, sizeof(vc->bus_info)) <0)
 		memset(vc->bus_info,0, sizeof(vc->bus_info));
-
-	vc->version = KERNEL_VERSION(CPIA2_MAJ_VER, CPIA2_MIN_VER,
-				     CPIA2_PATCH_VER);
 
 	vc->capabilities = V4L2_CAP_VIDEO_CAPTURE |
 			   V4L2_CAP_READWRITE |
@@ -1313,7 +1310,7 @@ static int cpia2_g_priority(struct file *file, void *_fh, enum v4l2_priority *p)
 static int cpia2_s_priority(struct file *file, void *_fh, enum v4l2_priority prio)
 {
 	struct camera_data *cam = video_drvdata(file);
-	struct cpia2_fh *fh = fh;
+	struct cpia2_fh *fh = _fh;
 
 	if (cam->streaming && prio != fh->prio &&
 			fh->prio == V4L2_PRIORITY_RECORD)
@@ -1558,8 +1555,8 @@ static void __init check_parameters(void)
  *****************************************************************************/
 static int __init cpia2_init(void)
 {
-	LOG("%s v%d.%d.%d\n",
-	    ABOUT, CPIA2_MAJ_VER, CPIA2_MIN_VER, CPIA2_PATCH_VER);
+	LOG("%s v%s\n",
+	    ABOUT, CPIA_VERSION);
 	check_parameters();
 	cpia2_usb_init();
 	return 0;
@@ -1579,4 +1576,3 @@ static void __exit cpia2_exit(void)
 
 module_init(cpia2_init);
 module_exit(cpia2_exit);
-

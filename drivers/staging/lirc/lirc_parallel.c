@@ -568,17 +568,17 @@ static void set_use_dec(void *data)
 }
 
 static struct lirc_driver driver = {
-       .name		= LIRC_DRIVER_NAME,
-       .minor		= -1,
-       .code_length	= 1,
-       .sample_rate	= 0,
-       .data		= NULL,
-       .add_to_buf	= NULL,
-       .set_use_inc	= set_use_inc,
-       .set_use_dec	= set_use_dec,
-       .fops		= &lirc_fops,
-       .dev		= NULL,
-       .owner		= THIS_MODULE,
+	.name		= LIRC_DRIVER_NAME,
+	.minor		= -1,
+	.code_length	= 1,
+	.sample_rate	= 0,
+	.data		= NULL,
+	.add_to_buf	= NULL,
+	.set_use_inc	= set_use_inc,
+	.set_use_dec	= set_use_dec,
+	.fops		= &lirc_fops,
+	.dev		= NULL,
+	.owner		= THIS_MODULE,
 };
 
 static struct platform_device *lirc_parallel_dev;
@@ -594,7 +594,7 @@ static int __devexit lirc_parallel_remove(struct platform_device *dev)
 }
 
 static int lirc_parallel_suspend(struct platform_device *dev,
-                                 pm_message_t state)
+					pm_message_t state)
 {
 	return 0;
 }
@@ -614,9 +614,6 @@ static struct platform_driver lirc_parallel_driver = {
 		.owner	= THIS_MODULE,
 	},
 };
-
-static int pf(void *handle);
-static void kf(void *handle);
 
 static int pf(void *handle)
 {
@@ -647,7 +644,8 @@ static int __init lirc_parallel_init(void)
 
 	result = platform_driver_register(&lirc_parallel_driver);
 	if (result) {
-		printk("platform_driver_register returned %d\n", result);
+		printk(KERN_NOTICE "platform_driver_register"
+					" returned %d\n", result);
 		return result;
 	}
 
@@ -729,6 +727,9 @@ static void __exit lirc_parallel_exit(void)
 {
 	parport_unregister_device(ppdevice);
 	lirc_unregister_driver(driver.minor);
+
+	platform_device_unregister(lirc_parallel_dev);
+	platform_driver_unregister(&lirc_parallel_driver);
 }
 
 module_init(lirc_parallel_init);

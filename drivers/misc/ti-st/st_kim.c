@@ -30,6 +30,7 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <linux/sched.h>
+#include <linux/sysfs.h>
 #include <linux/tty.h>
 
 #include <linux/serial_core.h>
@@ -38,6 +39,11 @@
 #include <linux/ti_wilink_st.h>
 #include <linux/rfkill.h>
 #include <linux/suspend.h>
+
+#define PM_QOS_TUNING_SUPPORTED
+#ifdef PM_QOS_TUNING_SUPPORTED
+#include <linux/pm_qos_params.h>
+#endif
 
 #define MAX_ST_DEVICES	3	/* Imagine 1 on each UART for now */
 #define nSHUTDOWN 160
@@ -64,7 +70,7 @@ static struct rfkill_ops wl127x_rfkill_ops = {
 /* rfkill define end */
 
 static struct platform_device *st_kim_devices[MAX_ST_DEVICES];
-static int rfkilltool_on = 0;
+
 /**********************************************************************/
 /* internal functions */
 
@@ -471,8 +477,9 @@ long st_kim_start(void *kim_data)
 	long retry = POR_RETRY_COUNT;
 	struct kim_data_s	*kim_gdata = (struct kim_data_s *)kim_data;
 	struct ti_st_plat_data	*pdata = kim_gdata->kim_pdev->dev.platform_data;
+	struct tty_struct	*tty = kim_gdata->core_data->tty;
 
-	printk("st_kim_start_entering 1222 v3\n");
+	printk("st_kim_start_entering 0419 v4\n");
 	pr_info(" %s\n", __func__);
 
 	blue_pincfg_uartc_resume();
@@ -505,6 +512,16 @@ long st_kim_start(void *kim_data)
 
 		if (!err) {	/* timeout */
 			pr_err("line disc installation timed out ");
+
+			if (tty) {	/* can be called before ldisc is installed */
+				/* Flush any pending characters in the driver and discipline. */
+				tty_ldisc_flush(tty);
+                                if (tty && (tty->ops)){
+				tty_driver_flush_buffer(tty);
+				tty->ops->flush_buffer(tty);
+                                }
+			}
+
 			kim_gdata->ldisc_install = 0;
 			pr_info("ldisc_install = 0\n");
 			pr_info("Close UART and retry\n");
@@ -523,6 +540,18 @@ long st_kim_start(void *kim_data)
 			err = download_firmware(kim_gdata);
 			if (err != 0) {
 				pr_err("download firmware failed");
+
+				if (tty) {
+					/* Flush any pending characters in the driver and
+					 * discipline.
+					 */
+					tty_ldisc_flush(tty);
+                                        if (tty && (tty->ops)){
+					tty_driver_flush_buffer(tty);
+					tty->ops->flush_buffer(tty);
+                                        }
+				}
+
 				kim_gdata->ldisc_install = 0;
 				pr_info("ldisc_install = 0\n");
 				sysfs_notify(&kim_gdata->kim_pdev->dev.kobj,
@@ -558,13 +587,18 @@ long st_kim_stop(void *kim_data)
 
 	struct ti_st_plat_data	*pdata =
 		kim_gdata->kim_pdev->dev.platform_data;
-
+	struct tty_struct	*tty = kim_gdata->core_data->tty;
 
 	INIT_COMPLETION(kim_gdata->ldisc_installed);
 
+	if (tty) {	/* can be called before ldisc is installed */
 	/* Flush any pending characters in the driver and discipline. */
-	tty_ldisc_flush(kim_gdata->core_data->tty);
-	tty_driver_flush_buffer(kim_gdata->core_data->tty);
+		tty_ldisc_flush(tty);
+                if (tty && (tty->ops)){
+		tty_driver_flush_buffer(tty);
+		tty->ops->flush_buffer(tty);
+                }
+	}
 
 	/* send uninstall notification to UIM */
 	pr_info("ldisc_install = 0\n");
@@ -622,23 +656,6 @@ static ssize_t show_install(struct device *dev,
 	return sprintf(buf, "%d\n", kim_data->ldisc_install);
 }
 
-static ssize_t show_rfkilltool(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct kim_data_s *kim_data = dev_get_drvdata(dev);
-	return sprintf(buf, "%d\n", rfkilltool_on);
-}
-
-static ssize_t store_rfkilltool(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct kim_data_s *kim_data = dev_get_drvdata(dev);
-	kim_data->rfkilltool = 1;
-	rfkilltool_on = 1;
-	pr_info("set store_rfkilltool on\n");
-	return kim_data->rfkilltool;
-}
-
 static ssize_t show_dev_name(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -673,21 +690,87 @@ __ATTR(baud_rate, 0444, (void *)show_baud_rate, NULL);
 static struct kobj_attribute uart_flow_cntrl =
 __ATTR(flow_cntrl, 0444, (void *)show_flow_cntrl, NULL);
 
-static struct kobj_attribute rfkilltool =
-__ATTR(rfkilltool, 0644, (void *)show_rfkilltool, (void *)store_rfkilltool);
-
 static struct attribute *uim_attrs[] = {
 	&ldisc_install.attr,
 	&uart_dev_name.attr,
 	&uart_baud_rate.attr,
 	&uart_flow_cntrl.attr,
-	&rfkilltool.attr,
 	NULL,
 };
 
 static struct attribute_group uim_attr_grp = {
 	.attrs = uim_attrs,
 };
+
+#ifdef PM_QOS_TUNING_SUPPORTED
+static struct pm_qos_request_list st_pm_qos_latency_request;
+static struct pm_qos_request_list st_pm_qos_cpu_min_request;
+static struct pm_qos_request_list st_pm_qos_cpu_max_request;
+
+static unsigned char st_performance_lock_state;
+
+#define TI_ST_CREATE_DEVICE_ATTR(_name)         \
+        struct device_attribute dev_attr_##_name = {    \
+                .attr = {                               \
+                        .name = __stringify(_name),     \
+                        .mode = 0666 },                 \
+                .show = NULL,                           \
+                .store = NULL,                          \
+        }
+
+#define TI_ST_SET_DEVICE_ATTR(_name, _mode, _show, _store)      \
+        do {                                                    \
+                dev_attr_##_name.attr.mode = 0666;              \
+                dev_attr_##_name.show = _show;                  \
+                dev_attr_##_name.store = _store;                \
+        } while(0)
+
+static TI_ST_CREATE_DEVICE_ATTR(st_performance_lock);
+
+static struct attribute *st_performance_lock_attributes[] = {
+        &dev_attr_st_performance_lock.attr,
+        NULL 
+};
+
+static struct attribute_group st_performance_lock_attribute_group = {
+        .attrs = st_performance_lock_attributes
+};
+
+static ssize_t show_st_performance_lock(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+        return sprintf(buf, "%d\n", st_performance_lock_state);
+}
+
+static ssize_t store_st_performance_lock(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+        char in_char[] = "0";
+
+        sscanf(buf, "%1s", in_char);
+
+        if (strcmp(in_char, "0") == 0) {
+                st_performance_lock_state = 0;
+        }
+        else if (strcmp(in_char, "1") == 0) {
+                st_performance_lock_state = 1;
+        }
+        if (1 == st_performance_lock_state) {
+		//pm_qos_update_request(&st_pm_qos_latency_request, 30);
+		pm_qos_update_request(&st_pm_qos_cpu_min_request, 1000000);
+		pm_qos_update_request(&st_pm_qos_cpu_max_request, 1400000);
+                pr_info("pm_qos_update_request - cpu_min_request; cpu_max_request\n");
+        }
+        else if (0 == st_performance_lock_state) {
+		//pm_qos_update_request(&st_pm_qos_latency_request, PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE);
+                pm_qos_update_request(&st_pm_qos_cpu_min_request, PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE);
+                pm_qos_update_request(&st_pm_qos_cpu_max_request, PM_QOS_CPU_FREQ_MAX_DEFAULT_VALUE);
+                pr_info("pm_qos_update_request - PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE\n");
+        }
+        return 1;
+}
+#endif
+
 
 /**
  * st_kim_ref - reference the core's data
@@ -744,6 +827,13 @@ static int kim_probe(struct platform_device *pdev)
 	struct kim_data_s	*kim_gdata;
 	struct ti_st_plat_data	*pdata = pdev->dev.platform_data;
 	rfkill_counter = 0;
+
+#ifdef PM_QOS_TUNING_SUPPORTED
+//        pm_qos_add_request(&st_pm_qos_latency_request, PM_QOS_CPU_DMA_LATENCY, (s32)PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE);
+	pm_qos_add_request(&st_pm_qos_cpu_max_request, PM_QOS_CPU_FREQ_MAX, (s32)PM_QOS_CPU_FREQ_MAX_DEFAULT_VALUE);
+	pm_qos_add_request(&st_pm_qos_cpu_min_request, PM_QOS_CPU_FREQ_MIN, (s32)PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE);
+#endif
+
 	if ((pdev->id != -1) && (pdev->id < MAX_ST_DEVICES)) {
 		/* multiple devices could exist */
 		st_kim_devices[pdev->id] = pdev;
@@ -795,6 +885,19 @@ static int kim_probe(struct platform_device *pdev)
 		pr_err("failed to create sysfs entries");
 		return status;
 	}
+
+#ifdef PM_QOS_TUNING_SUPPORTED
+        int result;
+        result = sysfs_create_group(&pdev->dev.kobj,
+                        &st_performance_lock_attribute_group);
+        if (result)
+                printk(KERN_ERR "%s reg attr fail!!",
+                                __func__);
+
+        TI_ST_SET_DEVICE_ATTR(st_performance_lock,
+                        0644, show_st_performance_lock,
+                        store_st_performance_lock);
+#endif
 
 	/* copying platform data */
 	strncpy(kim_gdata->dev_name, pdata->dev_name, UART_DEV_NAME_LEN);
@@ -950,14 +1053,10 @@ static int wl127x_set_power(void *data, bool blocked)
 static void wl127x_config_bt_off()
 {
 	pr_info("wl127x_config_bt_off: Entering\n");
-        if (rfkilltool_on == 0) {
-                pr_info("wl127x_config_bt_off, rfkilltool_on off\n");
-                return;
-        }
 
         blue_pincfg_uartc_suspend();
 	mdelay(1);
-	if ((rfkill_counter != 0) && (get_suspend_state() == PM_SUSPEND_ON) && (!after_BT_GPS_on)) {
+	if ((rfkill_counter != 0) && (!after_BT_GPS_on)) {
 		// By default configure BT nShutdown to LOW state 
 		gpio_set_value(nSHUTDOWN, GPIO_LOW);
 		mdelay(1);
@@ -972,12 +1071,8 @@ static void wl127x_config_bt_off()
 static void wl127x_config_bt_on()
 {
 	pr_info("wl127x_config_bt_on: Entering\n");
-	if (rfkilltool_on == 0) {
-		pr_info("wl127x_config_bt_on, rfkilltool_on off\n");
-		return;
-	}
 	//Avoid change rfkill state after boot up 
-	if ((rfkill_counter != 0) && (get_suspend_state() == PM_SUSPEND_ON) && (!after_BT_GPS_on)) {
+	if ((rfkill_counter != 0) && (!after_BT_GPS_on)) {
 		long err = 0;
                 blue_pincfg_uartc_resume();
 

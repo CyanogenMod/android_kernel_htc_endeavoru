@@ -29,30 +29,12 @@ asmlinkage void do_IRQ(int irq, struct pt_regs *regs)
 	set_irq_regs(oldregs);
 }
 
-int show_interrupts(struct seq_file *p, void *v)
+
+/* The number of spurious interrupts */
+atomic_t irq_err_count;
+
+int arch_show_interrupts(struct seq_file *p, int prec)
 {
-	struct irqaction *ap;
-	int irq = *((loff_t *) v);
-
-	if (irq == 0)
-		seq_puts(p, "           CPU0\n");
-
-	if (irq < NR_IRQS) {
-		struct irq_desc *desc = irq_to_desc(irq);
-
-		ap = desc->action;
-		if (ap) {
-			seq_printf(p, "%3d: ", irq);
-			seq_printf(p, "%10u ", kstat_irqs(irq));
-			seq_printf(p, "%14s  ", irq_desc_get_chip(desc)->name);
-
-			seq_printf(p, "%s", ap->name);
-			for (ap = ap->next; ap; ap = ap->next)
-				seq_printf(p, ", %s", ap->name);
-			seq_putc(p, '\n');
-		}
-	}
-
+	seq_printf(p, "%*s: %10u\n", prec, "ERR", atomic_read(&irq_err_count));
 	return 0;
 }
-

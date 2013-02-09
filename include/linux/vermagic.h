@@ -1,3 +1,4 @@
+#include <generated/utsrelease.h>
 #include <linux/module.h>
 
 /* Simply sanity version stamp for modules. */
@@ -26,7 +27,7 @@
 #endif
 
 #define VERMAGIC_STRING 						\
-	"2.6.39-tegra3" " "						\
+	UTS_RELEASE " "							\
 	MODULE_VERMAGIC_SMP MODULE_VERMAGIC_PREEMPT 			\
 	MODULE_VERMAGIC_MODULE_UNLOAD MODULE_VERMAGIC_MODVERSIONS	\
 	MODULE_ARCH_VERMAGIC

@@ -41,16 +41,13 @@
 #include <linux/scatterlist.h>
 #include <linux/mm.h>
 #include <linux/dma-mapping.h>
-#include <linux/wakelock.h>
 
 #include "usb.h"
-
+#include <asm/mach-types.h>
 
 const char *usbcore_name = "usbcore";
 
 static int nousb;	/* Disable USB when built into kernel image */
-/* Prevent autosuspend in Linux suspend path */
-struct wake_lock usbd_suspend_wl;
 
 #ifdef	CONFIG_USB_SUSPEND
 static int usb_autosuspend_delay = 2;		/* Default delay value,
@@ -453,8 +450,7 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
 	INIT_LIST_HEAD(&dev->filelist);
 
 #ifdef	CONFIG_PM
-	pm_runtime_set_autosuspend_delay(&dev->dev,
-			usb_autosuspend_delay * 1000);
+	pm_runtime_set_autosuspend_delay(&dev->dev,	usb_autosuspend_delay * 1000);
 	dev->connect_time = jiffies;
 	dev->active_duration = -jiffies;
 #endif
@@ -956,8 +952,7 @@ static int usb_bus_notify(struct notifier_block *nb, unsigned long action,
 		if (dev->type == &usb_device_type)
 			(void) usb_create_sysfs_dev_files(to_usb_device(dev));
 		else if (dev->type == &usb_if_device_type)
-			(void) usb_create_sysfs_intf_files(
-					to_usb_interface(dev));
+			usb_create_sysfs_intf_files(to_usb_interface(dev));
 		break;
 
 	case BUS_NOTIFY_DEL_DEVICE:
@@ -1017,7 +1012,6 @@ static int __init usb_init(void)
 	retval = usb_debugfs_init();
 	if (retval)
 		goto out;
-	wake_lock_init(&usbd_suspend_wl, WAKE_LOCK_SUSPEND, "usbd_suspend");
 
 	retval = bus_register(&usb_bus_type);
 	if (retval)
@@ -1059,7 +1053,6 @@ bus_notifier_failed:
 	bus_unregister(&usb_bus_type);
 bus_register_failed:
 	usb_debugfs_cleanup();
-	wake_lock_destroy(&usbd_suspend_wl);
 out:
 	return retval;
 }

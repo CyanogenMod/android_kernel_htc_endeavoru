@@ -19,6 +19,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/clk.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
@@ -27,6 +28,7 @@
 #include <linux/io.h>
 #include <linux/seq_file.h>
 #include <linux/spinlock.h>
+#include <trace/events/power.h>
 
 #include <mach/clk.h>
 #include <mach/iomap.h>
@@ -120,6 +122,9 @@ static struct powergate_partition powergate_partition_info[TEGRA_NUM_POWERGATE] 
 						{MC_CLIENT_AFI, MC_CLIENT_LAST},
 						{{"afi", CLK_AND_RST},
 						{"pcie", CLK_AND_RST},
+#ifndef CONFIG_ARCH_TEGRA_2x_SOC
+						{"cml0", CLK_ONLY},
+#endif
 						{"pciex", RST_ONLY} }, },
 	[TEGRA_POWERGATE_VDEC]	= { "vde",
 						{MC_CLIENT_VDE, MC_CLIENT_LAST},
@@ -457,6 +462,9 @@ static int tegra_powergate_set(int id, bool new_state)
 		return -EBUSY;
 	}
 
+	trace_power_domain_target(powergate_partition_info[id].name, new_state,
+			smp_processor_id());
+
 	return 0;
 }
 
@@ -486,6 +494,7 @@ bool tegra_powergate_is_powered(int id)
 	status = pmc_read(PWRGATE_STATUS) & (1 << id);
 	return !!status;
 }
+EXPORT_SYMBOL(tegra_powergate_is_powered);
 
 int tegra_powergate_remove_clamping(int id)
 {

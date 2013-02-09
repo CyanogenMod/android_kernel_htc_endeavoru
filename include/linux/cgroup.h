@@ -459,13 +459,16 @@ struct cgroup_subsys {
 						  struct cgroup *cgrp);
 	int (*pre_destroy)(struct cgroup_subsys *ss, struct cgroup *cgrp);
 	void (*destroy)(struct cgroup_subsys *ss, struct cgroup *cgrp);
+	int (*allow_attach)(struct cgroup *cgrp, struct task_struct *tsk);
 	int (*can_attach)(struct cgroup_subsys *ss, struct cgroup *cgrp,
-			  struct task_struct *tsk, bool threadgroup);
+			  struct task_struct *tsk);
+	int (*can_attach_task)(struct cgroup *cgrp, struct task_struct *tsk);
 	void (*cancel_attach)(struct cgroup_subsys *ss, struct cgroup *cgrp,
-			  struct task_struct *tsk, bool threadgroup);
+			      struct task_struct *tsk);
+	void (*pre_attach)(struct cgroup *cgrp);
+	void (*attach_task)(struct cgroup *cgrp, struct task_struct *tsk);
 	void (*attach)(struct cgroup_subsys *ss, struct cgroup *cgrp,
-			struct cgroup *old_cgrp, struct task_struct *tsk,
-			bool threadgroup);
+		       struct cgroup *old_cgrp, struct task_struct *tsk);
 	void (*fork)(struct cgroup_subsys *ss, struct task_struct *task);
 	void (*exit)(struct cgroup_subsys *ss, struct cgroup *cgrp,
 			struct cgroup *old_cgrp, struct task_struct *task);
@@ -530,7 +533,6 @@ static inline struct cgroup_subsys_state *cgroup_subsys_state(
  */
 #define task_subsys_state_check(task, subsys_id, __c)			\
 	rcu_dereference_check(task->cgroups->subsys[subsys_id],		\
-			      rcu_read_lock_held() ||			\
 			      lockdep_is_held(&task->alloc_lock) ||	\
 			      cgroup_lock_is_held() || (__c))
 
@@ -545,9 +547,6 @@ static inline struct cgroup* task_cgroup(struct task_struct *task,
 {
 	return task_subsys_state(task, subsys_id)->cgroup;
 }
-
-int cgroup_clone(struct task_struct *tsk, struct cgroup_subsys *ss,
-							char *nodename);
 
 /* A cgroup_iter should be treated as an opaque object */
 struct cgroup_iter {

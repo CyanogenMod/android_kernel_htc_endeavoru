@@ -141,9 +141,7 @@ const struct fib_prop fib_props[RTN_MAX + 1] = {
 	},
 };
 
-
 /* Release a nexthop info record */
-
 static void free_fib_info_rcu(struct rcu_head *head)
 {
 	struct fib_info *fi = container_of(head, struct fib_info, rcu);

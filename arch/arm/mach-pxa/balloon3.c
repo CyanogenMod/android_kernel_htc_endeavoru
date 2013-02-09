@@ -15,7 +15,6 @@
 
 #include <linux/init.h>
 #include <linux/platform_device.h>
-#include <linux/sysdev.h>
 #include <linux/interrupt.h>
 #include <linux/sched.h>
 #include <linux/bitops.h>
@@ -308,7 +307,7 @@ static inline void balloon3_mmc_init(void) {}
 /******************************************************************************
  * USB Gadget
  ******************************************************************************/
-#if defined(CONFIG_USB_GADGET_PXA27X)||defined(CONFIG_USB_GADGET_PXA27X_MODULE)
+#if defined(CONFIG_USB_PXA27X)||defined(CONFIG_USB_PXA27X_MODULE)
 static void balloon3_udc_command(int cmd)
 {
 	if (cmd == PXA2XX_UDC_CMD_CONNECT)
@@ -826,6 +825,7 @@ MACHINE_START(BALLOON3, "Balloon3")
 	.map_io		= balloon3_map_io,
 	.nr_irqs	= BALLOON3_NR_IRQS,
 	.init_irq	= balloon3_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.timer		= &pxa_timer,
 	.init_machine	= balloon3_init,
 	.boot_params	= PLAT_PHYS_OFFSET + 0x100,

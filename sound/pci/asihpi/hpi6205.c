@@ -152,8 +152,8 @@ static void hw_message(struct hpi_adapter_obj *pao, struct hpi_message *phm,
 
 static void subsys_create_adapter(struct hpi_message *phm,
 	struct hpi_response *phr);
-static void subsys_delete_adapter(struct hpi_message *phm,
-	struct hpi_response *phr);
+static void adapter_delete(struct hpi_adapter_obj *pao,
+	struct hpi_message *phm, struct hpi_response *phr);
 
 static u16 create_adapter_obj(struct hpi_adapter_obj *pao,
 	u32 *pos_error_code);
@@ -223,14 +223,12 @@ static u16 boot_loader_test_pld(struct hpi_adapter_obj *pao, int dsp_index);
 
 /*****************************************************************************/
 
-static void subsys_message(struct hpi_message *phm, struct hpi_response *phr)
+static void subsys_message(struct hpi_adapter_obj *pao,
+	struct hpi_message *phm, struct hpi_response *phr)
 {
 	switch (phm->function) {
 	case HPI_SUBSYS_CREATE_ADAPTER:
 		subsys_create_adapter(phm, phr);
-		break;
-	case HPI_SUBSYS_DELETE_ADAPTER:
-		subsys_delete_adapter(phm, phr);
 		break;
 	default:
 		phr->error = HPI_ERROR_INVALID_FUNC;
@@ -279,6 +277,10 @@ static void adapter_message(struct hpi_adapter_obj *pao,
 	struct hpi_message *phm, struct hpi_response *phr)
 {
 	switch (phm->function) {
+	case HPI_ADAPTER_DELETE:
+		adapter_delete(pao, phm, phr);
+		break;
+
 	default:
 		hw_message(pao, phm, phr);
 		break;
@@ -371,36 +373,18 @@ static void instream_message(struct hpi_adapter_obj *pao,
 /** Entry point to this HPI backend
  * All calls to the HPI start here
  */
-void HPI_6205(struct hpi_message *phm, struct hpi_response *phr)
+static
+void _HPI_6205(struct hpi_adapter_obj *pao, struct hpi_message *phm,
+	struct hpi_response *phr)
 {
-	struct hpi_adapter_obj *pao = NULL;
-
-	/* subsytem messages are processed by every HPI.
-	 * All other messages are ignored unless the adapter index matches
-	 * an adapter in the HPI
-	 */
-	/* HPI_DEBUG_LOG(DEBUG, "HPI Obj=%d, Func=%d\n", phm->wObject,
-	   phm->wFunction); */
-
-	/* if Dsp has crashed then do not communicate with it any more */
-	if (phm->object != HPI_OBJ_SUBSYSTEM) {
-		pao = hpi_find_adapter(phm->adapter_index);
-		if (!pao) {
-			HPI_DEBUG_LOG(DEBUG,
-				" %d,%d refused, for another HPI?\n",
-				phm->object, phm->function);
-			return;
-		}
-
-		if ((pao->dsp_crashed >= 10)
-			&& (phm->function != HPI_ADAPTER_DEBUG_READ)) {
-			/* allow last resort debug read even after crash */
-			hpi_init_response(phr, phm->object, phm->function,
-				HPI_ERROR_DSP_HARDWARE);
-			HPI_DEBUG_LOG(WARNING, " %d,%d dsp crashed.\n",
-				phm->object, phm->function);
-			return;
-		}
+	if (pao && (pao->dsp_crashed >= 10)
+		&& (phm->function != HPI_ADAPTER_DEBUG_READ)) {
+		/* allow last resort debug read even after crash */
+		hpi_init_response(phr, phm->object, phm->function,
+			HPI_ERROR_DSP_HARDWARE);
+		HPI_DEBUG_LOG(WARNING, " %d,%d dsp crashed.\n", phm->object,
+			phm->function);
+		return;
 	}
 
 	/* Init default response  */
@@ -409,17 +393,16 @@ void HPI_6205(struct hpi_message *phm, struct hpi_response *phr)
 
 	HPI_DEBUG_LOG(VERBOSE, "start of switch\n");
 	switch (phm->type) {
-	case HPI_TYPE_MESSAGE:
+	case HPI_TYPE_REQUEST:
 		switch (phm->object) {
 		case HPI_OBJ_SUBSYSTEM:
-			subsys_message(phm, phr);
+			subsys_message(pao, phm, phr);
 			break;
 
 		case HPI_OBJ_ADAPTER:
 			adapter_message(pao, phm, phr);
 			break;
 
-		case HPI_OBJ_CONTROLEX:
 		case HPI_OBJ_CONTROL:
 			control_message(pao, phm, phr);
 			break;
@@ -442,6 +425,26 @@ void HPI_6205(struct hpi_message *phm, struct hpi_response *phr)
 		phr->error = HPI_ERROR_INVALID_TYPE;
 		break;
 	}
+}
+
+void HPI_6205(struct hpi_message *phm, struct hpi_response *phr)
+{
+	struct hpi_adapter_obj *pao = NULL;
+
+	if (phm->object != HPI_OBJ_SUBSYSTEM) {
+		/* normal messages must have valid adapter index */
+		pao = hpi_find_adapter(phm->adapter_index);
+	} else {
+		/* subsys messages don't address an adapter */
+		_HPI_6205(NULL, phm, phr);
+		return;
+	}
+
+	if (pao)
+		_HPI_6205(pao, phm, phr);
+	else
+		hpi_init_response(phr, phm->object, phm->function,
+			HPI_ERROR_BAD_ADAPTER_NUMBER);
 }
 
 /*****************************************************************************/
@@ -491,13 +494,11 @@ static void subsys_create_adapter(struct hpi_message *phm,
 }
 
 /** delete an adapter - required by WDM driver */
-static void subsys_delete_adapter(struct hpi_message *phm,
-	struct hpi_response *phr)
+static void adapter_delete(struct hpi_adapter_obj *pao,
+	struct hpi_message *phm, struct hpi_response *phr)
 {
-	struct hpi_adapter_obj *pao;
 	struct hpi_hw_obj *phw;
 
-	pao = hpi_find_adapter(phm->obj_index);
 	if (!pao) {
 		phr->error = HPI_ERROR_INVALID_OBJ_INDEX;
 		return;
@@ -563,11 +564,12 @@ static u16 create_adapter_obj(struct hpi_adapter_obj *pao,
 	}
 
 	err = adapter_boot_load_dsp(pao, pos_error_code);
-	if (err)
+	if (err) {
+		HPI_DEBUG_LOG(ERROR, "DSP code load failed\n");
 		/* no need to clean up as SubSysCreateAdapter */
 		/* calls DeleteAdapter on error. */
 		return err;
-
+	}
 	HPI_DEBUG_LOG(INFO, "load DSP code OK\n");
 
 	/* allow boot load even if mem alloc wont work */
@@ -604,6 +606,7 @@ static u16 create_adapter_obj(struct hpi_adapter_obj *pao,
 				control_cache.number_of_controls,
 				interface->control_cache.size_in_bytes,
 				p_control_cache_virtual);
+
 			if (!phw->p_cache)
 				err = HPI_ERROR_MEMORY_ALLOC;
 		}
@@ -631,11 +634,12 @@ static u16 create_adapter_obj(struct hpi_adapter_obj *pao,
 
 		HPI_DEBUG_LOG(VERBOSE, "init ADAPTER_GET_INFO\n");
 		memset(&hm, 0, sizeof(hm));
-		hm.type = HPI_TYPE_MESSAGE;
+		/* wAdapterIndex == version == 0 */
+		hm.type = HPI_TYPE_REQUEST;
 		hm.size = sizeof(hm);
 		hm.object = HPI_OBJ_ADAPTER;
 		hm.function = HPI_ADAPTER_GET_INFO;
-		hm.adapter_index = 0;
+
 		memset(&hr, 0, sizeof(hr));
 		hr.size = sizeof(hr);
 
@@ -655,9 +659,6 @@ static u16 create_adapter_obj(struct hpi_adapter_obj *pao,
 			hr.u.ax.info.num_outstreams +
 			hr.u.ax.info.num_instreams;
 
-		hpios_locked_mem_prepare((max_streams * 6) / 10, max_streams,
-			65536, pao->pci.pci_dev);
-
 		HPI_DEBUG_LOG(VERBOSE,
 			"got adapter info type %x index %d serial %d\n",
 			hr.u.ax.info.adapter_type, hr.u.ax.info.adapter_index,
@@ -675,15 +676,13 @@ static u16 create_adapter_obj(struct hpi_adapter_obj *pao,
 }
 
 /** Free memory areas allocated by adapter
- * this routine is called from SubSysDeleteAdapter,
+ * this routine is called from AdapterDelete,
   * and SubSysCreateAdapter if duplicate index
 */
 static void delete_adapter_obj(struct hpi_adapter_obj *pao)
 {
-	struct hpi_hw_obj *phw;
+	struct hpi_hw_obj *phw = pao->priv;
 	int i;
-
-	phw = pao->priv;
 
 	if (hpios_locked_mem_valid(&phw->h_control_cache)) {
 		hpios_locked_mem_free(&phw->h_control_cache);
@@ -708,9 +707,6 @@ static void delete_adapter_obj(struct hpi_adapter_obj *pao)
 				[i]);
 			phw->outstream_host_buffer_size[i] = 0;
 		}
-
-	hpios_locked_mem_unprepare(pao->pci.pci_dev);
-
 	kfree(phw);
 }
 
@@ -1275,6 +1271,7 @@ static u16 adapter_boot_load_dsp(struct hpi_adapter_obj *pao,
 	case HPI_ADAPTER_FAMILY_ASI(0x6300):
 		boot_code_id[1] = HPI_ADAPTER_FAMILY_ASI(0x6400);
 		break;
+	case HPI_ADAPTER_FAMILY_ASI(0x5500):
 	case HPI_ADAPTER_FAMILY_ASI(0x5600):
 	case HPI_ADAPTER_FAMILY_ASI(0x6500):
 		boot_code_id[1] = HPI_ADAPTER_FAMILY_ASI(0x6600);
@@ -1369,9 +1366,8 @@ static u16 adapter_boot_load_dsp(struct hpi_adapter_obj *pao,
 			return err;
 
 		/* write the DSP code down into the DSPs memory */
-		dsp_code.ps_dev = pao->pci.pci_dev;
-		err = hpi_dsp_code_open(boot_code_id[dsp], &dsp_code,
-			pos_error_code);
+		err = hpi_dsp_code_open(boot_code_id[dsp], pao->pci.pci_dev,
+			&dsp_code, pos_error_code);
 		if (err)
 			return err;
 
@@ -2059,7 +2055,6 @@ static int wait_dsp_ack(struct hpi_hw_obj *phw, int state, int timeout_us)
 static void send_dsp_command(struct hpi_hw_obj *phw, int cmd)
 {
 	struct bus_master_interface *interface = phw->p_interface_buffer;
-
 	u32 r;
 
 	interface->host_cmd = cmd;
@@ -2083,13 +2078,13 @@ static u16 message_response_sequence(struct hpi_adapter_obj *pao,
 	u16 err = 0;
 
 	message_count++;
-	if (phm->size > sizeof(interface->u)) {
+	if (phm->size > sizeof(interface->u.message_buffer)) {
 		phr->error = HPI_ERROR_MESSAGE_BUFFER_TOO_SMALL;
-		phr->specific_error = sizeof(interface->u);
+		phr->specific_error = sizeof(interface->u.message_buffer);
 		phr->size = sizeof(struct hpi_response_header);
 		HPI_DEBUG_LOG(ERROR,
 			"message len %d too big for buffer %zd \n", phm->size,
-			sizeof(interface->u));
+			sizeof(interface->u.message_buffer));
 		return 0;
 	}
 
@@ -2121,18 +2116,19 @@ static u16 message_response_sequence(struct hpi_adapter_obj *pao,
 
 	/* read the result */
 	if (time_out) {
-		if (interface->u.response_buffer.size <= phr->size)
+		if (interface->u.response_buffer.response.size <= phr->size)
 			memcpy(phr, &interface->u.response_buffer,
-				interface->u.response_buffer.size);
+				interface->u.response_buffer.response.size);
 		else {
 			HPI_DEBUG_LOG(ERROR,
 				"response len %d too big for buffer %d\n",
-				interface->u.response_buffer.size, phr->size);
+				interface->u.response_buffer.response.size,
+				phr->size);
 			memcpy(phr, &interface->u.response_buffer,
 				sizeof(struct hpi_response_header));
 			phr->error = HPI_ERROR_RESPONSE_BUFFER_TOO_SMALL;
 			phr->specific_error =
-				interface->u.response_buffer.size;
+				interface->u.response_buffer.response.size;
 			phr->size = sizeof(struct hpi_response_header);
 		}
 	}
@@ -2201,23 +2197,6 @@ static void hw_message(struct hpi_adapter_obj *pao, struct hpi_message *phm,
 			phm->u.d.u.data.data_size, H620_HIF_GET_DATA);
 		break;
 
-	case HPI_CONTROL_SET_STATE:
-		if (phm->object == HPI_OBJ_CONTROLEX
-			&& phm->u.cx.attribute == HPI_COBRANET_SET_DATA)
-			err = hpi6205_transfer_data(pao,
-				phm->u.cx.u.cobranet_bigdata.pb_data,
-				phm->u.cx.u.cobranet_bigdata.byte_count,
-				H620_HIF_SEND_DATA);
-		break;
-
-	case HPI_CONTROL_GET_STATE:
-		if (phm->object == HPI_OBJ_CONTROLEX
-			&& phm->u.cx.attribute == HPI_COBRANET_GET_DATA)
-			err = hpi6205_transfer_data(pao,
-				phm->u.cx.u.cobranet_bigdata.pb_data,
-				phr->u.cx.u.cobranet_data.byte_count,
-				H620_HIF_GET_DATA);
-		break;
 	}
 	phr->error = err;
 

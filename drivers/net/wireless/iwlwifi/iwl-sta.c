@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2003 - 2010 Intel Corporation. All rights reserved.
+ * Copyright(c) 2003 - 2011 Intel Corporation. All rights reserved.
  *
  * Portions of this file are derived from the ipw3945 project, as well
  * as portions of the ieee80211 subsystem header files.
@@ -35,6 +35,8 @@
 #include "iwl-dev.h"
 #include "iwl-core.h"
 #include "iwl-sta.h"
+#include "iwl-trans.h"
+#include "iwl-agn.h"
 
 /* priv->sta_lock must be held */
 static void iwl_sta_ucode_activate(struct iwl_priv *priv, u8 sta_id)
@@ -132,6 +134,16 @@ static void iwl_add_sta_callback(struct iwl_priv *priv,
 
 }
 
+static u16 iwlagn_build_addsta_hcmd(const struct iwl_addsta_cmd *cmd, u8 *data)
+{
+	u16 size = (u16)sizeof(struct iwl_addsta_cmd);
+	struct iwl_addsta_cmd *addsta = (struct iwl_addsta_cmd *)data;
+	memcpy(addsta, cmd, size);
+	/* resrved in 5000 */
+	addsta->rate_n_flags = cpu_to_le16(0);
+	return size;
+}
+
 int iwl_send_add_sta(struct iwl_priv *priv,
 		     struct iwl_addsta_cmd *sta, u8 flags)
 {
@@ -141,7 +153,7 @@ int iwl_send_add_sta(struct iwl_priv *priv,
 	struct iwl_host_cmd cmd = {
 		.id = REPLY_ADD_STA,
 		.flags = flags,
-		.data = data,
+		.data = { data, },
 	};
 	u8 sta_id __maybe_unused = sta->sta.sta_id;
 
@@ -155,8 +167,8 @@ int iwl_send_add_sta(struct iwl_priv *priv,
 		might_sleep();
 	}
 
-	cmd.len = priv->cfg->ops->utils->build_addsta_hcmd(sta, data);
-	ret = iwl_send_cmd(priv, &cmd);
+	cmd.len[0] = iwlagn_build_addsta_hcmd(sta, data);
+	ret = trans_send_cmd(&priv->trans, &cmd);
 
 	if (ret || (flags & CMD_ASYNC))
 		return ret;
@@ -233,7 +245,6 @@ u8 iwl_prep_station(struct iwl_priv *priv, struct iwl_rxon_context *ctx,
 	struct iwl_station_entry *station;
 	int i;
 	u8 sta_id = IWL_INVALID_STATION;
-	u16 rate;
 
 	if (is_ap)
 		sta_id = ctx->ap_sta_id;
@@ -305,12 +316,6 @@ u8 iwl_prep_station(struct iwl_priv *priv, struct iwl_rxon_context *ctx,
 	 * doesn't allow HT IBSS.
 	 */
 	iwl_set_ht_add_station(priv, sta_id, sta, ctx);
-
-	/* 3945 only */
-	rate = (priv->band == IEEE80211_BAND_5GHZ) ?
-		IWL_RATE_6M_PLCP : IWL_RATE_1M_PLCP;
-	/* Turn on both antennas for the station... */
-	station->sta.rate_n_flags = cpu_to_le16(rate | RATE_MCS_ANT_AB_MSK);
 
 	return sta_id;
 
@@ -408,9 +413,9 @@ static int iwl_send_remove_station(struct iwl_priv *priv,
 
 	struct iwl_host_cmd cmd = {
 		.id = REPLY_REMOVE_STA,
-		.len = sizeof(struct iwl_rem_sta_cmd),
+		.len = { sizeof(struct iwl_rem_sta_cmd), },
 		.flags = CMD_SYNC,
-		.data = &rm_sta_cmd,
+		.data = { &rm_sta_cmd, },
 	};
 
 	memset(&rm_sta_cmd, 0, sizeof(rm_sta_cmd));
@@ -419,7 +424,7 @@ static int iwl_send_remove_station(struct iwl_priv *priv,
 
 	cmd.flags |= CMD_WANT_SKB;
 
-	ret = iwl_send_cmd(priv, &cmd);
+	ret = trans_send_cmd(&priv->trans, &cmd);
 
 	if (ret)
 		return ret;
@@ -501,7 +506,8 @@ int iwl_remove_station(struct iwl_priv *priv, const u8 sta_id,
 
 	priv->num_stations--;
 
-	BUG_ON(priv->num_stations < 0);
+	if (WARN_ON(priv->num_stations < 0))
+		priv->num_stations = 0;
 
 	spin_unlock_irqrestore(&priv->sta_lock, flags);
 
@@ -663,7 +669,7 @@ void iwl_reprogram_ap_sta(struct iwl_priv *priv, struct iwl_rxon_context *ctx)
 	iwl_send_lq_cmd(priv, ctx, &lq, CMD_SYNC, true);
 }
 
-int iwl_get_free_ucode_key_index(struct iwl_priv *priv)
+int iwl_get_free_ucode_key_offset(struct iwl_priv *priv)
 {
 	int i;
 
@@ -686,7 +692,8 @@ void iwl_dealloc_bcast_stations(struct iwl_priv *priv)
 
 		priv->stations[i].used &= ~IWL_STA_UCODE_ACTIVE;
 		priv->num_stations--;
-		BUG_ON(priv->num_stations < 0);
+		if (WARN_ON(priv->num_stations < 0))
+			priv->num_stations = 0;
 		kfree(priv->stations[i].lq);
 		priv->stations[i].lq = NULL;
 	}
@@ -765,9 +772,9 @@ int iwl_send_lq_cmd(struct iwl_priv *priv, struct iwl_rxon_context *ctx,
 
 	struct iwl_host_cmd cmd = {
 		.id = REPLY_TX_LINK_QUALITY_CMD,
-		.len = sizeof(struct iwl_link_quality_cmd),
+		.len = { sizeof(struct iwl_link_quality_cmd), },
 		.flags = flags,
-		.data = lq,
+		.data = { lq, },
 	};
 
 	if (WARN_ON(lq->sta_id == IWL_INVALID_STATION))
@@ -782,10 +789,11 @@ int iwl_send_lq_cmd(struct iwl_priv *priv, struct iwl_rxon_context *ctx,
 	spin_unlock_irqrestore(&priv->sta_lock, flags_spin);
 
 	iwl_dump_lq_cmd(priv, lq);
-	BUG_ON(init && (cmd.flags & CMD_ASYNC));
+	if (WARN_ON(init && (cmd.flags & CMD_ASYNC)))
+		return -EINVAL;
 
 	if (is_lq_table_valid(priv, ctx, lq))
-		ret = iwl_send_cmd(priv, &cmd);
+		ret = trans_send_cmd(&priv->trans, &cmd);
 	else
 		ret = -EINVAL;
 

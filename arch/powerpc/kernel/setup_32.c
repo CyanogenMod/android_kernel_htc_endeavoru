@@ -49,6 +49,7 @@ extern void bootx_init(unsigned long r4, unsigned long phys);
 int boot_cpuid = -1;
 EXPORT_SYMBOL_GPL(boot_cpuid);
 int boot_cpuid_phys;
+EXPORT_SYMBOL_GPL(boot_cpuid_phys);
 
 int smp_hw_index[NR_CPUS];
 
@@ -106,6 +107,8 @@ notrace unsigned long __init early_init(unsigned long dt_ptr)
 			 PTRRELOC(&__start___lwsync_fixup),
 			 PTRRELOC(&__stop___lwsync_fixup));
 
+	do_final_fixups();
+
 	return KERNELBASE + offset;
 }
 
@@ -125,6 +128,8 @@ notrace void __init machine_init(unsigned long dt_ptr)
 
 	/* Do some early initialization based on the flat device tree */
 	early_init_devtree(__va(dt_ptr));
+
+	early_init_mmu();
 
 	probe_machine();
 

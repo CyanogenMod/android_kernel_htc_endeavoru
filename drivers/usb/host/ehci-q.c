@@ -40,6 +40,13 @@
 
 /*-------------------------------------------------------------------------*/
 
+//++HTC
+#include <asm/mach-types.h>
+#include <mach/board_htc.h>
+#include <linux/platform_device.h>
+extern struct ehci_hcd 	*mdm_hsic_ehci_hcd;
+//--HTC
+
 /* fill a qtd, returning how much of the buffer we were able to queue up */
 
 static int
@@ -103,7 +110,7 @@ qh_update (struct ehci_hcd *ehci, struct ehci_qh *qh, struct ehci_qtd *qtd)
 	if (!(hw->hw_info1 & cpu_to_hc32(ehci, 1 << 14))) {
 		unsigned	is_out, epnum;
 
-		is_out = !(qtd->hw_token & cpu_to_hc32(ehci, 1 << 8));
+		is_out = qh->is_out;
 		epnum = (hc32_to_cpup(ehci, &hw->hw_info1) >> 8) & 0x0f;
 		if (unlikely (!usb_gettoggle (qh->dev, epnum, is_out))) {
 			hw->hw_token &= ~cpu_to_hc32(ehci, QTD_TOGGLE);
@@ -218,6 +225,7 @@ static int qtd_copy_status (
 			status = -EOVERFLOW;
 		/* CERR nonzero + halt --> stall */
 		} else if (QTD_CERR(token)) {
+			pr_info("%s token=%d\n",__func__, token);
 			status = -EPIPE;
 
 		/* In theory, more than one of the following bits can be set
@@ -242,12 +250,22 @@ static int qtd_copy_status (
 			status = -EPROTO;
 		}
 
-		ehci_vdbg (ehci,
+		ehci_dbg (ehci,
 			"dev%d ep%d%s qtd token %08x --> status %d\n",
 			usb_pipedevice (urb->pipe),
 			usb_pipeendpoint (urb->pipe),
 			usb_pipein (urb->pipe) ? "in" : "out",
 			token, status);
+
+		//htc_dbg+++
+		if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+			trace_printk("dev%d ep%d%s qtd token %08x --> status %d\n",
+				usb_pipedevice (urb->pipe),
+				usb_pipeendpoint (urb->pipe),
+				usb_pipein (urb->pipe) ? "in" : "out",
+				token, status);
+		}
+		//htc_dbg---
 	}
 
 	return status;
@@ -289,17 +307,17 @@ __acquires(ehci->lock)
 		urb->actual_length, urb->transfer_buffer_length);
 #endif
 
-#ifdef CONFIG_MACH_ENDEARVORU
-	/* HTC: log for urb trace */
-	if (host_dbg_flag & DBG_EHCI_URB)
-		ehci_info (ehci,
-			"%s %s urb %p ep%d%s status %d len %d/%d\n",
-			__func__, urb->dev->devpath, urb,
+	//htc_dbg+++
+	if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+		trace_printk("[%d] %s ep%d%s urb %p status %d len %d/%d\n",
+			__LINE__, urb->dev->devpath,
 			usb_pipeendpoint (urb->pipe),
 			usb_pipein (urb->pipe) ? "in" : "out",
+			urb,
 			status,
 			urb->actual_length, urb->transfer_buffer_length);
-#endif
+	}
+	//htc_dbg---
 
 	/* complete() can reenter this HCD */
 	usb_hcd_unlink_urb_from_ep(ehci_to_hcd(ehci), urb);
@@ -328,6 +346,9 @@ qh_completions (struct ehci_hcd *ehci, struct ehci_qh *qh)
 	unsigned		count = 0;
 	u8			state;
 	struct ehci_qh_hw	*hw = qh->hw;
+//++SSD_RIL@20120713: fix for dma-cpu_cache coherency issue.
+	struct usb_hcd 		*hcd = ehci_to_hcd(ehci);
+//--SSD_RIL
 
 	if (unlikely (list_empty (&qh->qtd_list)))
 		return count;
@@ -346,10 +367,48 @@ qh_completions (struct ehci_hcd *ehci, struct ehci_qh *qh)
 	qh->qh_state = QH_STATE_COMPLETING;
 	stopped = (state == QH_STATE_IDLE);
 
+//++SSD_RIL@20120713: fix for dma-cpu_cache coherency issue.
+	dma_sync_single_for_cpu(hcd->self.controller, qh->qh_dma,
+		sizeof(struct ehci_qh_hw), DMA_FROM_DEVICE);
+//--SSD_RIL
+
  rescan:
 	last = NULL;
 	last_status = -EINPROGRESS;
 	qh->needs_rescan = 0;
+
+	//htc_dbg+++
+	if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul())
+	{
+		u32             NakCnt;
+		u32             hw_alt_next;
+		u32             hw_next;
+		u32             hw_info1;
+		u32             hw_info2;
+		u32             hw_token;
+		u32             hw_current;
+		u32             hw_qtd_next;
+		int             RL;
+		int             Tbit;
+
+		rmb ();
+		hw_alt_next = hc32_to_cpu(ehci, qh->hw->hw_alt_next);
+		hw_current = hc32_to_cpu(ehci, qh->hw->hw_current);
+		hw_qtd_next = hc32_to_cpu(ehci, qh->hw->hw_qtd_next);
+		hw_next = hc32_to_cpu(ehci, qh->hw->hw_next);
+		hw_info1 = hc32_to_cpu(ehci, qh->hw->hw_info1);
+		hw_info2 = hc32_to_cpu(ehci, qh->hw->hw_info2);
+		hw_token = hc32_to_cpu(ehci, qh->hw->hw_token);
+		RL = (hw_info1 >> 28) & 0xf;
+		NakCnt = (hw_alt_next >> 1) & 0xf;
+		Tbit = hw_alt_next & 0x1;
+
+		trace_printk("qh %p next 0x%X info1 0x%0X info2 0x%X token 0x%X: RL %d NakCnt %d T %d\n",
+			qh, hw_next, hw_info1, hw_info2, hw_token, RL, NakCnt, Tbit);
+		trace_printk("qh %p qtd: current 0x%X next 0x%X alt_next 0x%X\n",
+			qh, hw_current, hw_qtd_next, hw_alt_next);
+	}
+	//htc_dbg---
 
 	/* remove de-activated QTDs from front of queue.
 	 * after faults (including short reads), cleanup this urb
@@ -367,10 +426,21 @@ qh_completions (struct ehci_hcd *ehci, struct ehci_qh *qh)
 		/* clean up any state from previous QTD ...*/
 		if (last) {
 			if (likely (last->urb != urb)) {
+				//htc_dbg+++
+				if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+					trace_printk("ehci_urb_done[%d] urb %p last_status %d count %d\n",
+						__LINE__, last->urb, last_status, count);
+				}
+				//htc_dbg---
 				ehci_urb_done(ehci, last->urb, last_status);
 				count++;
 				last_status = -EINPROGRESS;
 			}
+			//htc_dbg+++
+			if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+				trace_printk("ehci_qtd_free[%d] qtd %p\n", __LINE__, last);
+			}
+			//htc_dbg---
 			ehci_qtd_free (ehci, last);
 			last = NULL;
 		}
@@ -379,9 +449,30 @@ qh_completions (struct ehci_hcd *ehci, struct ehci_qh *qh)
 		if (qtd == end)
 			break;
 
+//++SSD_RIL@20120713: fix for dma-cpu_cache coherency issue.
+		dma_sync_single_for_cpu(hcd->self.controller, qtd->qtd_dma,
+			sizeof(struct ehci_qtd), DMA_FROM_DEVICE);
+//--SSD_RIL
+
 		/* hardware copies qtd out of qh overlay */
 		rmb ();
 		token = hc32_to_cpu(ehci, qtd->hw_token);
+
+		//htc_dbg+++
+		if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+			int 	Cerr;
+			int		C_Page;
+			int		IOC;
+			int		PID;
+
+			IOC = (token >> 15) & 0x1;
+			C_Page = (token >> 12) & 0x7;
+			Cerr = (token >> 10) & 0x3;
+			PID = (token >> 8) & 0x3;
+			trace_printk("urb %p qtd %p hw_token 0x%X: IOC %d C_page %d Cerr %d PID %d\n",
+				qtd->urb, qtd, token, IOC, C_Page, Cerr, PID);
+		}
+		//htc_dbg---
 
 		/* always clean up qtds the hc de-activated */
  retry_xacterr:
@@ -402,6 +493,26 @@ qh_completions (struct ehci_hcd *ehci, struct ehci_qh *qh)
 					ehci_dbg(ehci,
 	"detected XactErr len %zu/%zu retry %d\n",
 	qtd->length - QTD_LENGTH(token), qtd->length, qh->xacterrs);
+
+					//++HTC
+					if (machine_is_evitareul())
+					{
+						extern bool mdm_is_alive;
+						if (mdm_hsic_ehci_hcd == ehci && mdm_is_alive)
+						{
+							if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+								trace_printk("detected XactErr len %zu/%zu retry %d\n",
+									qtd->length - QTD_LENGTH(token), qtd->length, qh->xacterrs);
+							}
+
+							if (qh->xacterrs == 31 && (get_radio_flag() & 0x0004)) {
+								extern void trigger_ap2mdm_errfatal(void);
+								printk("%s trigger_ap2mdm_errfatal\n", __func__);
+								trigger_ap2mdm_errfatal();
+							}
+						}
+					}
+					//--HTC
 
 					/* reset the token in the qtd and the
 					 * qh overlay (which still contains
@@ -497,9 +608,14 @@ qh_completions (struct ehci_hcd *ehci, struct ehci_qh *qh)
 				 * buffer in this case.  Strictly speaking this
 				 * is a violation of the spec.
 				 */
-				if (last_status != -EPIPE)
+				if (last_status != -EPIPE) {
 					ehci_clear_tt_buffer(ehci, qh, urb,
 							token);
+				}
+				else {
+					pr_info("%s last_status=%d\n",__func__, last_status);
+
+				}
 			}
 		}
 
@@ -522,8 +638,19 @@ qh_completions (struct ehci_hcd *ehci, struct ehci_qh *qh)
 
 	/* last urb's completion might still need calling */
 	if (likely (last != NULL)) {
+		//htc_dbg+++
+		if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+			trace_printk("[%d] ehci_urb_done urb %p last_status %d count %d\n",
+				__LINE__, last->urb, last_status, count);
+		}
+		//htc_dbg---
 		ehci_urb_done(ehci, last->urb, last_status);
 		count++;
+		//htc_dbg+++
+		if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+			trace_printk("[%d] ehci_qtd_free qtd %p\n", __LINE__, last);
+		}
+		//htc_dbg---
 		ehci_qtd_free (ehci, last);
 	}
 
@@ -573,7 +700,11 @@ qh_completions (struct ehci_hcd *ehci, struct ehci_qh *qh)
 		/* otherwise, unlink already started */
 		}
 	}
-
+	//htc_dbg+++
+	if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+		trace_printk("[%s] return count %d\n", __func__, count);
+	}
+	//htc_dbg---
 	return count;
 }
 
@@ -621,6 +752,10 @@ qh_urb_transaction (
 	u32			token;
 	int			i;
 	struct scatterlist	*sg;
+	//htc_dbg+++
+	int			qtd_count = 0;
+	struct ehci_qtd		*qtd_array[10] = {0};
+	//htc_dbg---
 
 	/*
 	 * URBs map to sequences of QTDs:  one logical transaction
@@ -630,6 +765,12 @@ qh_urb_transaction (
 		return NULL;
 	list_add_tail (&qtd->qtd_list, head);
 	qtd->urb = urb;
+	//htc_dbg+++
+	if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+		qtd_array[qtd_count] = qtd;
+		qtd_count++;
+	}
+	//htc_dbg---
 
 	token = QTD_STS_ACTIVE;
 	token |= (EHCI_TUNE_CERR << 10);
@@ -661,7 +802,7 @@ qh_urb_transaction (
 	/*
 	 * data transfer stage:  buffer setup
 	 */
-	i = urb->num_sgs;
+	i = urb->num_mapped_sgs;
 	if (len > 0 && i > 0) {
 		sg = urb->sg;
 		buf = sg_dma_address(sg);
@@ -723,6 +864,12 @@ qh_urb_transaction (
 		qtd->urb = urb;
 		qtd_prev->hw_next = QTD_NEXT(ehci, qtd->qtd_dma);
 		list_add_tail (&qtd->qtd_list, head);
+		//htc_dbg+++
+		if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+			qtd_array[qtd_count] = qtd;
+			qtd_count++;
+		}
+		//htc_dbg---
 	}
 
 	/*
@@ -758,7 +905,12 @@ qh_urb_transaction (
 			qtd->urb = urb;
 			qtd_prev->hw_next = QTD_NEXT(ehci, qtd->qtd_dma);
 			list_add_tail (&qtd->qtd_list, head);
-
+			//htc_dbg+++
+			if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+				qtd_array[qtd_count] = qtd;
+				qtd_count++;
+			}
+			//htc_dbg---
 			/* never any data in such packets */
 			qtd_fill(ehci, qtd, 0, 0, token, 0);
 		}
@@ -767,6 +919,13 @@ qh_urb_transaction (
 	/* by default, enable interrupt on urb completion */
 	if (likely (!(urb->transfer_flags & URB_NO_INTERRUPT)))
 		qtd->hw_token |= cpu_to_hc32(ehci, QTD_IOC);
+
+	//htc_dbg+++
+	if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul()) {
+		trace_printk("urb %p stored in %d qtd: %p %p %p %p %p\n", urb,
+			qtd_count, qtd_array[0], qtd_array[1], qtd_array[2], qtd_array[3], qtd_array[4]);
+	}
+	//htc_dbg---
 	return head;
 
 cleanup:
@@ -958,6 +1117,7 @@ done:
 	hw = qh->hw;
 	hw->hw_info1 = cpu_to_hc32(ehci, info1);
 	hw->hw_info2 = cpu_to_hc32(ehci, info2);
+	qh->is_out = !is_input;
 	usb_settoggle (urb->dev, usb_pipeendpoint (urb->pipe), !is_input, 1);
 	qh_refresh (ehci, qh);
 	return qh;
@@ -1005,6 +1165,12 @@ static void qh_link_async (struct ehci_hcd *ehci, struct ehci_qh *qh)
 
 	head->qh_next.qh = qh;
 	head->hw->hw_next = dma;
+
+	/*
+	 * flush qh descriptor into memory immediately,
+	 * see comments in qh_append_tds.
+	 * */
+	ehci_sync_mem();
 
 	qh_get(qh);
 	qh->xacterrs = 0;
@@ -1094,9 +1260,41 @@ static struct ehci_qh *qh_append_tds (
 			wmb ();
 			dummy->hw_token = token;
 
+			/*
+			 * Writing to dma coherent buffer on ARM may
+			 * be delayed to reach memory, so HC may not see
+			 * hw_token of dummy qtd in time, which can cause
+			 * the qtd transaction to be executed very late,
+			 * and degrade performance a lot. ehci_sync_mem
+			 * is added to flush 'token' immediatelly into
+			 * memory, so that ehci can execute the transaction
+			 * ASAP.
+			 * */
+			ehci_sync_mem();
+
 			urb->hcpriv = qh_get (qh);
 		}
 	}
+
+	//htc_dbg+++
+	if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul())
+	{
+		int qtd_count = 0;
+		struct ehci_qtd	*qtd_array[10] = {0};
+		struct list_head *pos;
+		list_for_each(pos, qtd_list) {
+			if (qtd_count < 10)
+				qtd_array[qtd_count] = container_of(pos, struct ehci_qtd, qtd_list);
+			else
+				break;
+			qtd_count++;
+		}
+		trace_printk("urb %p qh %p linked %d qtds: %p %p %p %p %p\n",
+			urb, qh, qtd_count, qtd_array[0], qtd_array[1], qtd_array[2],
+			qtd_array[3], qtd_array[4]);
+	}
+	//htc_dbg---
+
 	return qh;
 }
 
@@ -1129,20 +1327,21 @@ submit_async (
 	}
 #endif
 
-#ifdef CONFIG_MACH_ENDEARVORU
-	/* HTC: log for urb trace */
-	if (host_dbg_flag & DBG_EHCI_URB)
+	//htc_dbg+++
+	if ((get_radio_flag() & 0x0001) && (mdm_hsic_ehci_hcd == ehci) && machine_is_evitareul())
 	{
 		struct ehci_qtd *qtd;
 		qtd = list_entry(qtd_list->next, struct ehci_qtd, qtd_list);
-		ehci_info(ehci,
-			 "%s %s urb %p ep%d%s len %d, qtd %p [qh %p]\n",
-			 __func__, urb->dev->devpath, urb,
+
+		trace_printk("%s %s pipe %x ep%d%s len %d, urb %p qtd %p [qh %p]\n",
+			 __func__, urb->dev->devpath, urb->pipe,
 			 epnum & 0x0f, (epnum & USB_DIR_IN) ? "in" : "out",
 			 urb->transfer_buffer_length,
+			 urb,
 			 qtd, urb->ep->hcpriv);
 	}
-#endif
+	//htc_dbg---
+
 
 	spin_lock_irqsave (&ehci->lock, flags);
 	if (unlikely(!HCD_HW_ACCESSIBLE(ehci_to_hcd(ehci)))) {
@@ -1212,6 +1411,10 @@ static void end_unlink_async (struct ehci_hcd *ehci)
 		ehci->reclaim = NULL;
 		start_unlink_async (ehci, next);
 	}
+
+	if (ehci->has_synopsys_hc_bug)
+		ehci_writel(ehci, (u32) ehci->async->qh_dma,
+			    &ehci->regs->async_next);
 }
 
 /* makes sure the async qh will become idle */
@@ -1255,6 +1458,8 @@ static void start_unlink_async (struct ehci_hcd *ehci, struct ehci_qh *qh)
 
 	prev->hw->hw_next = qh->hw->hw_next;
 	prev->qh_next = qh->qh_next;
+	if (ehci->qh_scan_next == qh)
+		ehci->qh_scan_next = qh->qh_next.qh;
 	wmb ();
 
 	/* If the controller isn't running, we don't have to wait for it */
@@ -1280,53 +1485,49 @@ static void scan_async (struct ehci_hcd *ehci)
 	struct ehci_qh		*qh;
 	enum ehci_timer_action	action = TIMER_IO_WATCHDOG;
 
-	ehci->stamp = ehci_readl(ehci, &ehci->regs->frame_index);
 	timer_action_done (ehci, TIMER_ASYNC_SHRINK);
-rescan:
 	stopped = !HC_IS_RUNNING(ehci_to_hcd(ehci)->state);
-	qh = ehci->async->qh_next.qh;
-	if (likely (qh != NULL)) {
-		do {
-			/* clean any finished work for this qh */
-			if (!list_empty(&qh->qtd_list) && (stopped ||
-					qh->stamp != ehci->stamp)) {
-				int temp;
 
-				/* unlinks could happen here; completion
-				 * reporting drops the lock.  rescan using
-				 * the latest schedule, but don't rescan
-				 * qhs we already finished (no looping)
-				 * unless the controller is stopped.
-				 */
-				qh = qh_get (qh);
-				qh->stamp = ehci->stamp;
-				temp = qh_completions (ehci, qh);
-				if (qh->needs_rescan)
-					unlink_async(ehci, qh);
-				qh_put (qh);
-				if (temp != 0) {
-					goto rescan;
-				}
-			}
+	ehci->qh_scan_next = ehci->async->qh_next.qh;
+	while (ehci->qh_scan_next) {
+		qh = ehci->qh_scan_next;
+		ehci->qh_scan_next = qh->qh_next.qh;
+ rescan:
+		/* clean any finished work for this qh */
+		if (!list_empty(&qh->qtd_list)) {
+			int temp;
 
-			/* unlink idle entries, reducing DMA usage as well
-			 * as HCD schedule-scanning costs.  delay for any qh
-			 * we just scanned, there's a not-unusual case that it
-			 * doesn't stay idle for long.
-			 * (plus, avoids some kind of re-activation race.)
+			/*
+			 * Unlinks could happen here; completion reporting
+			 * drops the lock.  That's why ehci->qh_scan_next
+			 * always holds the next qh to scan; if the next qh
+			 * gets unlinked then ehci->qh_scan_next is adjusted
+			 * in start_unlink_async().
 			 */
-			if (list_empty(&qh->qtd_list)
-					&& qh->qh_state == QH_STATE_LINKED) {
-				if (!ehci->reclaim && (stopped ||
-					((ehci->stamp - qh->stamp) & 0x1fff)
-						>= EHCI_SHRINK_FRAMES * 8))
-					start_unlink_async(ehci, qh);
-				else
-					action = TIMER_ASYNC_SHRINK;
-			}
+			qh = qh_get(qh);
+			temp = qh_completions(ehci, qh);
+			if (qh->needs_rescan)
+				unlink_async(ehci, qh);
+			qh->unlink_time = jiffies + EHCI_SHRINK_JIFFIES;
+			qh_put(qh);
+			if (temp != 0)
+				goto rescan;
+		}
 
-			qh = qh->qh_next.qh;
-		} while (qh);
+		/* unlink idle entries, reducing DMA usage as well
+		 * as HCD schedule-scanning costs.  delay for any qh
+		 * we just scanned, there's a not-unusual case that it
+		 * doesn't stay idle for long.
+		 * (plus, avoids some kind of re-activation race.)
+		 */
+		if (list_empty(&qh->qtd_list)
+				&& qh->qh_state == QH_STATE_LINKED) {
+			if (!ehci->reclaim && (stopped ||
+					time_after_eq(jiffies, qh->unlink_time)))
+				start_unlink_async(ehci, qh);
+			else
+				action = TIMER_ASYNC_SHRINK;
+		}
 	}
 	if (action == TIMER_ASYNC_SHRINK)
 		timer_action (ehci, TIMER_ASYNC_SHRINK);

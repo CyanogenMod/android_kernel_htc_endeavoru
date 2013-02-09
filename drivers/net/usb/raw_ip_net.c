@@ -35,6 +35,8 @@
 #include <linux/types.h>
 #include <linux/etherdevice.h>
 #include <linux/usb.h>
+extern int debug_gpio_dump();
+extern int trigger_radio_fatal_get_coredump(char *reason);
 
 /* HTC include file */
 #include <mach/htc_hostdbg.h>
@@ -51,6 +53,7 @@
 //#define verbose	0
 //#endif
 static int verbose = 0;
+static bool module_exiting;
 module_param(verbose, int, 0644);
 MODULE_PARM_DESC(verbose, "raw ip (cdc-acm) - verbose debug messages");
 
@@ -125,7 +128,11 @@ MODULE_LICENSE("GPL");
 
 int g_i;
 
+#if 1
+void usb_register_dump() { };
+#else
 extern void usb_register_dump(void);
+#endif
 
 int max_intfs = MAX_INTFS;
 unsigned long usb_net_raw_ip_vid = 0x1519;
@@ -147,7 +154,11 @@ module_param(usb_net_raw_ip_tx_debug, ulong, 0644);
 MODULE_PARM_DESC(usb_net_raw_ip_tx_debug, "usb net (raw-ip) - tx debug");
 
 struct baseband_usb {
+	/* semaphore between init/disconnect/suspend/resume */
+	struct semaphore sem;
+	/* instance */
 	int baseband_index;
+	/* network statistics */
 	struct {
 		struct usb_driver *driver;
 		struct usb_device *device;
@@ -168,9 +179,11 @@ struct baseband_usb {
 		/*77228-5 patch*/
 	} usb;
 	/* 77969-7 patch */
+	/* re-usable rx urb */
 	struct urb *urb_r;
 	void *buff;
 	/* 77969-7 patch */
+	/* suspend count */
 	int susp_count;
 };
 
@@ -281,6 +294,11 @@ static void baseband_usb_driver_disconnect(struct usb_interface *intf)
 			continue;
 		}
 		/* 77969-7 patch */
+		/* acquire semaphore */
+		if (down_interruptible(&baseband_usb_net[i]->sem)) {
+			pr_err("%s: cannot acquire semaphore\n", __func__);
+			continue;
+		}
 		/* kill usb tx */
 		while ((urb = usb_get_from_anchor(&baseband_usb_net[i]->
 			usb.tx_urb_deferred)) != (struct urb *) 0) {
@@ -316,6 +334,8 @@ static void baseband_usb_driver_disconnect(struct usb_interface *intf)
 		/* mark interface as disconnected */
 		baseband_usb_net[i]->usb.interface
 			= (struct usb_interface *) 0;
+		/* release semaphore */
+		up(&baseband_usb_net[i]->sem);
 	}
 }
 
@@ -328,6 +348,8 @@ static int baseband_usb_driver_suspend(struct usb_interface *intf,
 	save_dbg(dbg_flag);/* HTC */
 	pr_debug("%s intf %p\n", __func__, intf);
 
+	if (module_exiting)
+		return -EBUSY;
 
 	//pr_info("%s: cnt %d intf=%p &intf->dev=%p kobje=%s\n",
 		//	__func__, atomic_read(&intf->dev.power.usage_count),intf,&intf->dev,kobject_name(&intf->dev.kobj));
@@ -356,14 +378,22 @@ static int baseband_usb_driver_suspend(struct usb_interface *intf,
 		}
 		pr_info("%s: susp_count = %d (suspending...)\n",
 			__func__, susp_count);
+		/* acquire semaphore */
+		if (down_interruptible(&baseband_usb_net[i]->sem)) {
+			pr_err("%s: cannot acquire semaphore\n", __func__);
+			continue;
+		}
 		/* kill usb rx */
 		if (!baseband_usb_net[i]->usb.rx_urb) {
 			pr_debug("rx_usb already killed\n");
+			up(&baseband_usb_net[i]->sem);
 			continue;
 		}
 		
 		//pr_info("%s: try to kill rx_urb...\n",__func__);
+		pr_debug("%s: kill rx_urb {\n",__func__);
 		usb_kill_urb(baseband_usb_net[i]->usb.rx_urb);
+		pr_debug("%s: kill rx_urb }\n",__func__);
 		//pr_info("%s: try to kill rx_urb.......Done!\n",__func__);
 		baseband_usb_net[i]->usb.rx_urb = (struct urb *) 0;
 
@@ -371,12 +401,15 @@ static int baseband_usb_driver_suspend(struct usb_interface *intf,
 		/* cancel tx urb work (will restart after resume) */
 		if (!baseband_usb_net[i]->usb.tx_workqueue) {
 			pr_err("%s: !tx_workqueue\n", __func__);
+			up(&baseband_usb_net[i]->sem);
 			continue;
 		}
 		
 		//pr_info("%s: try to cancel_work_sync...\n",__func__);
 		cancel_work_sync(&baseband_usb_net[i]->usb.tx_work);
 		//pr_info("%s: try to cancel_work_sync...Done!\n",__func__);
+		/* release semaphore */
+		up(&baseband_usb_net[i]->sem);
 	}
 	restore_dbg(dbg_flag);/* HTC */
 
@@ -389,7 +422,6 @@ static int baseband_usb_driver_resume(struct usb_interface *intf)
 
 	save_dbg(dbg_flag);/* HTC */
 	pr_debug("%s intf %p \n", __func__, intf);
-
 
 	//pr_info("%s: cnt with put async %d intf=%p &intf->dev=%p kobje=%s\n",
 		//	__func__, atomic_read(&intf->dev.power.usage_count),intf,&intf->dev,kobject_name(&intf->dev.kobj));
@@ -418,23 +450,38 @@ static int baseband_usb_driver_resume(struct usb_interface *intf)
 		}
 		pr_info("%s: susp_count = %d (resuming...)\n",
 			__func__, susp_count);
+		/* acquire semaphore */
+		if (down_interruptible(&baseband_usb_net[i]->sem)) {
+			pr_err("%s: cannot acquire semaphore\n", __func__);
+			continue;
+		}
+		if (module_exiting) {
+			pr_debug("%s: module is unloading, do not submit urb\n", __func__);
+			up(&baseband_usb_net[i]->sem);
+			continue;
+		}
 		/* start usb rx */
 		if (baseband_usb_net[i]->usb.rx_urb) {
 			pr_debug("rx_usb already exists\n");
+			up(&baseband_usb_net[i]->sem);
 			continue;
 		}
 		err = usb_net_raw_ip_rx_urb_submit(baseband_usb_net[i]);
 		if (err < 0) {
 			pr_err("submit rx failed - err %d\n", err);
+			up(&baseband_usb_net[i]->sem);
 			continue;
 		}
 		/* restart tx urb work (cancelled in suspend) */
 		if (!baseband_usb_net[i]->usb.tx_workqueue) {
 			pr_err("%s: !tx_workqueue\n", __func__);
+			up(&baseband_usb_net[i]->sem);
 			continue;
 		}
 		queue_work(baseband_usb_net[i]->usb.tx_workqueue,
 			&baseband_usb_net[i]->usb.tx_work);
+		/* release semaphore */
+		up(&baseband_usb_net[i]->sem);
 	}
 	restore_dbg(dbg_flag);/* HTC */
 
@@ -560,6 +607,9 @@ struct baseband_usb *baseband_usb_open(int index,
 		return (struct baseband_usb *) 0;
 	}
 
+	/* create semaphores */
+	sema_init(&usb->sem, 1);
+
 	/* open usb driver */
 	sprintf(baseband_usb_driver_name[index],
 		"baseband_usb_%x_%x_%x",
@@ -628,6 +678,9 @@ void baseband_usb_close(struct baseband_usb *usb)
 		usb->usb.driver = (struct usb_driver *) 0;
 		pr_debug("close usb driver }\n");
 	}
+
+	/* destroy semaphores */
+	memset(&usb->sem, 0, sizeof(usb->sem));
 
 	/* free baseband usb structure */
 	kfree(usb);
@@ -830,7 +883,7 @@ static int usb_net_raw_ip_rx_urb_submit(struct baseband_usb *usb)
 	usb->usb.rx_urb = urb;
 	err = usb_submit_urb(urb, GFP_ATOMIC);
 	if (err < 0) {
-		pr_err("usb_submit_urb() failed - err %d\n", err);
+		pr_info("usb_submit_urb() failed - err %d\n", err);
 		usb->usb.rx_urb = (struct urb *) 0;
 		return err;
 	}
@@ -841,7 +894,16 @@ static int usb_net_raw_ip_rx_urb_submit(struct baseband_usb *usb)
 
 static void usb_net_raw_ip_rx_urb_comp(struct urb *urb)
 {
-	struct baseband_usb *usb = (struct baseband_usb *) urb->context;
+	struct baseband_usb *usb;
+	if (verbose) pr_info("usb_net_raw_ip_rx_urb_comp { urb %p\n", urb);
+
+	/* check input */
+	if (!urb) {
+		pr_err("no urb\n");
+		return;
+	}
+
+	usb = (struct baseband_usb *) urb->context;
 	int i = usb->baseband_index;
 
 	//+Sophia:0112
@@ -865,13 +927,6 @@ static void usb_net_raw_ip_rx_urb_comp(struct urb *urb)
 		NET_IP_ETHERTYPE,
 	};
 
-	if (verbose) pr_info("usb_net_raw_ip_rx_urb_comp { urb %p\n", urb);
-
-	/* check input */
-	if (!urb) {
-		pr_err("no urb\n");
-		return;
-	}
 	/* 77969-8 patch */
 	switch (urb->status) {
 	case 0:
@@ -884,7 +939,8 @@ static void usb_net_raw_ip_rx_urb_comp(struct urb *urb)
 	case -EPROTO:
 		pr_info("%s: rx urb %p - link shutdown %d EPROTO\n",
 			__func__, urb, urb->status);
-		usb_register_dump();
+		debug_gpio_dump();
+		trigger_radio_fatal_get_coredump("raw-ip urb -71");
 		goto err_exit;
 	default:
 		pr_info("%s: rx urb %p - status %d\n",
@@ -918,6 +974,13 @@ static void usb_net_raw_ip_rx_urb_comp(struct urb *urb)
 			skb_reserve(skb, NET_IP_ALIGN);
 			dst = skb_put(skb, 14);
 			memcpy(dst, ethernet_header, 14);
+			if ((((unsigned char *) urb->transfer_buffer)[0]
+				& 0xf0) == 0x60) {
+				/* ipv6 ether type */
+				dst[12] = 0x86;
+				dst[13] = 0xdd;
+			}
+
 			dst = skb_put(skb, urb->actual_length);
 			memcpy(dst, urb->transfer_buffer, urb->actual_length);
 			//htc
@@ -932,6 +995,19 @@ static void usb_net_raw_ip_rx_urb_comp(struct urb *urb)
 
 			skb->protocol = eth_type_trans(skb,
 				usb_net_raw_ip_dev[i]);
+			pr_debug("%s: ntohs(skb->protocol) %04x (%s)\n",
+				__func__, ntohs(skb->protocol),
+				(ntohs(skb->protocol) == 0x0800)
+					? "IPv4"
+					: (ntohs(skb->protocol) == 0x86dd)
+					? "IPv6"
+					: "unknown");
+			pr_debug("%s: %02x %02x %02x %02x\n", __func__,
+				((unsigned char *)urb->transfer_buffer)[0],
+				((unsigned char *)urb->transfer_buffer)[1],
+				((unsigned char *)urb->transfer_buffer)[2],
+				((unsigned char *)urb->transfer_buffer)[3]);
+
 			/* pass skb to network stack */
 			if (netif_rx(skb) < 0) {
 				pr_err("usb_net_raw_ip_rx_urb_comp_work - "
@@ -946,6 +1022,10 @@ static void usb_net_raw_ip_rx_urb_comp(struct urb *urb)
 
 	/* mark rx urb complete */
 	usb->usb.rx_urb = (struct urb *) 0;
+
+	/* do not submit urb if interface is suspending */
+	if (urb->status == -ENOENT)
+		return;
 
 	/* submit next rx urb */
 	usb_net_raw_ip_rx_urb_submit(usb);
@@ -1074,6 +1154,18 @@ static int usb_net_raw_ip_tx_urb_submit(struct baseband_usb *usb,
 		usb);
 
 	urb->transfer_flags = URB_ZERO_PACKET;
+	pr_debug("%s: ntohs(skb->protocol) %04x (%s)\n",
+		__func__, ntohs(skb->protocol),
+		(ntohs(skb->protocol) == 0x0800)
+			? "IPv4"
+			: (ntohs(skb->protocol) == 0x86dd)
+			? "IPv6"
+			: "unknown");
+	pr_debug("%s: %02x %02x %02x %02x\n", __func__,
+		((unsigned char *)urb->transfer_buffer)[0],
+		((unsigned char *)urb->transfer_buffer)[1],
+		((unsigned char *)urb->transfer_buffer)[2],
+		((unsigned char *)urb->transfer_buffer)[3]);
 
 	/* queue tx urb work */
 	usb_anchor_urb(urb, &usb->usb.tx_urb_deferred);
@@ -1182,7 +1274,7 @@ static void usb_net_raw_ip_tx_urb_work(struct work_struct *work)
 
 static void usb_net_raw_ip_tx_urb_comp(struct urb *urb)
 {
-	struct baseband_usb *usb = (struct baseband_usb *) urb->context;
+	struct baseband_usb *usb;
 
 	if (verbose) pr_debug("usb_net_raw_ip_tx_urb_comp {\n");
 	/* 77969-7 patch */
@@ -1191,6 +1283,9 @@ static void usb_net_raw_ip_tx_urb_comp(struct urb *urb)
 		pr_err("no urb\n");
 		return;
 	}
+
+	usb = (struct baseband_usb *) urb->context;
+
 	/* 77969-8 patch */
 	switch (urb->status) {
 	case 0:
@@ -1283,17 +1378,24 @@ static int usb_net_raw_ip_init(void)
 		pr_info("registered baseband usb network device"
 				" - dev %p name %s\n", usb_net_raw_ip_dev[i],
 				 BASEBAND_USB_NET_DEV_NAME);
+		/* acquire semaphore */
+		if (down_interruptible(&baseband_usb_net[i]->sem)) {
+			pr_err("%s: cannot acquire semaphore\n", __func__);
+			goto error_exit;
+		}
 		/* start usb rx */
 		/* 77969-7 patch */
 		err = usb_net_raw_ip_setup_rx_urb(baseband_usb_net[i]);
 		if (err < 0) {
 			pr_err("setup reusable rx urb failed - err %d\n", err);
+			up(&baseband_usb_net[i]->sem);
 			goto error_exit;
 		}
 		/* 77969-7 patch */
 		err = usb_net_raw_ip_rx_urb_submit(baseband_usb_net[i]);
 		if (err < 0) {
 			pr_err("submit rx failed - err %d\n", err);
+			up(&baseband_usb_net[i]->sem);
 			goto error_exit;
 		}
 		/* 77228-5 patch */
@@ -1306,11 +1408,14 @@ static int usb_net_raw_ip_init(void)
 			= create_singlethread_workqueue(name);
 		if (!baseband_usb_net[i]->usb.tx_workqueue) {
 			pr_err("cannot create workqueue\n");
+			up(&baseband_usb_net[i]->sem);
 			goto error_exit;
 		}
 		INIT_WORK(&baseband_usb_net[i]->usb.tx_work,
 			usb_net_raw_ip_tx_urb_work);
 		/* 77228-5 patch */
+		/* release semaphore */
+		up(&baseband_usb_net[i]->sem);
 	}
 
 	/* HTC */
@@ -1371,6 +1476,16 @@ static void usb_net_raw_ip_exit(void)
 
 	/* destroy multiple raw-ip network devices */
 	for (i = 0; i < max_intfs; i++) {
+		if (baseband_usb_net[i] && baseband_usb_net[i]->urb_r)
+			if (!down_interruptible(&baseband_usb_net[i]->sem)) {
+				module_exiting = true;
+				usb_kill_urb(baseband_usb_net[i]->urb_r);
+				up(&baseband_usb_net[i]->sem);
+			} else {
+				module_exiting = true;
+				usb_poison_urb(baseband_usb_net[i]->urb_r);
+				pr_debug("%s: cannot acquire semaphore\n", __func__);
+			}
 		/* unregister network device */
 		if (usb_net_raw_ip_dev[i]) {
 			unregister_netdev(usb_net_raw_ip_dev[i]);

@@ -19,13 +19,6 @@ config MMC_DEBUG
 	  This is an option for use by developers; most people should
 	  say N here.  This enables MMC core and driver debugging.
 
-config ZIMMER
-	bool "Using new eMMC driver for Zimmer"
-	depends on SWAP != n
-	help
-	  This is an option to enable Zimmer.
-
-
 if MMC
 
 source "drivers/mmc/core/Kconfig"

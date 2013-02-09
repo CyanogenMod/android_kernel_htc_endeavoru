@@ -30,7 +30,16 @@ struct platform_tegra_pwm_backlight_data {
 	int (*notify)(struct device *dev, int brightness);
 	int (*check_fb)(struct device *dev, struct fb_info *info);
 	int backlight_mode;
-	int draw_battery;
+	int backlight_status;
+	bool dimming_enable;
+	int cam_launch_bkl_value;
 };
+
+enum {
+       BACKLIGHT_ENABLE = 0,
+       BACKLIGHT_SKIP_WHEN_PROBE,
+       BACKLIGHT_DISABLE,
+};
+
 
 #endif /* TERGA_PWM_BL_H */

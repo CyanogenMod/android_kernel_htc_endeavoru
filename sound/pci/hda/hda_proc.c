@@ -54,6 +54,8 @@ static const char *get_wid_type_name(unsigned int wid_value)
 		[AC_WID_BEEP] = "Beep Generator Widget",
 		[AC_WID_VENDOR] = "Vendor Defined Widget",
 	};
+	if (wid_value == -1)
+		return "UNKNOWN Widget";
 	wid_value &= 0xf;
 	if (names[wid_value])
 		return names[wid_value];
@@ -636,7 +638,7 @@ static void print_codec_info(struct snd_info_entry *entry,
 			wid_caps |= AC_WCAP_CONN_LIST;
 
 		if (wid_caps & AC_WCAP_CONN_LIST)
-			conn_len = snd_hda_get_connections(codec, nid, conn,
+			conn_len = snd_hda_get_raw_connections(codec, nid, conn,
 							   HDA_MAX_CONNECTIONS);
 
 		if (wid_caps & AC_WCAP_IN_AMP) {

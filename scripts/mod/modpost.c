@@ -254,6 +254,28 @@ static enum export export_no(const char *s)
 	return export_unknown;
 }
 
+static const char *sec_name(struct elf_info *elf, int secindex);
+
+#define strstarts(str, prefix) (strncmp(str, prefix, strlen(prefix)) == 0)
+
+static enum export export_from_secname(struct elf_info *elf, unsigned int sec)
+{
+	const char *secname = sec_name(elf, sec);
+
+	if (strstarts(secname, "___ksymtab+"))
+		return export_plain;
+	else if (strstarts(secname, "___ksymtab_unused+"))
+		return export_unused;
+	else if (strstarts(secname, "___ksymtab_gpl+"))
+		return export_gpl;
+	else if (strstarts(secname, "___ksymtab_unused_gpl+"))
+		return export_unused_gpl;
+	else if (strstarts(secname, "___ksymtab_gpl_future+"))
+		return export_gpl_future;
+	else
+		return export_unknown;
+}
+
 static enum export export_from_sec(struct elf_info *elf, unsigned int sec)
 {
 	if (sec == elf->export_sec)
@@ -420,11 +442,10 @@ static int parse_elf(struct elf_info *info, const char *filename)
 		return 0;
 	}
 
-	if (hdr->e_shnum == 0) {
+	if (hdr->e_shnum == SHN_UNDEF) {
 		/*
 		 * There are more than 64k sections,
 		 * read count from .sh_size.
-		 * note: it doesn't need shndx2secindex()
 		 */
 		info->num_sections = TO_NATIVE(sechdrs[0].sh_size);
 	}
@@ -432,8 +453,7 @@ static int parse_elf(struct elf_info *info, const char *filename)
 		info->num_sections = hdr->e_shnum;
 	}
 	if (hdr->e_shstrndx == SHN_XINDEX) {
-		info->secindex_strings =
-		    shndx2secindex(TO_NATIVE(sechdrs[0].sh_link));
+		info->secindex_strings = TO_NATIVE(sechdrs[0].sh_link);
 	}
 	else {
 		info->secindex_strings = hdr->e_shstrndx;
@@ -489,7 +509,7 @@ static int parse_elf(struct elf_info *info, const char *filename)
 			    sechdrs[i].sh_offset;
 			info->symtab_stop  = (void *)hdr +
 			    sechdrs[i].sh_offset + sechdrs[i].sh_size;
-			sh_link_idx = shndx2secindex(sechdrs[i].sh_link);
+			sh_link_idx = sechdrs[i].sh_link;
 			info->strtab       = (void *)hdr +
 			    sechdrs[sh_link_idx].sh_offset;
 		}
@@ -516,11 +536,9 @@ static int parse_elf(struct elf_info *info, const char *filename)
 
 	if (symtab_shndx_idx != ~0U) {
 		Elf32_Word *p;
-		if (symtab_idx !=
-		    shndx2secindex(sechdrs[symtab_shndx_idx].sh_link))
+		if (symtab_idx != sechdrs[symtab_shndx_idx].sh_link)
 			fatal("%s: SYMTAB_SHNDX has bad sh_link: %u!=%u\n",
-			      filename,
-			      shndx2secindex(sechdrs[symtab_shndx_idx].sh_link),
+			      filename, sechdrs[symtab_shndx_idx].sh_link,
 			      symtab_idx);
 		/* Fix endianness */
 		for (p = info->symtab_shndx_start; p < info->symtab_shndx_stop;
@@ -567,7 +585,12 @@ static void handle_modversions(struct module *mod, struct elf_info *info,
 			       Elf_Sym *sym, const char *symname)
 {
 	unsigned int crc;
-	enum export export = export_from_sec(info, get_secindex(info, sym));
+	enum export export;
+
+	if (!is_vmlinux(mod->name) && strncmp(symname, "__ksymtab", 9) == 0)
+		export = export_from_secname(info, get_secindex(info, sym));
+	else
+		export = export_from_sec(info, get_secindex(info, sym));
 
 	switch (sym->st_shndx) {
 	case SHN_COMMON:
@@ -1446,7 +1469,7 @@ static unsigned int *reloc_location(struct elf_info *elf,
 				    Elf_Shdr *sechdr, Elf_Rela *r)
 {
 	Elf_Shdr *sechdrs = elf->sechdrs;
-	int section = shndx2secindex(sechdr->sh_info);
+	int section = sechdr->sh_info;
 
 	return (void *)elf->hdr + sechdrs[section].sh_offset +
 		r->r_offset;

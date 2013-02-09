@@ -21,9 +21,6 @@
 #include <linux/pwm_backlight.h>
 #include <linux/slab.h>
 
-#define	BL_ON 1
-#define BL_OFF 0
-
 struct pwm_bl_data {
 	struct pwm_device	*pwm;
 	struct device		*dev;
@@ -31,11 +28,10 @@ struct pwm_bl_data {
 	unsigned int		lth_brightness;
 	int			(*notify)(struct device *,
 					  int brightness);
+	void			(*notify_after)(struct device *,
+					int brightness);
 	int			(*check_fb)(struct device *, struct fb_info *);
-	void			(*bl_enable)(int on);
 };
-
-static int last_brightness = -1;
 
 static int pwm_backlight_update_status(struct backlight_device *bl)
 {
@@ -53,23 +49,18 @@ static int pwm_backlight_update_status(struct backlight_device *bl)
 		brightness = pb->notify(pb->dev, brightness);
 
 	if (brightness == 0) {
-		if (last_brightness != 0) {
-			if (pb->bl_enable)
-				pb->bl_enable(BL_OFF);
-			pwm_config(pb->pwm, 0, pb->period);
-			pwm_disable(pb->pwm);
-		}
+		pwm_config(pb->pwm, 0, pb->period);
+		pwm_disable(pb->pwm);
 	} else {
-		if (last_brightness == 0) {
-			if (pb->bl_enable)
-				pb->bl_enable(BL_ON);
-		}
 		brightness = pb->lth_brightness +
 			(brightness * (pb->period - pb->lth_brightness) / max);
 		pwm_config(pb->pwm, brightness, pb->period);
 		pwm_enable(pb->pwm);
 	}
-	last_brightness = brightness;
+
+	if (pb->notify_after)
+		pb->notify_after(pb->dev, brightness);
+
 	return 0;
 }
 
@@ -120,8 +111,8 @@ static int pwm_backlight_probe(struct platform_device *pdev)
 
 	pb->period = data->pwm_period_ns;
 	pb->notify = data->notify;
+	pb->notify_after = data->notify_after;
 	pb->check_fb = data->check_fb;
-	pb->bl_enable = data->bl_enable;
 	pb->lth_brightness = data->lth_brightness *
 		(data->pwm_period_ns / data->max_brightness);
 	pb->dev = &pdev->dev;
@@ -147,6 +138,7 @@ static int pwm_backlight_probe(struct platform_device *pdev)
 
 	bl->props.brightness = data->dft_brightness;
 	backlight_update_status(bl);
+
 	platform_set_drvdata(pdev, bl);
 	return 0;
 
@@ -187,6 +179,8 @@ static int pwm_backlight_suspend(struct platform_device *pdev,
 		pb->notify(pb->dev, 0);
 	pwm_config(pb->pwm, 0, pb->period);
 	pwm_disable(pb->pwm);
+	if (pb->notify_after)
+		pb->notify_after(pb->dev, 0);
 	return 0;
 }
 

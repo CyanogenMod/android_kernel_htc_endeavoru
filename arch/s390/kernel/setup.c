@@ -305,8 +305,7 @@ static int set_amode_and_uaccess(unsigned long user_amode,
  */
 static int __init early_parse_switch_amode(char *p)
 {
-	if (user_mode != SECONDARY_SPACE_MODE)
-		user_mode = PRIMARY_SPACE_MODE;
+	user_mode = PRIMARY_SPACE_MODE;
 	return 0;
 }
 early_param("switch_amode", early_parse_switch_amode);
@@ -315,10 +314,6 @@ static int __init early_parse_user_mode(char *p)
 {
 	if (p && strcmp(p, "primary") == 0)
 		user_mode = PRIMARY_SPACE_MODE;
-#ifdef CONFIG_S390_EXEC_PROTECT
-	else if (p && strcmp(p, "secondary") == 0)
-		user_mode = SECONDARY_SPACE_MODE;
-#endif
 	else if (!p || strcmp(p, "home") == 0)
 		user_mode = HOME_SPACE_MODE;
 	else
@@ -327,31 +322,9 @@ static int __init early_parse_user_mode(char *p)
 }
 early_param("user_mode", early_parse_user_mode);
 
-#ifdef CONFIG_S390_EXEC_PROTECT
-/*
- * Enable execute protection?
- */
-static int __init early_parse_noexec(char *p)
-{
-	if (!strncmp(p, "off", 3))
-		return 0;
-	user_mode = SECONDARY_SPACE_MODE;
-	return 0;
-}
-early_param("noexec", early_parse_noexec);
-#endif /* CONFIG_S390_EXEC_PROTECT */
-
 static void setup_addressing_mode(void)
 {
-	if (user_mode == SECONDARY_SPACE_MODE) {
-		if (set_amode_and_uaccess(PSW_ASC_SECONDARY,
-					  PSW32_ASC_SECONDARY))
-			pr_info("Execute protection active, "
-				"mvcos available\n");
-		else
-			pr_info("Execute protection active, "
-				"mvcos not available\n");
-	} else if (user_mode == PRIMARY_SPACE_MODE) {
+	if (user_mode == PRIMARY_SPACE_MODE) {
 		if (set_amode_and_uaccess(PSW_ASC_PRIMARY, PSW32_ASC_PRIMARY))
 			pr_info("Address spaces switched, "
 				"mvcos available\n");
@@ -373,7 +346,7 @@ setup_lowcore(void)
 	lc = __alloc_bootmem_low(LC_PAGES * PAGE_SIZE, LC_PAGES * PAGE_SIZE, 0);
 	lc->restart_psw.mask = PSW_BASE_BITS | PSW_DEFAULT_KEY;
 	lc->restart_psw.addr =
-		PSW_ADDR_AMODE | (unsigned long) restart_int_handler;
+		PSW_ADDR_AMODE | (unsigned long) psw_restart_int_handler;
 	if (user_mode != HOME_SPACE_MODE)
 		lc->restart_psw.mask |= PSW_ASC_HOME;
 	lc->external_new_psw.mask = psw_kernel_bits;
@@ -554,6 +527,27 @@ static void __init setup_memory_end(void)
 	}
 	if (!memory_end)
 		memory_end = memory_size;
+}
+
+void *restart_stack __attribute__((__section__(".data")));
+
+/*
+ * Setup new PSW and allocate stack for PSW restart interrupt
+ */
+static void __init setup_restart_psw(void)
+{
+	psw_t psw;
+
+	restart_stack = __alloc_bootmem(ASYNC_SIZE, ASYNC_SIZE, 0);
+	restart_stack += ASYNC_SIZE;
+
+	/*
+	 * Setup restart PSW for absolute zero lowcore. This is necesary
+	 * if PSW restart is done on an offline CPU that has lowcore zero
+	 */
+	psw.mask = PSW_BASE_BITS | PSW_DEFAULT_KEY;
+	psw.addr = PSW_ADDR_AMODE | (unsigned long) psw_restart_int_handler;
+	copy_to_absolute_zero(&S390_lowcore.restart_psw, &psw, sizeof(psw));
 }
 
 static void __init
@@ -758,6 +752,7 @@ static void __init setup_hwcaps(void)
 		strcpy(elf_platform, "z10");
 		break;
 	case 0x2817:
+	case 0x2818:
 		strcpy(elf_platform, "z196");
 		break;
 	}
@@ -819,6 +814,7 @@ setup_arch(char **cmdline_p)
 	setup_addressing_mode();
 	setup_memory();
 	setup_resources();
+	setup_restart_psw();
 	setup_lowcore();
 
         cpu_init();

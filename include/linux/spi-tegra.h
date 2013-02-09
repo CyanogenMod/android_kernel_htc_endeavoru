@@ -33,6 +33,7 @@ struct tegra_spi_platform_data {
 	bool is_dma_based;
 	int max_dma_buffer;
 	bool is_clkon_always;
+	bool disable_runtime_pm;
 	unsigned int max_rate;
 	struct spi_clk_parent *parent_clk_list;
 	int  parent_clk_count;

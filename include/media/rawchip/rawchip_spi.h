@@ -38,4 +38,6 @@ int rawchip_spi_probe(struct spi_device *rawchip);
 
 int rawchip_spi_init(void);
 
+void rawchip_spi_clock_control(int enable);
+
 #endif

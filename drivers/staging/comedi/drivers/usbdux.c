@@ -1465,6 +1465,7 @@ static int usbdux_ao_inttrig(struct comedi_device *dev,
 		dev_err(&this_usbduxsub->interface->dev,
 			"comedi%d: usbdux_ao_inttrig: invalid trignum\n",
 			dev->minor);
+		up(&this_usbduxsub->sem);
 		return -EINVAL;
 	}
 	if (!(this_usbduxsub->ao_cmd_running)) {
@@ -1530,7 +1531,7 @@ static int usbdux_ao_cmdtest(struct comedi_device *dev,
 	/* we always output at 1kHz just now all channels at once */
 	if (0) {		/* (this_usbduxsub->high_speed) */
 		/*
-		 * in usb-2.0 only one conversion it tranmitted but with 8kHz/n
+		 * in usb-2.0 only one conversion it transmitted but with 8kHz/n
 		 */
 		cmd->convert_src &= TRIG_TIMER;
 	} else {
@@ -1935,11 +1936,8 @@ static int usbdux_pwm_cancel(struct comedi_device *dev,
 	dev_dbg(&this_usbduxsub->interface->dev,
 		"comedi %d: sending pwm off command to the usb device.\n",
 		dev->minor);
-	res = send_dux_commands(this_usbduxsub, SENDPWMOFF);
-	if (res < 0)
-		return res;
 
-	return res;
+	return send_dux_commands(this_usbduxsub, SENDPWMOFF);
 }
 
 static void usbduxsub_pwm_irq(struct urb *urb)
@@ -2674,6 +2672,7 @@ static int usbdux_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	if (ret < 0) {
 		dev_err(&udev->interface->dev,
 			"comedi%d: error alloc space for subdev\n", dev->minor);
+		up(&udev->sem);
 		up(&start_stop_sem);
 		return ret;
 	}

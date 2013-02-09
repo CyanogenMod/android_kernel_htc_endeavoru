@@ -58,11 +58,11 @@ struct acc_dev {
 	struct usb_ep *ep_out;
 
 	/* set to 1 when we connect */
-	int online:1;
+	unsigned int online:1;
 	/* Set to 1 when we disconnect.
 	 * Not cleared until our file is closed.
 	 */
-	int disconnected:1;
+	unsigned int disconnected:1;
 
 	/* strings sent by the host */
 	char manufacturer[ACC_STRING_SIZE];
@@ -296,7 +296,7 @@ static void acc_complete_set_string(struct usb_ep *ep, struct usb_request *req)
 	}
 }
 
-static int __init create_bulk_endpoints(struct acc_dev *dev,
+static int create_bulk_endpoints(struct acc_dev *dev,
 				struct usb_endpoint_descriptor *in_desc,
 				struct usb_endpoint_descriptor *out_desc)
 {
@@ -686,16 +686,12 @@ static int acc_function_set_alt(struct usb_function *f,
 	int ret;
 
 	DBG(cdev, "acc_function_set_alt intf: %d alt: %d\n", intf, alt);
-	ret = usb_ep_enable(dev->ep_in,
-			ep_choose(cdev->gadget,
-				&acc_highspeed_in_desc,
-				&acc_fullspeed_in_desc));
+	config_ep_by_speed(cdev->gadget, f, dev->ep_in);
+	ret = usb_ep_enable(dev->ep_in);
 	if (ret)
 		return ret;
-	ret = usb_ep_enable(dev->ep_out,
-			ep_choose(cdev->gadget,
-				&acc_highspeed_out_desc,
-				&acc_fullspeed_out_desc));
+	config_ep_by_speed(cdev->gadget, f, dev->ep_out);
+	ret = usb_ep_enable(dev->ep_out);
 	if (ret) {
 		usb_ep_disable(dev->ep_in);
 		return ret;

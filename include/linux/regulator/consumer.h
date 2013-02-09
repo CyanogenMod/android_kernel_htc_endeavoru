@@ -2,6 +2,7 @@
  * consumer.h -- SoC Regulator consumer support.
  *
  * Copyright (C) 2007, 2008 Wolfson Microelectronics PLC.
+ * Copyright (C) 2012 NVIDIA Corporation
  *
  * Author: Liam Girdwood <lrg@slimlogic.co.uk>
  *
@@ -130,6 +131,9 @@ struct regulator;
 struct regulator_bulk_data {
 	const char *supply;
 	struct regulator *consumer;
+
+	/* private: Internal use */
+	int ret;
 };
 
 #if defined(CONFIG_REGULATOR)
@@ -161,7 +165,6 @@ int regulator_list_voltage(struct regulator *regulator, unsigned selector);
 int regulator_is_supported_voltage(struct regulator *regulator,
 				   int min_uV, int max_uV);
 int regulator_set_voltage(struct regulator *regulator, int min_uV, int max_uV);
-int regulator_force_set_voltage(struct regulator *regulator, int min_uV, int max_uV);
 int regulator_set_voltage_time(struct regulator *regulator,
 			       int old_uV, int new_uV);
 int regulator_get_voltage(struct regulator *regulator);
@@ -203,6 +206,12 @@ static inline struct regulator *__must_check regulator_get(struct device *dev,
 	 */
 	return NULL;
 }
+static inline struct regulator *__must_check regulator_get_exclusive(
+		struct device *dev, const char *id)
+{
+	/* See comment for regulator_get() stub, above */
+	return NULL;
+}
 static inline void regulator_put(struct regulator *regulator)
 {
 }
@@ -213,6 +222,11 @@ static inline int regulator_enable(struct regulator *regulator)
 }
 
 static inline int regulator_disable(struct regulator *regulator)
+{
+	return 0;
+}
+
+static inline int regulator_force_disable(struct regulator *regulator)
 {
 	return 0;
 }
@@ -246,13 +260,41 @@ static inline void regulator_bulk_free(int num_consumers,
 {
 }
 
+static inline int regulator_count_voltages(struct regulator *regulator)
+{
+	return 0;
+}
+
+static inline int regulator_list_voltage(struct regulator *regulator,
+					 unsigned selector)
+{
+	return 0;
+}
+
+static inline int regulator_is_supported_voltage(struct regulator *regulator,
+						 int min_uV, int max_uV)
+{
+	return 0;
+}
+
 static inline int regulator_set_voltage(struct regulator *regulator,
 					int min_uV, int max_uV)
 {
 	return 0;
 }
 
+static inline int regulator_set_voltage_time(struct regulator *regulator,
+					     int old_uV, int new_uV)
+{
+	return 0;
+}
+
 static inline int regulator_get_voltage(struct regulator *regulator)
+{
+	return 0;
+}
+
+static inline int regulator_sync_voltage(struct regulator *regulator)
 {
 	return 0;
 }

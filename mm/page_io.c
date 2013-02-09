@@ -128,10 +128,6 @@ int swap_readpage(struct page *page)
 		ret = -ENOMEM;
 		goto out;
 	}
-/* Software, Studio Engineering added. */
-#if defined(CONFIG_ZIMMER)
-	bio->bi_rw |= (1 << REQ_SWAPIN_DMPG);
-#endif
 	count_vm_event(PSWPIN);
 	submit_bio(READ, bio);
 out:

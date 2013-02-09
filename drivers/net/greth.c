@@ -22,9 +22,11 @@
  *               Marko Isomaki
  */
 
+#include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
@@ -426,6 +428,7 @@ greth_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	dma_sync_single_for_device(greth->dev, dma_addr, skb->len, DMA_TO_DEVICE);
 
 	status = GRETH_BD_EN | GRETH_BD_IE | (skb->len & GRETH_BD_LEN);
+	greth->tx_bufs_length[greth->tx_next] = skb->len & GRETH_BD_LEN;
 
 	/* Wrap around descriptor ring */
 	if (greth->tx_next == GRETH_TXBD_NUM_MASK) {
@@ -488,7 +491,8 @@ greth_start_xmit_gbit(struct sk_buff *skb, struct net_device *dev)
 	if (nr_frags != 0)
 		status = GRETH_TXBD_MORE;
 
-	status |= GRETH_TXBD_CSALL;
+	if (skb->ip_summed == CHECKSUM_PARTIAL)
+		status |= GRETH_TXBD_CSALL;
 	status |= skb_headlen(skb) & GRETH_BD_LEN;
 	if (greth->tx_next == GRETH_TXBD_NUM_MASK)
 		status |= GRETH_BD_WR;
@@ -511,7 +515,9 @@ greth_start_xmit_gbit(struct sk_buff *skb, struct net_device *dev)
 		greth->tx_skbuff[curr_tx] = NULL;
 		bdp = greth->tx_bd_base + curr_tx;
 
-		status = GRETH_TXBD_CSALL | GRETH_BD_EN;
+		status = GRETH_BD_EN;
+		if (skb->ip_summed == CHECKSUM_PARTIAL)
+			status |= GRETH_TXBD_CSALL;
 		status |= frag->size & GRETH_BD_LEN;
 
 		/* Wrap around descriptor ring */
@@ -639,6 +645,7 @@ static void greth_clean_tx(struct net_device *dev)
 				dev->stats.tx_fifo_errors++;
 		}
 		dev->stats.tx_packets++;
+		dev->stats.tx_bytes += greth->tx_bufs_length[greth->tx_last];
 		greth->tx_last = NEXT_TX(greth->tx_last);
 		greth->tx_free++;
 	}
@@ -693,6 +700,7 @@ static void greth_clean_tx_gbit(struct net_device *dev)
 		greth->tx_skbuff[greth->tx_last] = NULL;
 
 		greth_update_tx_stats(dev, stat);
+		dev->stats.tx_bytes += skb->len;
 
 		bdp = greth->tx_bd_base + greth->tx_last;
 
@@ -794,6 +802,7 @@ static int greth_rx(struct net_device *dev, int limit)
 				memcpy(skb_put(skb, pkt_len), phys_to_virt(dma_addr), pkt_len);
 
 				skb->protocol = eth_type_trans(skb, dev);
+				dev->stats.rx_bytes += pkt_len;
 				dev->stats.rx_packets++;
 				netif_receive_skb(skb);
 			}
@@ -901,13 +910,14 @@ static int greth_rx_gbit(struct net_device *dev, int limit)
 
 				skb_put(skb, pkt_len);
 
-				if (greth->flags & GRETH_FLAG_RX_CSUM && hw_checksummed(status))
+				if (dev->features & NETIF_F_RXCSUM && hw_checksummed(status))
 					skb->ip_summed = CHECKSUM_UNNECESSARY;
 				else
 					skb_checksum_none_assert(skb);
 
 				skb->protocol = eth_type_trans(skb, dev);
 				dev->stats.rx_packets++;
+				dev->stats.rx_bytes += pkt_len;
 				netif_receive_skb(skb);
 
 				greth->rx_skbuff[greth->rx_cur] = newskb;
@@ -1015,11 +1025,10 @@ static int greth_set_mac_add(struct net_device *dev, void *p)
 		return -EINVAL;
 
 	memcpy(dev->dev_addr, addr->sa_data, dev->addr_len);
+	GRETH_REGSAVE(regs->esa_msb, dev->dev_addr[0] << 8 | dev->dev_addr[1]);
+	GRETH_REGSAVE(regs->esa_lsb, dev->dev_addr[2] << 24 | dev->dev_addr[3] << 16 |
+		      dev->dev_addr[4] << 8 | dev->dev_addr[5]);
 
-	GRETH_REGSAVE(regs->esa_msb, addr->sa_data[0] << 8 | addr->sa_data[1]);
-	GRETH_REGSAVE(regs->esa_lsb,
-		      addr->sa_data[2] << 24 | addr->
-		      sa_data[3] << 16 | addr->sa_data[4] << 8 | addr->sa_data[5]);
 	return 0;
 }
 
@@ -1142,41 +1151,6 @@ static void greth_get_regs(struct net_device *dev, struct ethtool_regs *regs, vo
 		buff[i] = greth_read_bd(&greth_regs[i]);
 }
 
-static u32 greth_get_rx_csum(struct net_device *dev)
-{
-	struct greth_private *greth = netdev_priv(dev);
-	return (greth->flags & GRETH_FLAG_RX_CSUM) != 0;
-}
-
-static int greth_set_rx_csum(struct net_device *dev, u32 data)
-{
-	struct greth_private *greth = netdev_priv(dev);
-
-	spin_lock_bh(&greth->devlock);
-
-	if (data)
-		greth->flags |= GRETH_FLAG_RX_CSUM;
-	else
-		greth->flags &= ~GRETH_FLAG_RX_CSUM;
-
-	spin_unlock_bh(&greth->devlock);
-
-	return 0;
-}
-
-static u32 greth_get_tx_csum(struct net_device *dev)
-{
-	return (dev->features & NETIF_F_IP_CSUM) != 0;
-}
-
-static int greth_set_tx_csum(struct net_device *dev, u32 data)
-{
-	netif_tx_lock_bh(dev);
-	ethtool_op_set_tx_csum(dev, data);
-	netif_tx_unlock_bh(dev);
-	return 0;
-}
-
 static const struct ethtool_ops greth_ethtool_ops = {
 	.get_msglevel		= greth_get_msglevel,
 	.set_msglevel		= greth_set_msglevel,
@@ -1185,10 +1159,6 @@ static const struct ethtool_ops greth_ethtool_ops = {
 	.get_drvinfo		= greth_get_drvinfo,
 	.get_regs_len           = greth_get_regs_len,
 	.get_regs               = greth_get_regs,
-	.get_rx_csum		= greth_get_rx_csum,
-	.set_rx_csum		= greth_set_rx_csum,
-	.get_tx_csum		= greth_get_tx_csum,
-	.set_tx_csum		= greth_set_tx_csum,
 	.get_link		= ethtool_op_get_link,
 };
 
@@ -1570,9 +1540,10 @@ static int __devinit greth_of_probe(struct platform_device *ofdev)
 	GRETH_REGSAVE(regs->status, 0xFF);
 
 	if (greth->gbit_mac) {
-		dev->features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_HIGHDMA;
+		dev->hw_features = NETIF_F_SG | NETIF_F_IP_CSUM |
+			NETIF_F_RXCSUM;
+		dev->features = dev->hw_features | NETIF_F_HIGHDMA;
 		greth_netdev_ops.ndo_start_xmit = greth_start_xmit_gbit;
-		greth->flags = GRETH_FLAG_RX_CSUM;
 	}
 
 	if (greth->multicast) {

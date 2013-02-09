@@ -100,6 +100,7 @@ struct tps80031_regulator {
 	/* chip constraints on regulator behavior */
 	u16			min_mV;
 	u16			max_mV;
+	unsigned int		tolerance_uv;
 
 	/* regulator specific turn-on delay */
 	int			delay;
@@ -298,14 +299,21 @@ static int __tps80031_dcdc_set_voltage(struct device *parent,
 
 	switch (ri->flags) {
 	case 0:
+		if (min_uV >= (607700 + ri->tolerance_uv))
+			min_uV = min_uV - ri->tolerance_uv;
+
 		if (min_uV == 0)
 			vsel = 0;
-		else if ((min_uV >= 607700) && (max_uV <= 1300000)) {
+		else if ((min_uV >= 607700) && (min_uV <= 1300000)) {
+			int cal_volt;
 			vsel = (10 * (min_uV - 607700)) / 1266;
 			if (vsel % 100)
 				vsel += 100;
 			vsel /= 100;
 			vsel++;
+			cal_volt = (607700 + (12660 * (vsel - 1)));
+			if (cal_volt > max_uV)
+				return -EINVAL;
 		} else if ((min_uV > 1900000) && (max_uV >= 2100000))
 			vsel = 62;
 		else if ((min_uV > 1800000) && (max_uV >= 1900000))
@@ -321,19 +329,25 @@ static int __tps80031_dcdc_set_voltage(struct device *parent,
 		break;
 
 	case DCDC_OFFSET_EN:
+		if (min_uV >= (700000 + ri->tolerance_uv))
+			min_uV = min_uV - ri->tolerance_uv;
 		if (min_uV == 0)
 			vsel = 0;
-		else if ((min_uV >= 700000) && (max_uV <= 1420000)) {
-			vsel = (min_uV - 600000) / 125;
+		else if ((min_uV >= 700000) && (min_uV <= 1420000)) {
+			int cal_volt;
+			vsel = (min_uV - 700000) / 125;
 			if (vsel % 100)
 				vsel += 100;
 			vsel /= 100;
 			vsel++;
+			cal_volt = (700000 + (12500 * (vsel - 1)));
+			if (cal_volt > max_uV)
+				return -EINVAL;
 		} else if ((min_uV > 1900000) && (max_uV >= 2100000))
 			vsel = 62;
 		else if ((min_uV > 1800000) && (max_uV >= 1900000))
 			vsel = 61;
-		else if ((min_uV > 1350000) && (max_uV >= 1800000))
+		else if ((min_uV > 1500000) && (max_uV >= 1800000))
 			vsel = 60;
 		else if ((min_uV > 1350000) && (max_uV >= 1500000))
 			vsel = 59;
@@ -344,22 +358,25 @@ static int __tps80031_dcdc_set_voltage(struct device *parent,
 		break;
 
 	case DCDC_EXTENDED_EN:
+		if (min_uV >= (1852000 + ri->tolerance_uv))
+			min_uV = min_uV - ri->tolerance_uv;
 		if (min_uV == 0)
 			vsel = 0;
 		else if ((min_uV >= 1852000) && (max_uV <= 4013600)) {
 			vsel = (min_uV - 1852000) / 386;
 			if (vsel % 100)
 				vsel += 100;
-			vsel /= 100;
 			vsel++;
 		}
 		break;
 
 	case DCDC_OFFSET_EN|DCDC_EXTENDED_EN:
+		if (min_uV >= (2161000 + ri->tolerance_uv))
+			min_uV = min_uV - ri->tolerance_uv;
 		if (min_uV == 0)
 			vsel = 0;
 		else if ((min_uV >= 2161000) && (max_uV <= 4321000)) {
-			vsel = (min_uV - 1852000) / 386;
+			vsel = (min_uV - 2161000) / 386;
 			if (vsel % 100)
 				vsel += 100;
 			vsel /= 100;
@@ -641,9 +658,8 @@ static int tps80031_vbus_enable(struct regulator_dev *rdev)
 	struct tps80031_regulator *ri = rdev_get_drvdata(rdev);
 	struct device *parent = to_tps80031_dev(rdev);
 	int ret;
+
 	if (ri->platform_flags & VBUS_SW_ONLY) {
-		WARN_ON(1);
-		return 0;
 		ret = tps80031_set_bits(parent, SLAVE_ID2,
 				CHARGERUSB_CTRL1_ADD,  OPA_MODE_EN);
 		if (!ret)
@@ -666,8 +682,9 @@ static int tps80031_vbus_disable(struct regulator_dev *rdev)
 	struct tps80031_regulator *ri = rdev_get_drvdata(rdev);
 	struct device *parent = to_tps80031_dev(rdev);
 	int ret = 0;
+
 	if (ri->platform_flags & VBUS_SW_ONLY) {
-		WARN_ON(1);
+
 		if (ri->platform_flags & VBUS_DISCHRG_EN_PDN)
 			ret = tps80031_write(parent, SLAVE_ID2,
 				USB_VBUS_CTRL_SET, VBUS_DISCHRG);
@@ -794,11 +811,11 @@ static int tps80031_power_req_config(struct device *parent,
 		struct tps80031_regulator *ri,
 		struct tps80031_regulator_platform_data *tps80031_pdata)
 {
-	int ret;
+	int ret = 0;
 	uint8_t reg_val;
 
 	if (ri->preq_bit < 0)
-		return 0;
+		goto skip_pwr_req_config;
 
 	ret = tps80031_ext_power_req_config(parent, ri->ext_ctrl_flag,
 			ri->preq_bit, ri->state_reg, ri->trans_reg);
@@ -814,6 +831,7 @@ static int tps80031_power_req_config(struct device *parent,
 		return ret;
 	}
 
+skip_pwr_req_config:
 	if (tps80031_pdata->ext_ctrl_flag &
 			(PWR_OFF_ON_SLEEP | PWR_ON_ON_SLEEP)) {
 		reg_val = (ri->trans_reg_cache & ~0xC);
@@ -1017,6 +1035,7 @@ static int __devinit tps80031_regulator_probe(struct platform_device *pdev)
 	ri->dev = &pdev->dev;
 	if (tps_pdata->delay_us > 0)
 		ri->delay = tps_pdata->delay_us;
+	ri->tolerance_uv = tps_pdata->tolerance_uv;
 
 	check_smps_mode_mult(pdev->dev.parent, ri);
 	ri->platform_flags = tps_pdata->flags;

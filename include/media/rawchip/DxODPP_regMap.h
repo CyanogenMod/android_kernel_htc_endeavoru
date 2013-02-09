@@ -86,14 +86,14 @@
 /* ********************************************************************************** */
 /* User parameters default values: */
 /* ********************************************************************************** */
-#define DxODPP_dfltVal_ucode_id_7_0                                             0x04
+#define DxODPP_dfltVal_ucode_id_7_0                                             0x07
 #define DxODPP_dfltVal_ucode_id_15_8                                            0x01
 #define DxODPP_dfltVal_hw_id_7_0                                                0xe8
 #define DxODPP_dfltVal_hw_id_15_8                                               0xeb
 #define DxODPP_dfltVal_calib_id_0_7_0                                           0x00
 #define DxODPP_dfltVal_calib_id_1_7_0                                           0x00
 #define DxODPP_dfltVal_calib_id_2_7_0                                           0x00
-#define DxODPP_dfltVal_calib_id_3_7_0                                           0x00
+#define DxODPP_dfltVal_calib_id_3_7_0                                           0x01
 #define DxODPP_dfltVal_error_code_7_0                                           0x00
 #define DxODPP_dfltVal_visible_line_size_7_0                                    0x00
 #define DxODPP_dfltVal_visible_line_size_15_8                                   0x00
@@ -146,8 +146,10 @@
 #define DxODPP_error_code_y_addr_end_even                                       0x0e
 #define DxODPP_error_code_y_boundaries_order                                    0x10
 #define DxODPP_error_code_y_odd_inc_too_large                                   0x12
+#define DxODPP_error_code_y_odd_inc_even                                        0x14
 #define DxODPP_error_code_x_decim_unsupported                                   0x15
 #define DxODPP_error_code_y_decim_unsupported                                   0x16
+#define DxODPP_error_code_y_even_inc_even                                       0x18
 #define DxODPP_error_code_y_even_inc_too_large                                  0x1a
 #define DxODPP_error_code_temporal_smoothing_too_large                          0x1b
 

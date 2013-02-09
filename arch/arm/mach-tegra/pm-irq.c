@@ -29,6 +29,7 @@
 #include <mach/iomap.h>
 
 #include "pm-irq.h"
+#include "wakeups.h"
 
 #define PMC_CTRL		0x0
 #define PMC_CTRL_LATCH_WAKEUPS	(1 << 5)
@@ -146,12 +147,15 @@ static inline void clear_pmc_sw_wake_status(void)
 
 int tegra_pm_irq_set_wake(int irq, int enable)
 {
-	int wake = tegra_irq_to_wake(irq);
+	struct wake_mask_types wake_msk;
+	int flow_type = -1;
+	int err;
 
-	if (wake == -EALREADY) {
+	err = tegra_irq_to_wake(irq, flow_type, &wake_msk);
+	if (err == -EALREADY) {
 		/* EALREADY means wakeup event already accounted for */
 		return 0;
-	} else if (wake == -ENOTSUPP) {
+	} else if (err == -ENOTSUPP) {
 		/* ENOTSUPP means LP0 not supported with this wake source */
 		WARN(enable && warn_prevent_lp0, "irq %d prevents lp0\n", irq);
 		if (enable)
@@ -159,57 +163,46 @@ int tegra_pm_irq_set_wake(int irq, int enable)
 		else if (!WARN_ON(tegra_prevent_lp0 == 0))
 			tegra_prevent_lp0--;
 		return 0;
-	} else if (wake < 0) {
+	} else if (err < 0) {
 		return -EINVAL;
 	}
 
-	if (enable) {
-		tegra_lp0_wake_enb |= 1ull << wake;
-		pr_info("Enabling wake%d\n", wake);
-	} else {
-		tegra_lp0_wake_enb &= ~(1ull << wake);
-		pr_info("Disabling wake%d\n", wake);
-	}
+	if (enable)
+		tegra_lp0_wake_enb |= (wake_msk.wake_mask_hi |
+			wake_msk.wake_mask_lo | wake_msk.wake_mask_any);
+	else
+		tegra_lp0_wake_enb &= ~(wake_msk.wake_mask_hi |
+			wake_msk.wake_mask_lo | wake_msk.wake_mask_any);
+
 	return 0;
 }
 
 int tegra_pm_irq_set_wake_type(int irq, int flow_type)
 {
-	int wake = tegra_irq_to_wake(irq);
+	struct wake_mask_types wake_msk;
+	int err;
 
-	if (wake < 0)
-		return 0;
-#ifdef CONFIG_MACH_ENDEAVORU
-/*Workaround for Power key wakeup*/
-if(wake == 7)
-{
-		tegra_lp0_wake_level &= ~(1ull << wake);
-		tegra_lp0_wake_level_any &= ~(1ull << wake);
-		return 0;
-}
-#endif
-	switch (flow_type) {
-	case IRQF_TRIGGER_FALLING:
-	case IRQF_TRIGGER_LOW:
-		tegra_lp0_wake_level &= ~(1ull << wake);
-		tegra_lp0_wake_level_any &= ~(1ull << wake);
-		break;
-	case IRQF_TRIGGER_HIGH:
-	case IRQF_TRIGGER_RISING:
-		tegra_lp0_wake_level |= (1ull << wake);
-		tegra_lp0_wake_level_any &= ~(1ull << wake);
-		break;
+	err = tegra_irq_to_wake(irq, flow_type, &wake_msk);
 
-	case IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING:
-		tegra_lp0_wake_level_any |= (1ull << wake);
-		break;
-	default:
-		return -EINVAL;
-	}
+	if (err < 0)
+		return 0;
+
+	/* configure LOW/FALLING polarity wake sources for an irq */
+	tegra_lp0_wake_level &= ~wake_msk.wake_mask_lo;
+	tegra_lp0_wake_level_any &= ~wake_msk.wake_mask_lo;
+
+	/* configure HIGH/RISING polarity wake sources for an irq */
+	tegra_lp0_wake_level |= wake_msk.wake_mask_hi;
+	tegra_lp0_wake_level_any &= ~wake_msk.wake_mask_hi;
+
+	/*
+	 * configure RISING and FALLING i.e. ANY polarity wake
+	 * sources for an irq
+	 */
+	tegra_lp0_wake_level_any |= wake_msk.wake_mask_any;
 
 	return 0;
 }
-
 
 /* translate lp0 wake sources back into irqs to catch edge triggered wakeups */
 static void tegra_pm_irq_syscore_resume_helper(
@@ -223,28 +216,29 @@ static void tegra_pm_irq_syscore_resume_helper(
 	for_each_set_bit(wake, &wake_status, sizeof(wake_status) * 8) {
 		irq = tegra_wake_to_irq(wake + 32 * index);
 		if (!irq) {
-			pr_info("Resume caused by WAKE%d\n",
+			pr_info("[WAKEUP] Resume caused by WAKE%d\n",
 				(wake + 32 * index));
 			continue;
 		}
 
 		desc = irq_to_desc(irq);
 		if (!desc || !desc->action || !desc->action->name) {
-			pr_info("Resume caused by WAKE%d, irq %d\n",
+			pr_info("[WAKEUP] Resume caused by WAKE%d, irq %d\n",
 				(wake + 32 * index), irq);
 			continue;
 		}
 
-		pr_info("Resume caused by WAKE%d, %s\n", (wake + 32 * index),
+		pr_info("[WAKEUP] Resume caused by WAKE%d, %s\n", (wake + 32 * index),
 			desc->action->name);
 		global_wakeup_state = (wake + 32 * index);
+		pr_info("global_wakeup_state is %d, wake_status is %ld\n",
+				global_wakeup_state, wake_status);
+
 		tegra_wake_irq_count[wake + 32 * index]++;
 
 		generic_handle_irq(irq);
 	}
 }
-
-
 
 static void tegra_pm_irq_syscore_resume(void)
 {

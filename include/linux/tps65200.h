@@ -72,8 +72,11 @@ struct tps65200_chg_int_notifier {
 #ifdef CONFIG_CHARGER_TPS65200
 extern int tps_set_charger_ctrl(u32 ctl);
 extern int tps_register_notifier(struct tps65200_chg_int_notifier *notifier);
+extern int tps_charger_dump_status(void);
 #else
-extern int tps_set_charger_ctrl(u32 ctl) { return 0 ; }
-extern int tps_register_notifier(struct tps65200_chg_int_notifier *notifier) { return 0; }
+static int tps_set_charger_ctrl(u32 ctl) { return 0; }
+static int tps_register_notifier(struct tps65200_chg_int_notifier *notifier) { return 0; }
+static int tps_charger_dump_status(void) { return 0; }
 #endif
+
 #endif

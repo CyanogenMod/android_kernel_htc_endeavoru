@@ -544,7 +544,7 @@ DEFINE_PER_CPU(u8, irq_work_pending);
 
 #endif /* 32 vs 64 bit */
 
-void set_irq_work_pending(void)
+void arch_irq_work_raise(void)
 {
 	preempt_disable();
 	set_irq_work_pending_flag();
@@ -887,6 +887,15 @@ static void __init clocksource_init(void)
 
 	printk(KERN_INFO "clocksource: %s mult[%x] shift[%d] registered\n",
 	       clock->name, clock->mult, clock->shift);
+}
+
+void decrementer_check_overflow(void)
+{
+	u64 now = get_tb_or_rtc();
+	struct decrementer_clock *decrementer = &__get_cpu_var(decrementers);
+
+	if (now >= decrementer->next_tb)
+		set_dec(1);
 }
 
 static int decrementer_set_next_event(unsigned long evt,

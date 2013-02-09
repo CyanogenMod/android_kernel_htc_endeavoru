@@ -30,7 +30,6 @@
 
 #include <linux/ti_wilink_st.h>
 #include "gps_drv.h"
-#include <htc/log.h>
 
 #ifdef PWR_DEVICE_TAG
 #undef PWR_DEVICE_TAG
@@ -275,7 +274,7 @@ void st_int_recv(void *disc_data,
 			switch (st_gdata->rx_state) {
 			/* Waiting for complete packet ? */
 			case ST_W4_DATA:
-				sp_pr_info("Complete pkt received\n");
+				pr_debug("Complete pkt received\n");
 				/* Ask ST CORE to forward
 				 * the packet to protocol driver */
 				st_send_frame(st_gdata->rx_chnl, st_gdata);
@@ -289,14 +288,14 @@ void st_int_recv(void *disc_data,
 				plen =
 				&st_gdata->rx_skb->data
 				[proto->offset_len_in_hdr];
-				sp_pr_debug("plen pointing to %x\n", *plen);
+				pr_debug("plen pointing to %x\n", *plen);
 				if (proto->len_size == 1)/* 1 byte len field */
 					payload_len = *(unsigned char *)plen;
 				else if (proto->len_size == 2)
 					payload_len =
 					__le16_to_cpu(*(unsigned short *)plen);
 				else
-					sp_pr_info("%s: invalid length "
+					pr_info("%s: invalid length "
 					"for id %d\n",
 					__func__, proto->chnl_id);
 				st_check_data_len(st_gdata, proto->chnl_id,
@@ -314,7 +313,7 @@ void st_int_recv(void *disc_data,
 		case LL_SLEEP_IND:
 		case LL_SLEEP_ACK:
 		case LL_WAKE_UP_IND:
-			sp_pr_debug("PM packet\n");
+			pr_debug("PM packet\n");
 			/* this takes appropriate action based on
 			 * sleep state received --
 			 */
@@ -331,7 +330,7 @@ void st_int_recv(void *disc_data,
 			count--;
 			continue;
 		case LL_WAKE_UP_ACK:
-			sp_pr_debug("PM packet\n");
+			pr_debug("PM packet\n");
 
 			spin_unlock_irqrestore(&st_gdata->lock, flags);
 			/* wake up ack received */
@@ -554,11 +553,12 @@ long st_register(struct st_proto_s *new_proto)
 		set_bit(ST_REG_IN_PROGRESS, &st_gdata->st_state);
 		st_recv = st_kim_recv;
 
-		/* release lock previously held - re-locked below */
-		spin_unlock_irqrestore(&st_gdata->lock, flags);
+        /* enable the ST LL - to set default chip state */
+        st_ll_enable(st_gdata);
 
-		/* enable the ST LL - to set default chip state */
-		st_ll_enable(st_gdata);
+        /* release lock previously held - re-locked below */
+        spin_unlock_irqrestore(&st_gdata->lock, flags);
+
 		/* this may take a while to complete
 		 * since it involves BT fw download
 		 */
@@ -569,9 +569,13 @@ long st_register(struct st_proto_s *new_proto)
 			    (test_bit(ST_REG_PENDING, &st_gdata->st_state))) {
 				pr_err(" KIM failure complete callback \n");
 				st_reg_complete(st_gdata, err);
+                clear_bit(ST_REG_PENDING, &st_gdata->st_state);
 			}
 			return -EINVAL;
 		}
+
+        spin_lock_irqsave(&st_gdata->lock, flags);
+
 		clear_bit(ST_REG_IN_PROGRESS, &st_gdata->st_state);
 
 		st_recv = st_int_recv;
@@ -592,10 +596,10 @@ long st_register(struct st_proto_s *new_proto)
 		if (st_gdata->is_registered[new_proto->chnl_id] == true) {
 			pr_err(" proto %d already registered \n",
 				   new_proto->chnl_id);
+            spin_unlock_irqrestore(&st_gdata->lock, flags);
 			return -EALREADY;
 		}
 
-		spin_lock_irqsave(&st_gdata->lock, flags);
 		add_channel_to_table(st_gdata, new_proto);
 		st_gdata->protos_registered++;
 		new_proto->write = st_write;
@@ -635,8 +639,8 @@ long st_unregister(struct st_proto_s *proto)
 
 	spin_lock_irqsave(&st_gdata->lock, flags);
 
-	if (st_gdata->list[proto->chnl_id] == NULL) {
-		sp_pr_err(" chnl_id %d not registered\n", proto->chnl_id);
+    if (st_gdata->is_registered[proto->chnl_id] == false) {
+		pr_err(" chnl_id %d not registered\n", proto->chnl_id);
 		spin_unlock_irqrestore(&st_gdata->lock, flags);
 		return -EPROTONOSUPPORT;
 	}
@@ -645,9 +649,13 @@ long st_unregister(struct st_proto_s *proto)
 	remove_channel_from_table(st_gdata, proto);
 	spin_unlock_irqrestore(&st_gdata->lock, flags);
 
+    /* paranoid check */
+    if (st_gdata->protos_registered < ST_EMPTY)
+        st_gdata->protos_registered = ST_EMPTY;
+
 	if ((st_gdata->protos_registered == ST_EMPTY) &&
 	    (!test_bit(ST_REG_PENDING, &st_gdata->st_state))) {
-		sp_pr_info(" all chnl_ids unregistered \n");
+		pr_info(" all chnl_ids unregistered \n");
 
 		/* stop traffic on tty */
 		if (st_gdata->tty) {
@@ -743,7 +751,7 @@ static void st_tty_close(struct tty_struct *tty)
 	spin_lock_irqsave(&st_gdata->lock, flags);
 	for (i = ST_BT; i < ST_MAX_CHANNELS; i++) {
 		if (st_gdata->is_registered[i] == true)
-			sp_pr_err("%d not un-registered\n", i);
+			pr_err("%d not un-registered\n", i);
 		st_gdata->list[i] = NULL;
 	}
 	st_gdata->protos_registered = 0;

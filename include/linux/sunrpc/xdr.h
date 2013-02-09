@@ -191,6 +191,8 @@ extern int xdr_decode_array2(struct xdr_buf *buf, unsigned int base,
 			     struct xdr_array2_desc *desc);
 extern int xdr_encode_array2(struct xdr_buf *buf, unsigned int base,
 			     struct xdr_array2_desc *desc);
+extern void _copy_from_pages(char *p, struct page **pages, size_t pgbase,
+			     size_t len);
 
 /*
  * Provide some simple tools for XDR buffer overflow-checking etc.
@@ -216,6 +218,8 @@ extern __be32 *xdr_reserve_space(struct xdr_stream *xdr, size_t nbytes);
 extern void xdr_write_pages(struct xdr_stream *xdr, struct page **pages,
 		unsigned int base, unsigned int len);
 extern void xdr_init_decode(struct xdr_stream *xdr, struct xdr_buf *buf, __be32 *p);
+extern void xdr_init_decode_pages(struct xdr_stream *xdr, struct xdr_buf *buf,
+		struct page **pages, unsigned int len);
 extern void xdr_set_scratch_buffer(struct xdr_stream *xdr, void *buf, size_t buflen);
 extern __be32 *xdr_inline_decode(struct xdr_stream *xdr, size_t nbytes);
 extern void xdr_read_pages(struct xdr_stream *xdr, unsigned int len);

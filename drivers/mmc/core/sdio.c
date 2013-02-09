@@ -16,6 +16,7 @@
 #include <linux/mmc/card.h>
 #include <linux/mmc/sdio.h>
 #include <linux/mmc/sdio_func.h>
+#include <linux/mmc/sdio_ids.h>
 
 #include "core.h"
 #include "bus.h"
@@ -34,6 +35,11 @@ static int sdio_read_fbr(struct sdio_func *func)
 {
 	int ret;
 	unsigned char data;
+
+	if (mmc_card_nonstd_func_interface(func->card)) {
+		func->class = SDIO_CLASS_NONE;
+		return 0;
+	}
 
 	ret = mmc_io_rw_direct(func->card, 0, 0,
 		SDIO_FBR_BASE(func->num) + SDIO_FBR_STD_IF, 0, &data);
@@ -234,7 +240,7 @@ static int sdio_disable_cd(struct mmc_card *card)
 	int ret;
 	u8 ctrl;
 
-	if (!card->cccr.disable_cd)
+	if (!mmc_card_disable_cd(card))
 		return 0;
 
 	ret = mmc_io_rw_direct(card, 0, 0, SDIO_CCCR_IF, 0, &ctrl);
@@ -639,7 +645,7 @@ static int mmc_sdio_init_card(struct mmc_host *host, u32 ocr,
 			(MMC_CAP_UHS_SDR12 | MMC_CAP_UHS_SDR25 |
 			 MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR104 |
 			 MMC_CAP_UHS_DDR50))) {
-		err = mmc_set_signal_voltage(host, MMC_SIGNAL_VOLTAGE_180);
+		err = mmc_set_signal_voltage(host, MMC_SIGNAL_VOLTAGE_180, true);
 		if (err) {
 			ocr &= ~R4_18V_PRESENT;
 			host->ocr &= ~R4_18V_PRESENT;
@@ -775,7 +781,7 @@ static int mmc_sdio_init_card(struct mmc_host *host, u32 ocr,
 			goto remove;
 
 		/* Card is an ultra-high-speed card */
-		mmc_card_set_uhs(card);
+		mmc_sd_card_set_uhs(card);
 	} else {
 		/*
 		 * Switch to high-speed (if supported).
@@ -880,6 +886,7 @@ out:
 
 		mmc_claim_host(host);
 		mmc_detach_bus(host);
+		mmc_power_off(host);
 		mmc_release_host(host);
 	}
 }
@@ -914,11 +921,7 @@ static int mmc_sdio_suspend(struct mmc_host *host)
 		}
 	}
 
-#if defined CONFIG_MACH_ENDEAVORU || defined CONFIG_MACH_ENDEAVORTD
-	if (!err && host->pm_flags & MMC_PM_KEEP_POWER && mmc_card_wake_sdio_irq(host)) {
-#else
-	if (!err && host->pm_flags & MMC_PM_KEEP_POWER) {
-#endif
+	if (!err && mmc_card_keep_power(host) && mmc_card_wake_sdio_irq(host)) {
 		mmc_claim_host(host);
 		sdio_disable_wide(host->card);
 		mmc_release_host(host);
@@ -938,14 +941,10 @@ static int mmc_sdio_resume(struct mmc_host *host)
 	mmc_claim_host(host);
 
 	/* No need to reinitialize powered-resumed nonremovable cards */
-	if (mmc_card_is_removable(host) || !mmc_card_is_powered_resumed(host)) {
+	if (mmc_card_is_removable(host) || !mmc_card_keep_power(host))
 		err = mmc_sdio_init_card(host, host->ocr, host->card,
-								 (host->pm_flags & MMC_PM_KEEP_POWER));
-#if defined CONFIG_MACH_ENDEAVORU || defined CONFIG_MACH_ENDEAVORTD
-	} else if (mmc_card_is_powered_resumed(host) && mmc_card_wake_sdio_irq(host)) {
-#else
-	} else if (mmc_card_is_powered_resumed(host)) {
-#endif
+					mmc_card_keep_power(host));
+	else if (mmc_card_keep_power(host) && mmc_card_wake_sdio_irq(host)) {
 		/* We may have switched to 1-bit mode during suspend */
 		err = sdio_enable_4bit_bus(host->card);
 		if (err > 0) {
@@ -982,16 +981,13 @@ static int mmc_sdio_resume(struct mmc_host *host)
 static int mmc_sdio_power_restore(struct mmc_host *host)
 {
 	int ret;
-	/* HTC_WIFI_START */
 	u32 ocr;
-	/* HTC_WIFI_END */
 
 	BUG_ON(!host);
 	BUG_ON(!host->card);
 
 	mmc_claim_host(host);
 
-	/* HTC_WIFI_START */	
 	/*
 	 * Reset the card by performing the same steps that are taken by
 	 * mmc_rescan_try_freq() and mmc_attach_sdio() during a "normal" probe.
@@ -1026,16 +1022,13 @@ static int mmc_sdio_power_restore(struct mmc_host *host)
 		ret = -EINVAL;
 		goto out;
 	}
-	/* HTC_WIFI_END */	
-	
+
 	ret = mmc_sdio_init_card(host, host->ocr, host->card,
-			(host->pm_flags & MMC_PM_KEEP_POWER));
+				mmc_card_keep_power(host));
 	if (!ret && host->sdio_irqs)
 		mmc_signal_sdio_irq(host);
 
-/* HTC_WIFI_START */
 out:
-/* HTC_WIFI_END */	
 	mmc_release_host(host);
 
 	return ret;

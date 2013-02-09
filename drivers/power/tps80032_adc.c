@@ -67,6 +67,10 @@
 /* GPADC related status register */
 #define TPS80032_PWDNSTATUS1	0x93
 
+/* VBUS measurement control register */
+#define TPS80032_USB_VBUS_CTRL_SET	0x04
+#define TPS80032_USB_VBUS_CTRL_CLR	0x05
+
 /* GPADC TRIMMING related register*/
 #define CHANNEL_NUM 19
 #define GPADC_TRIM_NUM 19
@@ -137,6 +141,9 @@
 /* register PWDNSTATUS1 GPADC related bit */
 #define GPADC_EN_BIT	(1U << 0)
 
+/* USB_VBUS_CTRL_SET realted bit */
+#define VBUS_MEAS	(1U << 0)
+
 #define CONTROLLER_STAT1	0xE3
 #define VBUS_DET	(1U << 2)
 
@@ -175,24 +182,41 @@ static int tps80032_adc_wait_conversion_ready_locked(
 {
 	unsigned long timeout;
 	int ret;
-	u8 reg_value;
+	u8 reg_value[3];
 
 	CHECK_LOG();
 
 	timeout = jiffies + msecs_to_jiffies(timeout_ms);
 	do {
 		ret = tps80031_read(adc_data->parent_dev, SLAVE_ID2,
-					TPS80032_CTRL_P1, &reg_value);
+					TPS80032_CTRL_P1, &reg_value[0]);
 		if (ret < 0) {
 			pr_err("%s:read CTRL_P1 fail\n", __func__);
 			return ret;
 		}
 
-		if (!(reg_value & CP_BUSY_BIT)
-			&& (reg_value & CP_ECOCP1_BIT))
+		if (!(reg_value[0] & CP_BUSY_BIT)
+			&& (reg_value[0] & CP_ECOCP1_BIT))
 			return 0;
 	} while(!time_after(jiffies, timeout));
-	
+
+	ret = tps80031_read(adc_data->parent_dev, SLAVE_ID2,
+			TPS80032_GPSELECT_ISB, &reg_value[1]);
+	if (ret < 0) {
+		pr_err("%s:read TPS80032_GPSELECT_ISB fail\n", __func__);
+		return ret;
+	}
+
+	ret = tps80031_read(adc_data->parent_dev, SLAVE_ID2,
+			TPS80032_GPCH0_MSB, &reg_value[2]);
+	if (ret < 0) {
+		pr_err("%s:read register GPCH0_MSB fail\n", __func__);
+		return ret;
+	}
+
+	pr_info("adc conversion timeout: CTRL_P1:0x%X, GPSELECT:0x%X GPCH0_MSB:0x%X\n"
+			, reg_value[0], reg_value[1], reg_value[2]);
+
 	return -EAGAIN;
 }
 
@@ -200,7 +224,7 @@ int32_t tps80032_adc_select_and_read(int32_t *result, u8 channel)
 {
 	u8 read_reg_value;
 	int temp;
-	int ret;
+	int ret, i;
 
 	CHECK_LOG();
 
@@ -215,6 +239,27 @@ int32_t tps80032_adc_select_and_read(int32_t *result, u8 channel)
 	}
 
 	mutex_lock(&adc_conversion_lock);
+
+		if (channel == 10) {
+			ret = tps80031_read(adc_data->parent_dev, SLAVE_ID2,
+					TPS80032_USB_VBUS_CTRL_SET, &read_reg_value);
+			if (ret < 0) {
+				pr_warn("%s:read register USB_VBUS_CTRL_SET fail\n"
+						, __func__);
+				goto vbus_mea_enable_fail;
+			}
+
+			read_reg_value |= VBUS_MEAS;
+
+			ret = tps80031_write(adc_data->parent_dev, SLAVE_ID2,
+					TPS80032_USB_VBUS_CTRL_SET, read_reg_value);
+			if (ret < 0) {
+				pr_warn("%s:write register USB_VBUS_CTRL_SET fail\n"
+						, __func__);
+				goto vbus_mea_enable_fail;
+			}
+		}
+
 		ret = tps80031_write(adc_data->parent_dev, SLAVE_ID2,
 				TPS80032_GPSELECT_ISB, channel);
 		if (ret < 0) {
@@ -230,8 +275,12 @@ int32_t tps80032_adc_select_and_read(int32_t *result, u8 channel)
 					, __func__);
 			goto write_i2c_adc_fail;
 		}
-		
-		ret = tps80032_adc_wait_conversion_ready_locked(5);
+
+		i = 0;
+		do {
+			ret = tps80032_adc_wait_conversion_ready_locked(5);
+		} while (ret != 0 && ++i < 5);
+
 		if (ret < 0) {
 			pr_err("%s:conversion fail or timeout\n"
 					, __func__);
@@ -268,6 +317,27 @@ int32_t tps80032_adc_select_and_read(int32_t *result, u8 channel)
 			temp = (temp * CHANNEL_VAL_SHIFT - calib_params[channel].offset)
 					/ calib_params[channel].gain;
 #endif
+
+		if (channel == 10) {
+			ret = tps80031_read(adc_data->parent_dev, SLAVE_ID2,
+					TPS80032_USB_VBUS_CTRL_CLR, &read_reg_value);
+			if (ret < 0) {
+				pr_warn("%s:read register USB_VBUS_CTRL_SET fail\n"
+						, __func__);
+				goto vbus_mea_disable_fail;
+			}
+
+			read_reg_value |= VBUS_MEAS;
+
+			ret = tps80031_write(adc_data->parent_dev, SLAVE_ID2,
+					TPS80032_USB_VBUS_CTRL_CLR, read_reg_value);
+			if (ret < 0) {
+				pr_warn("%s:write register USB_VBUS_CTRL_SET fail\n"
+						, __func__);
+			}
+		}
+
+vbus_mea_disable_fail:
 	mutex_unlock(&adc_conversion_lock);
 
 	if (temp > 4095)
@@ -288,6 +358,12 @@ write_i2c_adc_fail:
 	mutex_unlock(&adc_conversion_lock);
 	pr_err("%s:adc write or read fail at channel %u\n"
 					, __func__, channel);
+	return ret;
+vbus_mea_enable_fail:
+	*result = TPS80032_GPADC_FAIL_VALUE;
+	mutex_unlock(&adc_conversion_lock);
+	pr_warn("%s:adc write or read fail at channel 10\n"
+					, __func__);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(tps80032_adc_select_and_read);

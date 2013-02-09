@@ -1,8 +1,6 @@
 #ifndef _CABLE_DETECT_H_
 #define _CABLE_DETECT_H_
 
-#include <linux/list.h>
-
 #define DOCK_STATE_UNDEFINED		-1
 #define DOCK_STATE_UNDOCKED		0
 #define DOCK_STATE_DESK			(1 << 0)
@@ -74,6 +72,11 @@ struct cable_detect_platform_data {
 	int32_t (*get_adc_cb)(void);
 	void (*cable_gpio_init)(void);
 
+	/* for charger reset chip */
+	int reset_en_clr_gpio;
+	int chg_wdt_en_gpio;
+	bool enable_reset_wdt;
+
 	int ac_9v_gpio;
 	void (*configure_ac_9v_gpio) (int);
 	u8 mhl_internal_3v3;
@@ -87,15 +90,20 @@ struct cable_detect_platform_data {
 /* START: add USB connected notify function */
 void tegra_usb_set_vbus_state(int online);
 enum usb_connect_type {
-	CONNECT_TYPE_NONE,
-	CONNECT_TYPE_UNKNOWN,
-	CONNECT_TYPE_AUDIO,
-	CONNECT_TYPE_CARKIT,
-	CONNECT_TYPE_MHL,
+	/* QC Synchronous */
+	CONNECT_TYPE_CLEAR = -2,
+	CONNECT_TYPE_UNKNOWN = -1,
+	CONNECT_TYPE_NONE = 0,
+	CONNECT_TYPE_USB,
+	CONNECT_TYPE_AC,
+	CONNECT_TYPE_9V_AC,
+	CONNECT_TYPE_WIRELESS,
+	CONNECT_TYPE_INTERNAL,
+	CONNECT_TYPE_UNSUPPORTED,
+
+	/* Reserved */
 	CONNECT_TYPE_UNDEFINED,
-	CONNECT_TYPE_USB, /* 0A5 */
 	CONNECT_TYPE_0A9_AC,
-	CONNECT_TYPE_AC, /* 1A */
 	CONNECT_TYPE_1A1_AC,
 	CONNECT_TYPE_1A2_AC,
 	CONNECT_TYPE_1A3_AC,
@@ -114,6 +122,20 @@ struct t_usb_status_notifier {
 	void (*func)(int cable_type);
 };
 static LIST_HEAD(g_lh_usb_notifier_list);
+
+
+#if (defined(CONFIG_USB_OTG) && defined(CONFIG_USB_OTG_HOST))
+/***********************************
+Direction: cable detect drvier -> usb driver
+ ***********************************/
+struct t_usb_host_status_notifier{
+       struct list_head usb_host_notifier_link;
+       const char *name;
+       void (*func)(bool cable_in);
+};
+int usb_host_detect_register_notifier(struct t_usb_host_status_notifier *);
+static LIST_HEAD(g_lh_usb_host_detect_notifier_list);
+#endif
 
 /***********************************
 Direction: cable detect drvier -> battery driver or other

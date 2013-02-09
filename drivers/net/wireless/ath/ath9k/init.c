@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2009 Atheros Communications Inc.
+ * Copyright (c) 2008-2011 Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,7 +14,9 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <linux/dma-mapping.h>
 #include <linux/slab.h>
+#include <linux/ath9k_platform.h>
 
 #include "ath9k.h"
 
@@ -195,10 +197,36 @@ static unsigned int ath9k_ioread32(void *hw_priv, u32 reg_offset)
 	return val;
 }
 
-static const struct ath_ops ath9k_common_ops = {
-	.read = ath9k_ioread32,
-	.write = ath9k_iowrite32,
-};
+static unsigned int __ath9k_reg_rmw(struct ath_softc *sc, u32 reg_offset,
+				    u32 set, u32 clr)
+{
+	u32 val;
+
+	val = ioread32(sc->mem + reg_offset);
+	val &= ~clr;
+	val |= set;
+	iowrite32(val, sc->mem + reg_offset);
+
+	return val;
+}
+
+static unsigned int ath9k_reg_rmw(void *hw_priv, u32 reg_offset, u32 set, u32 clr)
+{
+	struct ath_hw *ah = (struct ath_hw *) hw_priv;
+	struct ath_common *common = ath9k_hw_common(ah);
+	struct ath_softc *sc = (struct ath_softc *) common->priv;
+	unsigned long uninitialized_var(flags);
+	u32 val;
+
+	if (ah->config.serialize_regmode == SER_REG_MODE_ON) {
+		spin_lock_irqsave(&sc->sc_serial_rw, flags);
+		val = __ath9k_reg_rmw(sc, reg_offset, set, clr);
+		spin_unlock_irqrestore(&sc->sc_serial_rw, flags);
+	} else
+		val = __ath9k_reg_rmw(sc, reg_offset, set, clr);
+
+	return val;
+}
 
 /**************************/
 /*     Initialization     */
@@ -227,7 +255,7 @@ static void setup_ht_cap(struct ath_softc *sc,
 	ht_info->ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K;
 	ht_info->ampdu_density = IEEE80211_HT_MPDU_DENSITY_8;
 
-	if (AR_SREV_9485(ah))
+	if (AR_SREV_9330(ah) || AR_SREV_9485(ah))
 		max_streams = 1;
 	else if (AR_SREV_9300_20_OR_LATER(ah))
 		max_streams = 3;
@@ -280,10 +308,6 @@ int ath_descdma_setup(struct ath_softc *sc, struct ath_descdma *dd,
 		      struct list_head *head, const char *name,
 		      int nbuf, int ndesc, bool is_tx)
 {
-#define	DS2PHYS(_dd, _ds)						\
-	((_dd)->dd_desc_paddr + ((caddr_t)(_ds) - (caddr_t)(_dd)->dd_desc))
-#define ATH_DESC_4KB_BOUND_CHECK(_daddr) ((((_daddr) & 0xFFF) > 0xF7F) ? 1 : 0)
-#define ATH_DESC_4KB_BOUND_NUM_SKIPPED(_len) ((_len) / 4096)
 	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
 	u8 *ds;
 	struct ath_buf *bf;
@@ -378,9 +402,6 @@ fail2:
 fail:
 	memset(dd, 0, sizeof(*dd));
 	return error;
-#undef ATH_DESC_4KB_BOUND_CHECK
-#undef ATH_DESC_4KB_BOUND_NUM_SKIPPED
-#undef DS2PHYS
 }
 
 void ath9k_init_crypto(struct ath_softc *sc)
@@ -389,13 +410,7 @@ void ath9k_init_crypto(struct ath_softc *sc)
 	int i = 0;
 
 	/* Get the hardware key cache size. */
-	common->keymax = sc->sc_ah->caps.keycache_size;
-	if (common->keymax > ATH_KEYMAX) {
-		ath_dbg(common, ATH_DBG_ANY,
-			"Warning, using only %u entries in %u key cache\n",
-			ATH_KEYMAX, common->keymax);
-		common->keymax = ATH_KEYMAX;
-	}
+	common->keymax = AR_KEYTABLE_SIZE;
 
 	/*
 	 * Reset the key cache since some parts do not
@@ -507,7 +522,6 @@ static void ath9k_init_misc(struct ath_softc *sc)
 {
 	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
 	int i = 0;
-
 	setup_timer(&common->ani.timer, ath_ani_calibrate, (unsigned long)sc);
 
 	sc->config.txpowlimit = ATH_TXPOWER_MAX;
@@ -537,6 +551,7 @@ static void ath9k_init_misc(struct ath_softc *sc)
 static int ath9k_init_softc(u16 devid, struct ath_softc *sc, u16 subsysid,
 			    const struct ath_bus_ops *bus_ops)
 {
+	struct ath9k_platform_data *pdata = sc->dev->platform_data;
 	struct ath_hw *ah = NULL;
 	struct ath_common *common;
 	int ret = 0, i;
@@ -549,19 +564,32 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc, u16 subsysid,
 	ah->hw = sc->hw;
 	ah->hw_version.devid = devid;
 	ah->hw_version.subsysid = subsysid;
+	ah->reg_ops.read = ath9k_ioread32;
+	ah->reg_ops.write = ath9k_iowrite32;
+	ah->reg_ops.rmw = ath9k_reg_rmw;
 	sc->sc_ah = ah;
 
-	if (!sc->dev->platform_data)
+	if (!pdata) {
 		ah->ah_flags |= AH_USE_EEPROM;
+		sc->sc_ah->led_pin = -1;
+	} else {
+		sc->sc_ah->gpio_mask = pdata->gpio_mask;
+		sc->sc_ah->gpio_val = pdata->gpio_val;
+		sc->sc_ah->led_pin = pdata->led_pin;
+		ah->is_clk_25mhz = pdata->is_clk_25mhz;
+		ah->get_mac_revision = pdata->get_mac_revision;
+		ah->external_reset = pdata->external_reset;
+	}
 
 	common = ath9k_hw_common(ah);
-	common->ops = &ath9k_common_ops;
+	common->ops = &ah->reg_ops;
 	common->bus_ops = bus_ops;
 	common->ah = ah;
 	common->hw = sc->hw;
 	common->priv = sc;
 	common->debug_mask = ath9k_debug;
 	common->btcoex_enabled = ath9k_btcoex_enable == 1;
+	common->disable_ani = false;
 	spin_lock_init(&common->cc_lock);
 
 	spin_lock_init(&sc->sc_serial_rw);
@@ -586,6 +614,9 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc, u16 subsysid,
 	ret = ath9k_hw_init(ah);
 	if (ret)
 		goto err_hw;
+
+	if (pdata && pdata->macaddr)
+		memcpy(common->macaddr, pdata->macaddr, ETH_ALEN);
 
 	ret = ath9k_init_queues(sc);
 	if (ret)
@@ -639,8 +670,10 @@ static void ath9k_init_band_txpower(struct ath_softc *sc, int band)
 static void ath9k_init_txpower_limits(struct ath_softc *sc)
 {
 	struct ath_hw *ah = sc->sc_ah;
+	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
 	struct ath9k_channel *curchan = ah->curchan;
 
+	ah->txchainmask = common->tx_chainmask;
 	if (ah->caps.hw_caps & ATH9K_HW_CAP_2GHZ)
 		ath9k_init_band_txpower(sc, IEEE80211_BAND_2GHZ);
 	if (ah->caps.hw_caps & ATH9K_HW_CAP_5GHZ)
@@ -678,6 +711,8 @@ void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
 
 	if (AR_SREV_5416(sc->sc_ah))
 		hw->wiphy->flags &= ~WIPHY_FLAG_PS_ON_BY_DEFAULT;
+
+	hw->wiphy->flags |= WIPHY_FLAG_IBSS_RSN;
 
 	hw->queues = 4;
 	hw->max_rates = 4;
@@ -773,6 +808,7 @@ int ath9k_init_device(u16 devid, struct ath_softc *sc, u16 subsysid,
 
 	INIT_WORK(&sc->hw_check_work, ath_hw_check);
 	INIT_WORK(&sc->paprd_work, ath_paprd_calibrate);
+	INIT_DELAYED_WORK(&sc->hw_pll_work, ath_hw_pll_work);
 	sc->last_rssi = ATH_RSSI_DUMMY_MARKER;
 
 	ath_init_leds(sc);

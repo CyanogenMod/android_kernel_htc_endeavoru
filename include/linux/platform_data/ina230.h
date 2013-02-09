@@ -29,4 +29,15 @@ struct ina230_platform_data {
 	s32 min_cores_online;
 };
 
+#ifdef CONFIG_SENSORS_INA230
+s32 ina230_get_bus_voltage_multi(s32 *voltage_mV, u32 num);
+s32 ina230_get_batt_voltage_current(s32 *voltage_mV, s32 *current_mA);
+s32 ina230_get_batt_volt(void);
+s32 ina230_get_batt_curr(void);
+#else
+static s32 ina230_get_bus_voltage_multi(s32 *voltage_mV, u32 num) { return 0; }
+static s32 ina230_get_batt_voltage_current(s32 *voltage_mV, s32 *current_mA) { return 0; }
+static inline s32 ina230_get_batt_volt(void) { return 0; }
+static inline s32 ina230_get_batt_curr(void) { return 0; }
+#endif
 #endif /* _INA230_H */

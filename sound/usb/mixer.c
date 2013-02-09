@@ -86,16 +86,6 @@ struct mixer_build {
 	const struct usbmix_selector_map *selector_map;
 };
 
-enum {
-	USB_MIXER_BOOLEAN,
-	USB_MIXER_INV_BOOLEAN,
-	USB_MIXER_S8,
-	USB_MIXER_U8,
-	USB_MIXER_S16,
-	USB_MIXER_U16,
-};
-
-
 /*E-mu 0202/0404/0204 eXtension Unit(XU) control*/
 enum {
 	USB_XU_CLOCK_RATE 		= 0xe301,
@@ -162,6 +152,7 @@ static inline void check_mapped_dB(const struct usbmix_name_map *p,
 	if (p && p->dB) {
 		cval->dBmin = p->dB->min;
 		cval->dBmax = p->dB->max;
+		cval->initialized = 1;
 	}
 }
 
@@ -535,20 +526,21 @@ static int check_matrix_bitmap(unsigned char *bmap, int ich, int och, int num_ou
  * if failed, give up and free the control instance.
  */
 
-static int add_control_to_empty(struct mixer_build *state, struct snd_kcontrol *kctl)
+int snd_usb_mixer_add_control(struct usb_mixer_interface *mixer,
+			      struct snd_kcontrol *kctl)
 {
 	struct usb_mixer_elem_info *cval = kctl->private_data;
 	int err;
 
-	while (snd_ctl_find_id(state->chip->card, &kctl->id))
+	while (snd_ctl_find_id(mixer->chip->card, &kctl->id))
 		kctl->id.index++;
-	if ((err = snd_ctl_add(state->chip->card, kctl)) < 0) {
+	if ((err = snd_ctl_add(mixer->chip->card, kctl)) < 0) {
 		snd_printd(KERN_ERR "cannot add control (err = %d)\n", err);
 		return err;
 	}
 	cval->elem_id = &kctl->id;
-	cval->next_id_elem = state->mixer->id_elems[cval->id];
-	state->mixer->id_elems[cval->id] = cval;
+	cval->next_id_elem = mixer->id_elems[cval->id];
+	mixer->id_elems[cval->id] = cval;
 	return 0;
 }
 
@@ -773,10 +765,60 @@ static void usb_mixer_elem_free(struct snd_kcontrol *kctl)
  * interface to ALSA control for feature/mixer units
  */
 
+/* volume control quirks */
+static void volume_control_quirks(struct usb_mixer_elem_info *cval,
+				  struct snd_kcontrol *kctl)
+{
+	switch (cval->mixer->chip->usb_id) {
+	case USB_ID(0x0471, 0x0101):
+	case USB_ID(0x0471, 0x0104):
+	case USB_ID(0x0471, 0x0105):
+	case USB_ID(0x0672, 0x1041):
+	/* quirk for UDA1321/N101.
+	 * note that detection between firmware 2.1.1.7 (N101)
+	 * and later 2.1.1.21 is not very clear from datasheets.
+	 * I hope that the min value is -15360 for newer firmware --jk
+	 */
+		if (!strcmp(kctl->id.name, "PCM Playback Volume") &&
+		    cval->min == -15616) {
+			snd_printk(KERN_INFO
+				 "set volume quirk for UDA1321/N101 chip\n");
+			cval->max = -256;
+		}
+		break;
+
+	case USB_ID(0x046d, 0x09a4):
+		if (!strcmp(kctl->id.name, "Mic Capture Volume")) {
+			snd_printk(KERN_INFO
+				"set volume quirk for QuickCam E3500\n");
+			cval->min = 6080;
+			cval->max = 8768;
+			cval->res = 192;
+		}
+		break;
+
+	case USB_ID(0x046d, 0x0808):
+	case USB_ID(0x046d, 0x0809):
+	case USB_ID(0x046d, 0x0991):
+	/* Most audio usb devices lie about volume resolution.
+	 * Most Logitech webcams have res = 384.
+	 * Proboly there is some logitech magic behind this number --fishor
+	 */
+		if (!strcmp(kctl->id.name, "Mic Capture Volume")) {
+			snd_printk(KERN_INFO
+				"set resolution quirk: cval->res = 384\n");
+			cval->res = 384;
+		}
+		break;
+
+	}
+}
+
 /*
  * retrieve the minimum and maximum values for the specified control
  */
-static int get_min_max(struct usb_mixer_elem_info *cval, int default_min)
+static int get_min_max_with_quirks(struct usb_mixer_elem_info *cval,
+				   int default_min, struct snd_kcontrol *kctl)
 {
 	/* for failsafe */
 	cval->min = default_min;
@@ -852,6 +894,9 @@ static int get_min_max(struct usb_mixer_elem_info *cval, int default_min)
 		cval->initialized = 1;
 	}
 
+	if (kctl)
+		volume_control_quirks(cval, kctl);
+
 	/* USB descriptions contain the dB scale in 1/256 dB unit
 	 * while ALSA TLV contains in 1/100 dB unit
 	 */
@@ -872,6 +917,7 @@ static int get_min_max(struct usb_mixer_elem_info *cval, int default_min)
 	return 0;
 }
 
+#define get_min_max(cval, def)	get_min_max_with_quirks(cval, def, NULL)
 
 /* get a feature/mixer unit info */
 static int mixer_ctl_feature_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
@@ -889,8 +935,17 @@ static int mixer_ctl_feature_info(struct snd_kcontrol *kcontrol, struct snd_ctl_
 		uinfo->value.integer.min = 0;
 		uinfo->value.integer.max = 1;
 	} else {
-		if (! cval->initialized)
-			get_min_max(cval,  0);
+		if (!cval->initialized) {
+			get_min_max_with_quirks(cval, 0, kcontrol);
+			if (cval->initialized && cval->dBmin >= cval->dBmax) {
+				kcontrol->vd[0].access &=
+					~(SNDRV_CTL_ELEM_ACCESS_TLV_READ |
+					  SNDRV_CTL_ELEM_ACCESS_TLV_CALLBACK);
+				snd_ctl_notify(cval->mixer->chip->card,
+					       SNDRV_CTL_EVENT_MASK_INFO,
+					       &kcontrol->id);
+			}
+		}
 		uinfo->value.integer.min = 0;
 		uinfo->value.integer.max =
 			(cval->max - cval->min + cval->res - 1) / cval->res;
@@ -984,6 +1039,9 @@ static struct snd_kcontrol_new usb_feature_unit_ctl_ro = {
 	.put = NULL,
 };
 
+/* This symbol is exported in order to allow the mixer quirks to
+ * hook up to the standard feature unit control mechanism */
+struct snd_kcontrol_new *snd_usb_feature_unit_ctl = &usb_feature_unit_ctl;
 
 /*
  * build a feature control
@@ -1041,9 +1099,6 @@ static void build_feature_ctl(struct mixer_build *state, void *raw_desc,
 		cval->ch_readonly = readonly_mask;
 	}
 
-	/* get min/max values */
-	get_min_max(cval, 0);
-
 	/* if all channels in the mask are marked read-only, make the control
 	 * read-only. set_cur_mix_value() will check the mask again and won't
 	 * issue write commands to read-only channels. */
@@ -1064,6 +1119,9 @@ static void build_feature_ctl(struct mixer_build *state, void *raw_desc,
 	if (! len && nameid)
 		len = snd_usb_copy_string_desc(state, nameid,
 				kctl->id.name, sizeof(kctl->id.name));
+
+	/* get min/max values */
+	get_min_max_with_quirks(cval, 0, kctl);
 
 	switch (control) {
 	case UAC_FU_MUTE:
@@ -1097,11 +1155,13 @@ static void build_feature_ctl(struct mixer_build *state, void *raw_desc,
 		append_ctl_name(kctl, control == UAC_FU_MUTE ?
 				" Switch" : " Volume");
 		if (control == UAC_FU_VOLUME) {
-			kctl->tlv.c = mixer_vol_tlv;
-			kctl->vd[0].access |= 
-				SNDRV_CTL_ELEM_ACCESS_TLV_READ |
-				SNDRV_CTL_ELEM_ACCESS_TLV_CALLBACK;
 			check_mapped_dB(map, cval);
+			if (cval->dBmin < cval->dBmax || !cval->initialized) {
+				kctl->tlv.c = mixer_vol_tlv;
+				kctl->vd[0].access |= 
+					SNDRV_CTL_ELEM_ACCESS_TLV_READ |
+					SNDRV_CTL_ELEM_ACCESS_TLV_CALLBACK;
+			}
 		}
 		break;
 
@@ -1110,51 +1170,6 @@ static void build_feature_ctl(struct mixer_build *state, void *raw_desc,
 			strlcpy(kctl->id.name, audio_feature_info[control-1].name,
 				sizeof(kctl->id.name));
 		break;
-	}
-
-	/* volume control quirks */
-	switch (state->chip->usb_id) {
-	case USB_ID(0x0471, 0x0101):
-	case USB_ID(0x0471, 0x0104):
-	case USB_ID(0x0471, 0x0105):
-	case USB_ID(0x0672, 0x1041):
-	/* quirk for UDA1321/N101.
-	 * note that detection between firmware 2.1.1.7 (N101)
-	 * and later 2.1.1.21 is not very clear from datasheets.
-	 * I hope that the min value is -15360 for newer firmware --jk
-	 */
-		if (!strcmp(kctl->id.name, "PCM Playback Volume") &&
-		    cval->min == -15616) {
-			snd_printk(KERN_INFO
-				 "set volume quirk for UDA1321/N101 chip\n");
-			cval->max = -256;
-		}
-		break;
-
-	case USB_ID(0x046d, 0x09a4):
-		if (!strcmp(kctl->id.name, "Mic Capture Volume")) {
-			snd_printk(KERN_INFO
-				"set volume quirk for QuickCam E3500\n");
-			cval->min = 6080;
-			cval->max = 8768;
-			cval->res = 192;
-		}
-		break;
-
-	case USB_ID(0x046d, 0x0808):
-	case USB_ID(0x046d, 0x0809):
-	case USB_ID(0x046d, 0x0991):
-	/* Most audio usb devices lie about volume resolution.
-	 * Most Logitech webcams have res = 384.
-	 * Proboly there is some logitech magic behind this number --fishor
-	 */
-		if (!strcmp(kctl->id.name, "Mic Capture Volume")) {
-			snd_printk(KERN_INFO
-				"set resolution quirk: cval->res = 384\n");
-			cval->res = 384;
-		}
-		break;
-
 	}
 
 	range = (cval->max - cval->min) / cval->res;
@@ -1174,7 +1189,7 @@ static void build_feature_ctl(struct mixer_build *state, void *raw_desc,
 
 	snd_printdd(KERN_INFO "[%d] FU [%s] ch = %d, val = %d/%d/%d\n",
 		    cval->id, kctl->id.name, cval->channels, cval->min, cval->max, cval->res);
-	add_control_to_empty(state, kctl);
+	snd_usb_mixer_add_control(state->mixer, kctl);
 }
 
 
@@ -1195,6 +1210,11 @@ static int parse_audio_feature_unit(struct mixer_build *state, int unitid, void 
 
 	if (state->mixer->protocol == UAC_VERSION_1) {
 		csize = hdr->bControlSize;
+		if (!csize) {
+			snd_printdd(KERN_ERR "usbaudio: unit %u: "
+				    "invalid bControlSize == 0\n", unitid);
+			return -EINVAL;
+		}
 		channels = (hdr->bLength - 7) / csize - 1;
 		bmaControls = hdr->bmaControls;
 	} else {
@@ -1338,7 +1358,7 @@ static void build_mixer_unit_ctl(struct mixer_build *state,
 
 	snd_printdd(KERN_INFO "[%d] MU [%s] ch = %d, val = %d/%d\n",
 		    cval->id, kctl->id.name, cval->channels, cval->min, cval->max);
-	add_control_to_empty(state, kctl);
+	snd_usb_mixer_add_control(state->mixer, kctl);
 }
 
 
@@ -1639,7 +1659,7 @@ static int build_audio_procunit(struct mixer_build *state, int unitid, void *raw
 
 		snd_printdd(KERN_INFO "[%d] PU [%s] ch = %d, val = %d/%d\n",
 			    cval->id, kctl->id.name, cval->channels, cval->min, cval->max);
-		if ((err = add_control_to_empty(state, kctl)) < 0)
+		if ((err = snd_usb_mixer_add_control(state->mixer, kctl)) < 0)
 			return err;
 	}
 	return 0;
@@ -1856,7 +1876,7 @@ static int parse_audio_selector_unit(struct mixer_build *state, int unitid, void
 
 	snd_printdd(KERN_INFO "[%d] SU [%s] items = %d\n",
 		    cval->id, kctl->id.name, desc->bNrInPins);
-	if ((err = add_control_to_empty(state, kctl)) < 0)
+	if ((err = snd_usb_mixer_add_control(state->mixer, kctl)) < 0)
 		return err;
 
 	return 0;
@@ -1938,15 +1958,13 @@ static int snd_usb_mixer_controls(struct usb_mixer_interface *mixer)
 	struct mixer_build state;
 	int err;
 	const struct usbmix_ctl_map *map;
-	struct usb_host_interface *hostif;
 	void *p;
 
-	hostif = mixer->chip->ctrl_intf;
 	memset(&state, 0, sizeof(state));
 	state.chip = mixer->chip;
 	state.mixer = mixer;
-	state.buffer = hostif->extra;
-	state.buflen = hostif->extralen;
+	state.buffer = mixer->hostif->extra;
+	state.buflen = mixer->hostif->extralen;
 
 	/* check the mapping table */
 	for (map = usbmix_ctl_maps; map->id; map++) {
@@ -1959,7 +1977,8 @@ static int snd_usb_mixer_controls(struct usb_mixer_interface *mixer)
 	}
 
 	p = NULL;
-	while ((p = snd_usb_find_csint_desc(hostif->extra, hostif->extralen, p, UAC_OUTPUT_TERMINAL)) != NULL) {
+	while ((p = snd_usb_find_csint_desc(mixer->hostif->extra, mixer->hostif->extralen,
+					    p, UAC_OUTPUT_TERMINAL)) != NULL) {
 		if (mixer->protocol == UAC_VERSION_1) {
 			struct uac1_output_terminal_descriptor *desc = p;
 
@@ -2166,17 +2185,15 @@ int snd_usb_mixer_activate(struct usb_mixer_interface *mixer)
 /* create the handler for the optional status interrupt endpoint */
 static int snd_usb_mixer_status_create(struct usb_mixer_interface *mixer)
 {
-	struct usb_host_interface *hostif;
 	struct usb_endpoint_descriptor *ep;
 	void *transfer_buffer;
 	int buffer_length;
 	unsigned int epnum;
 
-	hostif = mixer->chip->ctrl_intf;
 	/* we need one interrupt input endpoint */
-	if (get_iface_desc(hostif)->bNumEndpoints < 1)
+	if (get_iface_desc(mixer->hostif)->bNumEndpoints < 1)
 		return 0;
-	ep = get_endpoint(hostif, 0);
+	ep = get_endpoint(mixer->hostif, 0);
 	if (!usb_endpoint_dir_in(ep) || !usb_endpoint_xfer_int(ep))
 		return 0;
 
@@ -2206,7 +2223,6 @@ int snd_usb_create_mixer(struct snd_usb_audio *chip, int ctrlif,
 	};
 	struct usb_mixer_interface *mixer;
 	struct snd_info_entry *entry;
-	struct usb_host_interface *host_iface;
 	int err;
 
 	strcpy(chip->card->mixername, "USB Mixer");
@@ -2223,8 +2239,8 @@ int snd_usb_create_mixer(struct snd_usb_audio *chip, int ctrlif,
 		return -ENOMEM;
 	}
 
-	host_iface = &usb_ifnum_to_if(chip->dev, ctrlif)->altsetting[0];
-	switch (get_iface_desc(host_iface)->bInterfaceProtocol) {
+	mixer->hostif = &usb_ifnum_to_if(chip->dev, ctrlif)->altsetting[0];
+	switch (get_iface_desc(mixer->hostif)->bInterfaceProtocol) {
 	case UAC_VERSION_1:
 	default:
 		mixer->protocol = UAC_VERSION_1;

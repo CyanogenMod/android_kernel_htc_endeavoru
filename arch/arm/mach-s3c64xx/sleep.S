@@ -20,34 +20,10 @@
 #define S3C64XX_VA_GPIO (0x0)
 
 #include <mach/regs-gpio.h>
-#include <mach/gpio-bank-n.h>
 
 #define LL_UART (S3C_PA_UART + (0x400 * CONFIG_S3C_LOWLEVEL_UART_PORT))
 
 	.text
-
-	/* s3c_cpu_save
-	 *
-	 * Save enough processor state to allow the restart of the pm.c
-	 * code after resume.
-	 *
-	 * entry:
-	 *	r1 = v:p offset
-	*/
-
-ENTRY(s3c_cpu_save)
-	stmfd	sp!, { r4 - r12, lr }
-	ldr	r3, =resume_with_mmu
-	bl	cpu_suspend
-
-	@@ call final suspend code
-	ldr	r0, =pm_cpu_sleep
-	ldr	pc, [r0]
-	
-	@@ return to the caller, after the MMU is turned on.
-	@@ restore the last bits of the stack and return.
-resume_with_mmu:
-	ldmfd	sp!, { r4 - r12, pc }	@ return, from sp from s3c_cpu_save
 
 	/* Sleep magic, the word before the resume entry point so that the
 	 * bootloader can check for a resumeable image. */
@@ -68,6 +44,13 @@ ENTRY(s3c_cpu_resume)
 	ldr	r2, =LL_UART		/* for debug */
 
 #ifdef CONFIG_S3C_PM_DEBUG_LED_SMDK
+
+#define S3C64XX_GPNCON			(S3C64XX_GPN_BASE + 0x00)
+#define S3C64XX_GPNDAT			(S3C64XX_GPN_BASE + 0x04)
+
+#define S3C64XX_GPN_CONMASK(__gpio)	(0x3 << ((__gpio) * 2))
+#define S3C64XX_GPN_OUTPUT(__gpio)	(0x1 << ((__gpio) * 2))
+
 	/* Initialise the GPIO state if we are debugging via the SMDK LEDs,
 	 * as the uboot version supplied resets these to inputs during the
 	 * resume checks.

@@ -31,47 +31,6 @@
 #include "ixgbe_dcb_82599.h"
 
 /**
- * ixgbe_dcb_config_packet_buffers_82599 - Configure DCB packet buffers
- * @hw: pointer to hardware structure
- * @rx_pba: method to distribute packet buffer
- *
- * Configure packet buffers for DCB mode.
- */
-static s32 ixgbe_dcb_config_packet_buffers_82599(struct ixgbe_hw *hw, u8 rx_pba)
-{
-	s32 ret_val = 0;
-	u32 value = IXGBE_RXPBSIZE_64KB;
-	u8  i = 0;
-
-	/* Setup Rx packet buffer sizes */
-	switch (rx_pba) {
-	case pba_80_48:
-		/* Setup the first four at 80KB */
-		value = IXGBE_RXPBSIZE_80KB;
-		for (; i < 4; i++)
-			IXGBE_WRITE_REG(hw, IXGBE_RXPBSIZE(i), value);
-		/* Setup the last four at 48KB...don't re-init i */
-		value = IXGBE_RXPBSIZE_48KB;
-		/* Fall Through */
-	case pba_equal:
-	default:
-		for (; i < IXGBE_MAX_PACKET_BUFFERS; i++)
-			IXGBE_WRITE_REG(hw, IXGBE_RXPBSIZE(i), value);
-
-		/* Setup Tx packet buffer sizes */
-		for (i = 0; i < IXGBE_MAX_PACKET_BUFFERS; i++) {
-			IXGBE_WRITE_REG(hw, IXGBE_TXPBSIZE(i),
-			                IXGBE_TXPBSIZE_20KB);
-			IXGBE_WRITE_REG(hw, IXGBE_TXPBTHRESH(i),
-			                IXGBE_TXPBTHRESH_DCB);
-		}
-		break;
-	}
-
-	return ret_val;
-}
-
-/**
  * ixgbe_dcb_config_rx_arbiter_82599 - Config Rx Data arbiter
  * @hw: pointer to hardware structure
  * @refill: refill credits index by traffic class
@@ -285,12 +244,17 @@ s32 ixgbe_dcb_config_pfc_82599(struct ixgbe_hw *hw, u8 pfc_en)
 		IXGBE_WRITE_REG(hw, IXGBE_FCCFG, reg);
 		/*
 		 * Enable Receive PFC
-		 * We will always honor XOFF frames we receive when
-		 * we are in PFC mode.
+		 * 82599 will always honor XOFF frames we receive when
+		 * we are in PFC mode however X540 only honors enabled
+		 * traffic classes.
 		 */
 		reg = IXGBE_READ_REG(hw, IXGBE_MFLCN);
 		reg &= ~IXGBE_MFLCN_RFCE;
 		reg |= IXGBE_MFLCN_RPFCE | IXGBE_MFLCN_DPF;
+
+		if (hw->mac.type == ixgbe_mac_X540)
+			reg |= pfc_en << IXGBE_MFLCN_RPFCE_SHIFT;
+
 		IXGBE_WRITE_REG(hw, IXGBE_MFLCN, reg);
 
 	} else {
@@ -355,65 +319,8 @@ static s32 ixgbe_dcb_config_tc_stats_82599(struct ixgbe_hw *hw)
 }
 
 /**
- * ixgbe_dcb_config_82599 - Configure general DCB parameters
- * @hw: pointer to hardware structure
- *
- * Configure general DCB parameters.
- */
-static s32 ixgbe_dcb_config_82599(struct ixgbe_hw *hw)
-{
-	u32 reg;
-	u32 q;
-
-	/* Disable the Tx desc arbiter so that MTQC can be changed */
-	reg = IXGBE_READ_REG(hw, IXGBE_RTTDCS);
-	reg |= IXGBE_RTTDCS_ARBDIS;
-	IXGBE_WRITE_REG(hw, IXGBE_RTTDCS, reg);
-
-	/* Enable DCB for Rx with 8 TCs */
-	reg = IXGBE_READ_REG(hw, IXGBE_MRQC);
-	switch (reg & IXGBE_MRQC_MRQE_MASK) {
-	case 0:
-	case IXGBE_MRQC_RT4TCEN:
-		/* RSS disabled cases */
-		reg = (reg & ~IXGBE_MRQC_MRQE_MASK) | IXGBE_MRQC_RT8TCEN;
-		break;
-	case IXGBE_MRQC_RSSEN:
-	case IXGBE_MRQC_RTRSS4TCEN:
-		/* RSS enabled cases */
-		reg = (reg & ~IXGBE_MRQC_MRQE_MASK) | IXGBE_MRQC_RTRSS8TCEN;
-		break;
-	default:
-		/* Unsupported value, assume stale data, overwrite no RSS */
-		reg = (reg & ~IXGBE_MRQC_MRQE_MASK) | IXGBE_MRQC_RT8TCEN;
-	}
-	IXGBE_WRITE_REG(hw, IXGBE_MRQC, reg);
-
-	/* Enable DCB for Tx with 8 TCs */
-	reg = IXGBE_MTQC_RT_ENA | IXGBE_MTQC_8TC_8TQ;
-	IXGBE_WRITE_REG(hw, IXGBE_MTQC, reg);
-
-	/* Disable drop for all queues */
-	for (q = 0; q < 128; q++)
-		IXGBE_WRITE_REG(hw, IXGBE_QDE, q << IXGBE_QDE_IDX_SHIFT);
-
-	/* Enable the Tx desc arbiter */
-	reg = IXGBE_READ_REG(hw, IXGBE_RTTDCS);
-	reg &= ~IXGBE_RTTDCS_ARBDIS;
-	IXGBE_WRITE_REG(hw, IXGBE_RTTDCS, reg);
-
-	/* Enable Security TX Buffer IFG for DCB */
-	reg = IXGBE_READ_REG(hw, IXGBE_SECTXMINIFG);
-	reg |= IXGBE_SECTX_DCB;
-	IXGBE_WRITE_REG(hw, IXGBE_SECTXMINIFG, reg);
-
-	return 0;
-}
-
-/**
  * ixgbe_dcb_hw_config_82599 - Configure and enable DCB
  * @hw: pointer to hardware structure
- * @rx_pba: method to distribute packet buffer
  * @refill: refill credits index by traffic class
  * @max: max credits index by traffic class
  * @bwg_id: bandwidth grouping indexed by traffic class
@@ -422,12 +329,9 @@ static s32 ixgbe_dcb_config_82599(struct ixgbe_hw *hw)
  *
  * Configure dcb settings and enable dcb mode.
  */
-s32 ixgbe_dcb_hw_config_82599(struct ixgbe_hw *hw,
-			      u8 rx_pba, u8 pfc_en, u16 *refill,
+s32 ixgbe_dcb_hw_config_82599(struct ixgbe_hw *hw, u8 pfc_en, u16 *refill,
 			      u16 *max, u8 *bwg_id, u8 *prio_type, u8 *prio_tc)
 {
-	ixgbe_dcb_config_packet_buffers_82599(hw, rx_pba);
-	ixgbe_dcb_config_82599(hw);
 	ixgbe_dcb_config_rx_arbiter_82599(hw, refill, max, bwg_id,
 					  prio_type, prio_tc);
 	ixgbe_dcb_config_tx_desc_arbiter_82599(hw, refill, max,

@@ -49,6 +49,7 @@ static unsigned long deglitchTimeout = 0;
 static int rsenCount = 0;
 static int WR_Dcap_Rdy_Int_Done = false;/* new in V100109 */
 static bool IsEstablished = false;/* new in V100109 */
+extern bool g_bMhlProbe;
 
 static	uint8_t	fwPowerState = POWER_STATE_FIRST_INIT;
 #ifdef CONFIG_INTERNAL_CHARGING_SUPPORT
@@ -56,6 +57,7 @@ static	uint8_t	fwPowerState = POWER_STATE_FIRST_INIT;
 /* To remember current MHL connection status */
 enum usb_connect_type gStatusMHL = CONNECT_TYPE_UNKNOWN;
 static bool gConnectMHL = false;
+static int forcedisconnect = 0;
 #endif
 
 #ifdef	APPLY_SCDT_SAFETY
@@ -66,9 +68,8 @@ static	bool	deglitchingRsenNow = false;
 uint8_t		mscCmdInProgress;	/* false when it is okay to send a new command */
 static	uint8_t	dsHpdStatus = 0;
 static  uint8_t contentOn = 0;
+bool g_bMhlRsenLow = false;
 /* HTC board parameters */
-
-static mhl_board_params gBoardParams;
 
 #define	I2C_READ_MODIFY_WRITE(saddr, offset, mask)	I2C_WriteByte(saddr, offset, I2C_ReadByte(saddr, offset) | (mask));
 
@@ -153,13 +154,17 @@ static void TxHW_Reset(void)
 	sii9234_reset();
 }
 
-bool TPI_Init(mhl_board_params params)
+bool TPI_Init(void)
 {
 	fwPowerState = POWER_STATE_FIRST_INIT;
 	WR_Dcap_Rdy_Int_Done = false;
 	IsEstablished = false;
-	gBoardParams = params;
 	HDCPSuccess = false;
+	g_bMhlRsenLow = false;
+	if(!g_bMhlProbe) {
+		TPI_DEBUG_PRINT(("Drv: Sii9244 not ready, this is called from cable detection\n"));
+		return false;
+	}
 	SiiMhlTxInitialize(true, 0);
 
 	TxHW_Reset();
@@ -428,13 +433,9 @@ static void WriteInitialRegisterValues(void)
 	I2C_WriteByte(TPI_SLAVE_ADDR, 0xA0, 0xD0);
 	I2C_WriteByte(TPI_SLAVE_ADDR, 0xA1, 0xFC);
 
-	if (gBoardParams.valid) { /*assign value by board*/
-		I2C_WriteByte(TPI_SLAVE_ADDR, 0xA3, gBoardParams.regA3);
-		I2C_WriteByte(TPI_SLAVE_ADDR, 0xA6, gBoardParams.regA6);
-	} else { /*default settings*/
-		I2C_WriteByte(TPI_SLAVE_ADDR, 0xA3, 0xEB);
-		I2C_WriteByte(TPI_SLAVE_ADDR, 0xA6, 0x0C);
-	}
+	/* driving strength */
+	I2C_WriteByte(TPI_SLAVE_ADDR, 0xA3, 0xEB);
+	I2C_WriteByte(TPI_SLAVE_ADDR, 0xA6, 0x0C);
 
 	I2C_WriteByte(TPI_SLAVE_ADDR, 0x2B, 0x01);
 
@@ -683,6 +684,7 @@ void	ProcessRgnd(void)
 			TPI_DEBUG_PRINT(("Drv: USB impedance. Set for USB Established = %02X.\n", (int)reg99RGNDRange));
 
 			CLR_BIT(TPI_SLAVE_ADDR, 0x95, 5);
+			forcedisconnect++;
 	}
 }
 void change_driving_strength(byte reg_a3, byte reg_a6)
@@ -742,7 +744,10 @@ static void SwitchToD3(void)
 void SwitchToD3_Force(void)
 {
 	TPI_DEBUG_PRINT(("Force Switch To D3\n"));
-
+	if(!g_bMhlProbe) {
+		TPI_DEBUG_PRINT(("Drv: Sii9244 not ready, this is called from sii9234_resume. Do nothing.\n"));
+		return;
+	}
 	ForceUsbIdSwitchOpen();
 
 	ReadModifyWriteTPI(0x93, BIT_7 | BIT_6 | BIT_5 | BIT_4, 0);
@@ -914,6 +919,7 @@ static void MhlTxDrvProcessConnection(void)
 #if 1
 	if (!(I2C_ReadByte(TPI_SLAVE_ADDR, 0x09) & BIT_2)) {
 		TPI_DEBUG_PRINT(("400ms exp, Rsen=0,discnct\n"));
+		g_bMhlRsenLow = true;
 		DISABLE_DISCOVERY;
 		ENABLE_DISCOVERY;
 		MhlTxDrvProcessDisconnection();
@@ -938,12 +944,13 @@ static void MhlTxDrvProcessDisconnection(void)
 
 	SiiMhlTxDrvTmdsControl(false);
 
-	if (POWER_STATE_D0_MHL == fwPowerState) {
+	if (POWER_STATE_D0_MHL == fwPowerState || forcedisconnect > 3) {
 		contentOn = 0;
 		SiiMhlTxNotifyConnection(mhlConnected = false);
 #ifdef CONFIG_CABLE_DETECT_ACCESSORY
 		ProcessMhlStatus(false, true);
 #endif
+		forcedisconnect = 0;
 	}
 	SwitchToD3();
 	IsEstablished = false;
@@ -1202,6 +1209,19 @@ static void MhlCbusIsr(void)
 void D2ToD3(void)
 {
 	TPI_DEBUG_PRINT(("D2 To D3 mode\n"));
+	if(!g_bMhlProbe) {
+		TPI_DEBUG_PRINT(("Drv: Sii9244 not ready, this is called from cable detection... Do nothing.\n"));
+		return;
+	}
 	I2C_WriteByte(HDMI_SLAVE_ADDR, 0x01, 0x03);
 	I2C_WriteByte(TPID_SLAVE_ADDR, 0x3D, I2C_ReadByte(TPID_SLAVE_ADDR, 0x3D) & 0xFE);
+	fwPowerState = POWER_STATE_D3;
+}
+bool tpi_get_hpd_state(void)
+{
+	uint8_t cbusInt, status;
+	cbusInt = ReadByteCBUS(0x0D);
+	status = cbusInt & BIT_6;
+	TPI_DEBUG_PRINT(("Drv: %s hpd status %d\n", __func__, status));
+	return (status) ? true : false;
 }

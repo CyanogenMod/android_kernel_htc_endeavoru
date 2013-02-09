@@ -46,6 +46,13 @@
  *	PNODE   - the low N bits of the GNODE. The PNODE is the most useful variant
  *		  of the nasid for socket usage.
  *
+ *	GPA	- (global physical address) a socket physical address converted
+ *		  so that it can be used by the GRU as a global address. Socket
+ *		  physical addresses 1) need additional NASID (node) bits added
+ *		  to the high end of the address, and 2) unaliased if the
+ *		  partition does not have a physical address 0. In addition, on
+ *		  UV2 rev 1, GPAs need the gnode left shifted to bits 39 or 40.
+ *
  *
  *  NumaLink Global Physical Address Format:
  *  +--------------------------------+---------------------+
@@ -77,8 +84,9 @@
  *
  *		1111110000000000
  *		5432109876543210
- *		pppppppppplc0cch	Nehalem-EX
- *		ppppppppplcc0cch	Westmere-EX
+ *		pppppppppplc0cch	Nehalem-EX (12 bits in hdw reg)
+ *		ppppppppplcc0cch	Westmere-EX (12 bits in hdw reg)
+ *		pppppppppppcccch	SandyBridge (15 bits in hdw reg)
  *		sssssssssss
  *
  *			p  = pnode bits
@@ -87,7 +95,7 @@
  *			h  = hyperthread
  *			s  = bits that are in the SOCKET_ID CSR
  *
- *	Note: Processor only supports 12 bits in the APICID register. The ACPI
+ *	Note: Processor may support fewer bits in the APICID register. The ACPI
  *	      tables hold all 16 bits. Software needs to be aware of this.
  *
  *	      Unless otherwise specified, all references to APICID refer to
@@ -138,6 +146,10 @@ struct uv_hub_info_s {
 	unsigned long		global_mmr_base;
 	unsigned long		gpa_mask;
 	unsigned int		gnode_extra;
+	unsigned char		hub_revision;
+	unsigned char		apic_pnode_shift;
+	unsigned char		m_shift;
+	unsigned char		n_lshift;
 	unsigned long		gnode_upper;
 	unsigned long		lowmem_remap_top;
 	unsigned long		lowmem_remap_base;
@@ -149,12 +161,40 @@ struct uv_hub_info_s {
 	unsigned char		m_val;
 	unsigned char		n_val;
 	struct uv_scir_s	scir;
-	unsigned char		apic_pnode_shift;
 };
 
 DECLARE_PER_CPU(struct uv_hub_info_s, __uv_hub_info);
 #define uv_hub_info		(&__get_cpu_var(__uv_hub_info))
 #define uv_cpu_hub_info(cpu)	(&per_cpu(__uv_hub_info, cpu))
+
+/*
+ * Hub revisions less than UV2_HUB_REVISION_BASE are UV1 hubs. All UV2
+ * hubs have revision numbers greater than or equal to UV2_HUB_REVISION_BASE.
+ * This is a software convention - NOT the hardware revision numbers in
+ * the hub chip.
+ */
+#define UV1_HUB_REVISION_BASE		1
+#define UV2_HUB_REVISION_BASE		3
+
+static inline int is_uv1_hub(void)
+{
+	return uv_hub_info->hub_revision < UV2_HUB_REVISION_BASE;
+}
+
+static inline int is_uv2_hub(void)
+{
+	return uv_hub_info->hub_revision >= UV2_HUB_REVISION_BASE;
+}
+
+static inline int is_uv2_1_hub(void)
+{
+	return uv_hub_info->hub_revision == UV2_HUB_REVISION_BASE;
+}
+
+static inline int is_uv2_2_hub(void)
+{
+	return uv_hub_info->hub_revision == UV2_HUB_REVISION_BASE + 1;
+}
 
 union uvh_apicid {
     unsigned long       v;
@@ -180,11 +220,25 @@ union uvh_apicid {
 #define UV_PNODE_TO_GNODE(p)		((p) |uv_hub_info->gnode_extra)
 #define UV_PNODE_TO_NASID(p)		(UV_PNODE_TO_GNODE(p) << 1)
 
-#define UV_LOCAL_MMR_BASE		0xf4000000UL
-#define UV_GLOBAL_MMR32_BASE		0xf8000000UL
+#define UV1_LOCAL_MMR_BASE		0xf4000000UL
+#define UV1_GLOBAL_MMR32_BASE		0xf8000000UL
+#define UV1_LOCAL_MMR_SIZE		(64UL * 1024 * 1024)
+#define UV1_GLOBAL_MMR32_SIZE		(64UL * 1024 * 1024)
+
+#define UV2_LOCAL_MMR_BASE		0xfa000000UL
+#define UV2_GLOBAL_MMR32_BASE		0xfc000000UL
+#define UV2_LOCAL_MMR_SIZE		(32UL * 1024 * 1024)
+#define UV2_GLOBAL_MMR32_SIZE		(32UL * 1024 * 1024)
+
+#define UV_LOCAL_MMR_BASE		(is_uv1_hub() ? UV1_LOCAL_MMR_BASE     \
+						: UV2_LOCAL_MMR_BASE)
+#define UV_GLOBAL_MMR32_BASE		(is_uv1_hub() ? UV1_GLOBAL_MMR32_BASE  \
+						: UV2_GLOBAL_MMR32_BASE)
+#define UV_LOCAL_MMR_SIZE		(is_uv1_hub() ? UV1_LOCAL_MMR_SIZE :   \
+						UV2_LOCAL_MMR_SIZE)
+#define UV_GLOBAL_MMR32_SIZE		(is_uv1_hub() ? UV1_GLOBAL_MMR32_SIZE :\
+						UV2_GLOBAL_MMR32_SIZE)
 #define UV_GLOBAL_MMR64_BASE		(uv_hub_info->global_mmr_base)
-#define UV_LOCAL_MMR_SIZE		(64UL * 1024 * 1024)
-#define UV_GLOBAL_MMR32_SIZE		(64UL * 1024 * 1024)
 
 #define UV_GLOBAL_GRU_MMR_BASE		0x4000000
 
@@ -241,7 +295,10 @@ static inline unsigned long uv_soc_phys_ram_to_gpa(unsigned long paddr)
 {
 	if (paddr < uv_hub_info->lowmem_remap_top)
 		paddr |= uv_hub_info->lowmem_remap_base;
-	return paddr | uv_hub_info->gnode_upper;
+	paddr |= uv_hub_info->gnode_upper;
+	paddr = ((paddr << uv_hub_info->m_shift) >> uv_hub_info->m_shift) |
+		((paddr >> uv_hub_info->m_val) << uv_hub_info->n_lshift);
+	return paddr;
 }
 
 
@@ -265,16 +322,19 @@ static inline unsigned long uv_gpa_to_soc_phys_ram(unsigned long gpa)
 	unsigned long remap_base = uv_hub_info->lowmem_remap_base;
 	unsigned long remap_top =  uv_hub_info->lowmem_remap_top;
 
+	gpa = ((gpa << uv_hub_info->m_shift) >> uv_hub_info->m_shift) |
+		((gpa >> uv_hub_info->n_lshift) << uv_hub_info->m_val);
+	gpa = gpa & uv_hub_info->gpa_mask;
 	if (paddr >= remap_base && paddr < remap_base + remap_top)
 		paddr -= remap_base;
 	return paddr;
 }
 
 
-/* gnode -> pnode */
+/* gpa -> pnode */
 static inline unsigned long uv_gpa_to_gnode(unsigned long gpa)
 {
-	return gpa >> uv_hub_info->m_val;
+	return gpa >> uv_hub_info->n_lshift;
 }
 
 /* gpa -> pnode */
@@ -283,6 +343,12 @@ static inline int uv_gpa_to_pnode(unsigned long gpa)
 	unsigned long n_mask = (1UL << uv_hub_info->n_val) - 1;
 
 	return uv_gpa_to_gnode(gpa) & n_mask;
+}
+
+/* gpa -> node offset*/
+static inline unsigned long uv_gpa_to_offset(unsigned long gpa)
+{
+	return (gpa << uv_hub_info->m_shift) >> uv_hub_info->m_shift;
 }
 
 /* pnode, offset --> socket virtual */
@@ -298,6 +364,17 @@ static inline void *uv_pnode_offset_to_vaddr(int pnode, unsigned long offset)
 static inline int uv_apicid_to_pnode(int apicid)
 {
 	return (apicid >> uv_hub_info->apic_pnode_shift);
+}
+
+/*
+ * Convert an apicid to the socket number on the blade
+ */
+static inline int uv_apicid_to_socket(int apicid)
+{
+	if (is_uv1_hub())
+		return (apicid >> (uv_hub_info->apic_pnode_shift - 1)) & 1;
+	else
+		return 0;
 }
 
 /*
@@ -519,14 +596,13 @@ static inline void uv_hub_send_ipi(int pnode, int apicid, int vector)
 
 /*
  * Get the minimum revision number of the hub chips within the partition.
- *     1 - initial rev 1.0 silicon
- *     2 - rev 2.0 production silicon
+ *     1 - UV1 rev 1.0 initial silicon
+ *     2 - UV1 rev 2.0 production silicon
+ *     3 - UV2 rev 1.0 initial silicon
  */
 static inline int uv_get_min_hub_revision_id(void)
 {
-	extern int uv_min_hub_revision_id;
-
-	return uv_min_hub_revision_id;
+	return uv_hub_info->hub_revision;
 }
 
 #endif /* CONFIG_X86_64 */

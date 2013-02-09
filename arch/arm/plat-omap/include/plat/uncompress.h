@@ -27,8 +27,8 @@
 
 #define MDR1_MODE_MASK			0x07
 
-static volatile u8 *uart_base;
-static int uart_shift;
+volatile u8 *uart_base;
+int uart_shift;
 
 /*
  * Store the DEBUG_LL uart number into memory.
@@ -129,7 +129,6 @@ static inline void __arch_decomp_setup(unsigned long arch_id)
 		DEBUG_LL_OMAP1(3, sx1);
 
 		/* omap2 based boards using UART1 */
-		DEBUG_LL_OMAP2(1, omap2evm);
 		DEBUG_LL_OMAP2(1, omap_2430sdp);
 		DEBUG_LL_OMAP2(1, omap_apollon);
 		DEBUG_LL_OMAP2(1, omap_h4);
@@ -149,6 +148,7 @@ static inline void __arch_decomp_setup(unsigned long arch_id)
 		/* omap3 based boards using UART3 */
 		DEBUG_LL_OMAP3(3, cm_t35);
 		DEBUG_LL_OMAP3(3, cm_t3517);
+		DEBUG_LL_OMAP3(3, cm_t3730);
 		DEBUG_LL_OMAP3(3, craneboard);
 		DEBUG_LL_OMAP3(3, devkit8000);
 		DEBUG_LL_OMAP3(3, igep0020);

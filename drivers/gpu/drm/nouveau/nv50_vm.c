@@ -151,23 +151,21 @@ nv50_vm_flush(struct nouveau_vm *vm)
 	struct drm_nouveau_private *dev_priv = vm->dev->dev_private;
 	struct nouveau_instmem_engine *pinstmem = &dev_priv->engine.instmem;
 	struct nouveau_fifo_engine *pfifo = &dev_priv->engine.fifo;
-	struct nouveau_pgraph_engine *pgraph = &dev_priv->engine.graph;
-	struct nouveau_crypt_engine *pcrypt = &dev_priv->engine.crypt;
+	int i;
 
 	pinstmem->flush(vm->dev);
 
 	/* BAR */
-	if (vm != dev_priv->chan_vm) {
+	if (vm == dev_priv->bar1_vm || vm == dev_priv->bar3_vm) {
 		nv50_vm_flush_engine(vm->dev, 6);
 		return;
 	}
 
 	pfifo->tlb_flush(vm->dev);
-
-	if (atomic_read(&vm->pgraph_refs))
-		pgraph->tlb_flush(vm->dev);
-	if (atomic_read(&vm->pcrypt_refs))
-		pcrypt->tlb_flush(vm->dev);
+	for (i = 0; i < NVOBJ_ENGINE_NR; i++) {
+		if (atomic_read(&vm->engref[i]))
+			dev_priv->eng[i]->tlb_flush(vm->dev, i);
+	}
 }
 
 void

@@ -260,7 +260,7 @@ void gpsdrv_tsklet_write(unsigned long data)
     if (((!hgps->st_write) || (0 == hgps->tx_count))
             || ((skb_queue_empty(&hgps->tx_list)))) {
 		spin_unlock(&hgps->lock);
-        GPSDRV_ERR("Sanity check Failed exiting %s", __func__);
+        GPSDRV_DBG("Sanity check Failed exiting %s", __func__);
         return;
     }
     /* hgps->tx_list not empty skb already present
@@ -438,7 +438,7 @@ ssize_t gpsdrv_read(struct file *file, char __user *data, size_t size,
     unsigned long timeout = GPSDRV_READ_TIMEOUT;
     struct gpsdrv_data *hgps;
 
-    //GPSDRV_DBG(" Inside %s", __func__);
+    GPSDRV_DBG(" Inside %s", __func__);
 
     /* Validate input parameters */
     if ((NULL == file) || (((NULL == data) || (0 == size)))) {
@@ -642,7 +642,7 @@ static long gpsdrv_ioctl(struct file *file,
     int     retCode = GPS_SUCCESS;
     struct gpsdrv_data *hgps;
 
-    //GPSDRV_DBG(" Inside %s", __func__);
+    GPSDRV_DBG(" Inside %s", __func__);
 
     /* Validate input parameters */
     if ((NULL == file) || (0 == cmd)) {

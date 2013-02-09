@@ -135,6 +135,7 @@ print_task(struct seq_file *m, struct rq *rq, struct task_struct *p)
 #endif
 
 	SEQ_printf(m, "\n");
+	show_stack(p, NULL);
 }
 
 static void print_rq(struct seq_file *m, struct rq *rq, int rq_cpu)
@@ -152,7 +153,7 @@ static void print_rq(struct seq_file *m, struct rq *rq, int rq_cpu)
 	read_lock_irqsave(&tasklist_lock, flags);
 
 	do_each_thread(g, p) {
-		if (!p->se.on_rq || task_cpu(p) != rq_cpu)
+		if (!p->on_rq || task_cpu(p) != rq_cpu)
 			continue;
 
 		print_task(m, rq, p);
@@ -264,6 +265,9 @@ static void print_cpu(struct seq_file *m, int cpu)
 	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", #x, SPLIT_NS(rq->x))
 
 	P(nr_running);
+	SEQ_printf(m, "  .%-30s: %d.%03d   \n", "ave_nr_running",
+		   rq->ave_nr_running / FIXED_1,
+		   ((rq->ave_nr_running % FIXED_1) * 1000) / FIXED_1);
 	SEQ_printf(m, "  .%-30s: %lu\n", "load",
 		   rq->load.weight);
 	P(nr_switches);
@@ -295,9 +299,6 @@ static void print_cpu(struct seq_file *m, int cpu)
 
 	P(ttwu_count);
 	P(ttwu_local);
-
-	SEQ_printf(m, "  .%-30s: %d\n", "bkl_count",
-				rq->rq_sched_info.bkl_count);
 
 #undef P
 #undef P64
@@ -441,7 +442,6 @@ void proc_sched_show_task(struct task_struct *p, struct seq_file *m)
 	P(se.statistics.wait_count);
 	PN(se.statistics.iowait_sum);
 	P(se.statistics.iowait_count);
-	P(sched_info.bkl_count);
 	P(se.nr_migrations);
 	P(se.statistics.nr_migrations_cold);
 	P(se.statistics.nr_failed_migrations_affine);

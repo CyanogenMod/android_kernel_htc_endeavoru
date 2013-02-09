@@ -20,185 +20,180 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <media/s5k3h2y.h>
-#include <media/rawchip/Yushan_API.h>
-#include <../arch/arm/mach-tegra/include/mach/tegra_flashlight.h>
+#include <media/rawchip/Yushan_HTC_Functions.h>
+#include <media/rawchip/rawchip.h>
+#include <mach/board_htc.h>
 
-struct i2c_client *s5k3h2_i2c_client;
-#define S5K3H2Y_REG_MODEL_ID 0x0000
-#define S5K3H2Y_MODEL_ID 0x382b
+#include <../arch/arm/mach-tegra/include/mach/tegra_flashlight.h>
+#include <linux/clk.h>
+#include <../arch/arm/mach-tegra/clock.h>
+
+struct i2c_client *s5k3h2yx_i2c_client;
+#define S5K3H2YX_REG_MODEL_ID 0x0000
+#define S5K3H2YX_MODEL_ID 0x382b
 
 #define SIZEOF_I2C_TRANSBUF 32
 
-typedef enum s5k3h2y_mode_e{
-	S5K3H2Y_MODE_3280x2464_912MIPI =1,
-	S5K3H2Y_MODE_3084x1736,
-	S5K3H2Y_MODE_768x432,
-	S5K3H2Y_MODE_1640x510,
-} s5k3h2y_mode;
+typedef enum s5k3h2yx_mode_e{
+	S5K3H2YX_MODE_3280x2464_912MIPI_DEFAULT,
+	S5K3H2YX_MODE_3280x2464_912MIPI,
+	S5K3H2YX_MODE_3084x1736,
+	S5K3H2YX_MODE_768x432,
+	S5K3H2YX_MODE_1640x510,
+} s5k3h2yx_mode;
 
-struct s5k3h2y_reg {
+struct s5k3h2yx_reg {
 	u16 addr;
 	u16 val;
 };
 
-struct s5k3h2y_info {
-	s5k3h2y_mode mode;
+struct s5k3h2yx_info {
+	s5k3h2yx_mode mode;
 	struct work_struct set_mode_work;
 	struct mutex camera_lock;
 	struct i2c_client *i2c_client;
-	struct s5k3h2y_platform_data *pdata;
+	struct s5k3h2yx_platform_data *pdata;
 	u8 i2c_trans_buf[SIZEOF_I2C_TRANSBUF];
 	bool power_state;
 };
 unsigned long exposure_coarse_time; //HTC_Steven
 unsigned long exposure_gain; //HTC_Steven
-static struct s5k3h2y_info *info;
+static struct s5k3h2yx_info *info;
 /* HTC_START */
 static int sensor_probe_node = 0;
-static int is_rawchip_init = 0;
-
 /* HTC_END */
-#define S5K3H2Y_TABLE_WAIT_MS 0
-#define S5K3H2Y_TABLE_END 1
-#define S5K3H2Y_MAX_RETRIES 3
+static bool FirstTimeSetMode = 0;
+static bool clock_init_done = 0;
 
-static struct rawchip_sensor_init_data rawchip_mode_table[] =
+#define S5K3H2YX_TABLE_WAIT_MS 0
+#define S5K3H2YX_TABLE_END 1
+#define S5K3H2YX_MAX_RETRIES 3
+
+/*
+ * -------------------
+ * | rawchip setting |
+ * -------------------
+ */
+
+
+struct rawchip_sensor_data rawchip_mode_table[] =
 {
-	[S5K3H2Y_MODE_3280x2464_912MIPI] =
+	[S5K3H2YX_MODE_3280x2464_912MIPI_DEFAULT] =
 	{	/*  8M 3280x2464 */
-		.spi_clk = 25,
-		.ext_clk = 24,
+		.datatype = 0x2B,
 		.lane_cnt = 2,
-		.orientation = 0,
-		.use_ext_1v2 = 1,
-		.bitrate = 912,
+		.pixel_clk = 182400000,
 		.width = 3280,
 		.height = 2464,
-		.blk_pixels = 190,
-		.blk_lines = 36,
+		.line_length_pclk = 3470,
+		.frame_length_lines = 2500,
+		.mirror_flip = 0,
+		.x_addr_start = 0,
+		.y_addr_start = 0,
+		.x_addr_end = 3280 -1,
+		.y_addr_end = 2464 -1,
+		.x_even_inc = 1,
+		.x_odd_inc = 1,
+		.y_even_inc = 1,
+		.y_odd_inc = 1,
+		.binning_rawchip = 0x11,
 	},
-	[S5K3H2Y_MODE_3084x1736] =
-	{	/* 5M  3084x1736 */
-		.spi_clk = 25,
-		.ext_clk = 24,
+	[S5K3H2YX_MODE_3280x2464_912MIPI] =
+	{	/*  8M 3280x2464 */
+		.datatype = 0x2B,
 		.lane_cnt = 2,
-		.orientation = 0,
-		.use_ext_1v2 = 1,
-		.bitrate = 912,
+		.pixel_clk = 182400000,
+		.width = 3280,
+		.height = 2464,
+		.line_length_pclk = 3470,
+		.frame_length_lines = 2500,
+		.mirror_flip = 0,
+		.x_addr_start = 0,
+		.y_addr_start = 0,
+		.x_addr_end = 3280 -1,
+		.y_addr_end = 2464 -1,
+		.x_even_inc = 1,
+		.x_odd_inc = 1,
+		.y_even_inc = 1,
+		.y_odd_inc = 1,
+		.binning_rawchip = 0x11,
+	},
+	[S5K3H2YX_MODE_3084x1736] =
+	{	/* 5M  3084x1736 */
+		.datatype = 0x2B,
+		.lane_cnt = 2,
+		.pixel_clk = 182400000,
 		.width = 3084,
 		.height = 1736,
-		.blk_pixels = 386,
-		.blk_lines = 36,
+		.line_length_pclk = 3470,
+		.frame_length_lines = 1772,
+		.mirror_flip = 0,
+		.x_addr_start = 0x66 + 4,
+		.y_addr_start = 0x170 + 4,
+		.x_addr_end = 0xc79 - 4,
+		.y_addr_end = 0x83f - 4,
+		.x_even_inc = 1,
+		.x_odd_inc = 1,
+		.y_even_inc = 1,
+		.y_odd_inc = 1,
+		.binning_rawchip = 0x11,
 	},
-	[S5K3H2Y_MODE_768x432]
+	[S5K3H2YX_MODE_768x432]
 	{	/* slow motion mode 768x432 */
-		.spi_clk = 25,
-		.ext_clk = 24,
+		.datatype = 0x2B,
 		.lane_cnt = 2,
-		.orientation = 0,
-		.use_ext_1v2 = 1,
-		.bitrate = 912,
+		.pixel_clk = 182400000,
 		.width = 768,
 		.height = 432,
-		.blk_pixels = 2702,
-		.blk_lines = 36,
+		.line_length_pclk = 3470,
+		.frame_length_lines = 468,
+		.mirror_flip = 0,
+		.x_addr_start = 0,
+		.y_addr_start = 0,
+		.x_addr_end = 768 -1,
+		.y_addr_end = 432 -1,
+		.x_even_inc = 1,
+		.x_odd_inc = 1,
+		.y_even_inc = 1,
+		.y_odd_inc = 1,
+		.binning_rawchip = 0x11,
 	},
-	[S5K3H2Y_MODE_1640x510]
+	[S5K3H2YX_MODE_1640x510]
 	{	/* slow motion mode 1640x510 */
-		.spi_clk = 25,
-		.ext_clk = 24,
+		.datatype = 0x2B,
 		.lane_cnt = 2,
-		.orientation = 0,
-		.use_ext_1v2 = 1,
-		.bitrate = 912,
+		.pixel_clk = 182400000,
 		.width = 1640,
 		.height = 510,
-		.blk_pixels = 1830,
-		.blk_lines = 36,
+		.line_length_pclk = 3470,
+		.frame_length_lines = 546,
+		.mirror_flip = 0,
+		.x_addr_start = 0x338 + 4,
+		.y_addr_start = 0x3d4 + 4,
+		.x_addr_end = 0x9a7 - 4,
+		.y_addr_end = 0x5d9 - 4,
+		.x_even_inc = 1,
+		.x_odd_inc = 1,
+		.y_even_inc = 1,
+		.y_odd_inc = 1,
+		.binning_rawchip = 0x11,
 	}
 };
 
-static Yushan_New_Context_Config_t mode_rawchip[] = {
-	{   //full size
-		// Active pixels in a line( Give the worst case here for stills).
-		.uwActivePixels = 3280, 		// HSize
-		// Line blanking
-		.uwLineBlank = 190,
-		// Active frame length (VSize): For DXO Image Char
-		.uwActiveFrameLength = 2464,	// VSize;
-		// STILL/VF or NORMAL
-		.bSelectStillVfMode = 2,
-		// Similar as the programming in Yushan_Init_Struct_t
-		.uwPixelFormat = 0x0A0A,
-		.orientation = 0,
-	},
-	{	//quarter size
-		// Active pixels in a line( Give the worst case here for stills).
-		.uwActivePixels = 1640, 		// HSize
-		// Line blanking
-		.uwLineBlank = 1830,
-		// Active frame length (VSize): For DXO Image Char
-		.uwActiveFrameLength = 1232,	// VSize;
-		// STILL/VF or NORMAL
-		.bSelectStillVfMode = 1,
-		// Similar as the programming in Yushan_Init_Struct_t
-		.uwPixelFormat = 0x0A0A,
-		.orientation = 0,
-	},
-	{	//slow motion
-		// Active pixels in a line( Give the worst case here for stills).
-		.uwActivePixels = 768, 		// HSize
-		// Line blanking
-		.uwLineBlank = 2702,
-		// Active frame length (VSize): For DXO Image Char
-		.uwActiveFrameLength = 432,	// VSize;
-		// STILL/VF or NORMAL
-		.bSelectStillVfMode = 1,
-		// Similar as the programming in Yushan_Init_Struct_t
-		.uwPixelFormat = 0x0A0A,
-		.orientation = 0,
-	},
-	{	// 5mp mode
-		// Active pixels in a line( Give the worst case here for stills).
-		.uwActivePixels = 3084, 		// HSize
-		// Line blanking
-		.uwLineBlank = 386, // 3470-3084
-		// Active frame length (VSize): For DXO Image Char
-		.uwActiveFrameLength = 1736,	// VSize;
-		// STILL/VF or NORMAL
-		.bSelectStillVfMode = 1,
-		// Similar as the programming in Yushan_Init_Struct_t
-		.uwPixelFormat = 0x0A0A,
-		.orientation = 0,
-	},
-	{	// 1640x510 mode
-		// Active pixels in a line( Give the worst case here for stills).
-		.uwActivePixels = 1640, 		// HSize
-		// Line blanking
-		.uwLineBlank = 1830, // 3470-1640
-		// Active frame length (VSize): For DXO Image Char
-		.uwActiveFrameLength = 510,	// VSize;
-		// STILL/VF or NORMAL
-		.bSelectStillVfMode = 1,
-		// Similar as the programming in Yushan_Init_Struct_t
-		.uwPixelFormat = 0x0A0A,
-		.orientation = 0,
-	},
-};
 
-static struct s5k3h2y_reg reset_seq[] = {
+static struct s5k3h2yx_reg reset_seq[] = {
 	{ 0x0100, 0x00 },	// stream off
-	{S5K3H2Y_TABLE_WAIT_MS, 5},
+	{S5K3H2YX_TABLE_WAIT_MS, 5},
 #if 0
     { 0x0101, 0x00 },   // Mirror off
-    {S5K3H2Y_TABLE_WAIT_MS, 1},
+    {S5K3H2YX_TABLE_WAIT_MS, 1},
 	{ 0x0103, 0x01 },	// software reset
-	{S5K3H2Y_TABLE_WAIT_MS, 1},
+	{S5K3H2YX_TABLE_WAIT_MS, 1},
 #endif
-	{S5K3H2Y_TABLE_END, 0x0000},
+	{S5K3H2YX_TABLE_END, 0x0000},
 };
 
-static struct s5k3h2y_reg mode_start[] = {
+static struct s5k3h2yx_reg mode_start[] = {
     //MIPI Setting
     //Address   Data
     { 0x3065, 0x35 },
@@ -305,10 +300,10 @@ static struct s5k3h2y_reg mode_start[] = {
     {0x30CC, 0xE0},/*DPHY_band_ctrl 870 MHz ~ 950 MHz*/
     {0x31A1, 0x5A},
 
-    { S5K3H2Y_TABLE_END, 0x0000 }
+    { S5K3H2YX_TABLE_END, 0x0000 }
 };
 
-static struct s5k3h2y_reg mode_3280x2464_912MIPI[] = {
+static struct s5k3h2yx_reg mode_3280x2464_912MIPI[] = {
     //Mode Setting PLL EXCLK 24Mhz, vt_pix_clk_freq_mhz=182.4Mhz,op_sys_clk_freq_mhz=912Mhz
     { 0x0305, 0x04 }, //pre_pll_clk_div = 4
     { 0x0306, 0x00 }, //pll_multiplier
@@ -367,10 +362,10 @@ static struct s5k3h2y_reg mode_3280x2464_912MIPI[] = {
     { 0x31A3, 0x00 }, //Vbinning enable[6] : 1b enale / 0b disable
     { 0x301A, 0xA7 }, //"In case of using the Vt_Pix_Clk more than 137Mhz, 0xA7h should be adopted! "
     { 0x3053, 0xCF },
-    {S5K3H2Y_TABLE_END, 0x0000}
+    {S5K3H2YX_TABLE_END, 0x0000}
 };
 
-static struct s5k3h2y_reg mode_3084x1736[] = {
+static struct s5k3h2yx_reg mode_3084x1736[] = {
     {0x0305, 0x04 },	//pre_pll_clk_div = 4
     {0x0306, 0x00 },	//pll_multiplier
     {0x0307, 0x98 },	//pll_multiplier  = 152
@@ -436,10 +431,10 @@ static struct s5k3h2y_reg mode_3084x1736[] = {
     {0x301A, 0xA7 },
     {0x3053, 0xCB },	//CF for full/preview/ ,CB for HD/FHD/QVGA120fps
 
-    {S5K3H2Y_TABLE_END, 0x0000}
+    {S5K3H2YX_TABLE_END, 0x0000}
 };
 
-static struct s5k3h2y_reg mode_768x432[] = {
+static struct s5k3h2yx_reg mode_768x432[] = {
 	//Address	Data	Comment
     { 0x0305, 0x04 },	//pre_pll_clk_div = 4
     { 0x0306, 0x00 },	//pll_multiplier
@@ -494,10 +489,11 @@ static struct s5k3h2y_reg mode_768x432[] = {
     { 0x301A, 0xA7 },	//
     { 0x3053, 0xCB },//CF for full ,CB for preview/HD/FHD/QVGA120fps
 
-    { S5K3H2Y_TABLE_END, 0x0000 }
+    { S5K3H2YX_TABLE_END, 0x0000 }
 };
 
-static struct s5k3h2y_reg mode_1640x1232[] = {
+#if 0
+static struct s5k3h2yx_reg mode_1640x1232[] = {
     //Readout	H:1/2 SubSampling binning, V:1/2 SubSampling binning
     //EXCLK 24Mhz, vt_pix_clk_freq_mhz=182.4Mhz,op_sys_clk_freq_mhz=912Mhz
     //Address	Data	Comment
@@ -555,10 +551,11 @@ static struct s5k3h2y_reg mode_1640x1232[] = {
     { 0x301A, 0xA7 },	//"In case of using the Vt_Pix_Clk more than 137Mhz, sA7h should be adopted! "
     { 0x3053, 0xCF },
 
-	{ S5K3H2Y_TABLE_END, 0x0000 }
+	{ S5K3H2YX_TABLE_END, 0x0000 }
 };
+#endif
 
-static struct s5k3h2y_reg mode_1640x510[] = {
+static struct s5k3h2yx_reg mode_1640x510[] = {
     { 0x0305, 0x04 },	//pre_pll_clk_div = 4
     { 0x0306, 0x00 },	//pll_multiplier
     { 0x0307, 0x98 },	//pll_multiplier  = 152
@@ -615,21 +612,21 @@ static struct s5k3h2y_reg mode_1640x510[] = {
     { 0x3053, 0xCB },//CF for full ,CB for preview/HD/FHD/QVGA120fps
 };
 
-static struct s5k3h2y_reg mode_end[] = {
-	{ S5K3H2Y_TABLE_WAIT_MS, 1 },
+static struct s5k3h2yx_reg mode_end[] = {
+	{ S5K3H2YX_TABLE_WAIT_MS, 1 },
 	{ 0x0100, 0x01 },	// stream on
-    { S5K3H2Y_TABLE_END, 0x0000 }
+    { S5K3H2YX_TABLE_END, 0x0000 }
 };
 
-static struct s5k3h2y_reg *mode_table[] = {
-	[S5K3H2Y_MODE_3280x2464_912MIPI] = mode_3280x2464_912MIPI,
-    [S5K3H2Y_MODE_3084x1736] = mode_3084x1736,
-	[S5K3H2Y_MODE_768x432] = mode_768x432,
-	[S5K3H2Y_MODE_1640x510] = mode_1640x510,
+static struct s5k3h2yx_reg *mode_table[] = {
+	[S5K3H2YX_MODE_3280x2464_912MIPI] = mode_3280x2464_912MIPI,
+    [S5K3H2YX_MODE_3084x1736] = mode_3084x1736,
+	[S5K3H2YX_MODE_768x432] = mode_768x432,
+	[S5K3H2YX_MODE_1640x510] = mode_1640x510,
 };
 
 /* 2 regs to program frame length */
-static inline void s5k3h2y_get_frame_length_regs(struct s5k3h2y_reg *regs,
+static inline void s5k3h2yx_get_frame_length_regs(struct s5k3h2yx_reg *regs,
 						u32 frame_length)
 {
 	regs->addr = 0x340;
@@ -639,7 +636,7 @@ static inline void s5k3h2y_get_frame_length_regs(struct s5k3h2y_reg *regs,
 }
 
 /* 2 regs to program coarse time */
-static inline void s5k3h2y_get_coarse_time_regs(struct s5k3h2y_reg *regs,
+static inline void s5k3h2yx_get_coarse_time_regs(struct s5k3h2yx_reg *regs,
                                                u32 coarse_time)
 {
 	regs->addr = 0x202;
@@ -649,7 +646,7 @@ static inline void s5k3h2y_get_coarse_time_regs(struct s5k3h2y_reg *regs,
 }
 
 /* 2 reg to program gain */
-static inline void s5k3h2y_get_gain_reg(struct s5k3h2y_reg *regs, u16 gain)
+static inline void s5k3h2yx_get_gain_reg(struct s5k3h2yx_reg *regs, u16 gain)
 {
 	regs->addr = 0x204;
 	regs->val = (gain >> 8) & 0xff;
@@ -657,7 +654,7 @@ static inline void s5k3h2y_get_gain_reg(struct s5k3h2y_reg *regs, u16 gain)
 	(regs + 1)->val = (gain) & 0xff;
 }
 
-static int s5k3h2y_i2c_rxdata(unsigned short saddr,
+static int s5k3h2yx_i2c_rxdata(unsigned short saddr,
 	unsigned char *rxdata, int length)
 {
 	struct i2c_msg msgs[] = {
@@ -675,15 +672,15 @@ static int s5k3h2y_i2c_rxdata(unsigned short saddr,
 	},
 	};
 
-	if (i2c_transfer(s5k3h2_i2c_client->adapter, msgs, 2) < 0) {
-		pr_err("[CAM]s5k3h2y_i2c_rxdata failed!\n");
+	if (i2c_transfer(s5k3h2yx_i2c_client->adapter, msgs, 2) < 0) {
+		pr_err("[CAM]s5k3h2yx_i2c_rxdata failed!\n");
 		return -EIO;
 	}
 
 	return 0;
 }
 
-static int32_t s5k3h2y_i2c_read(unsigned short raddr,
+static int32_t s5k3h2yx_i2c_read(unsigned short raddr,
 				unsigned short *rdata, int rlen)
 {
 	int32_t rc = 0;
@@ -697,10 +694,10 @@ static int32_t s5k3h2y_i2c_read(unsigned short raddr,
 	buf[0] = (raddr & 0xFF00) >> 8;
 	buf[1] = (raddr & 0x00FF);
 retry:
-	rc = s5k3h2y_i2c_rxdata(s5k3h2_i2c_client->addr, buf, rlen);
+	rc = s5k3h2yx_i2c_rxdata(s5k3h2yx_i2c_client->addr, buf, rlen);
 
 	if (rc < 0) {
-		pr_err("[CAM]s5k3h2y_i2c_read 0x%x failed!\n", raddr);
+		pr_err("[CAM]s5k3h2yx_i2c_read 0x%x failed!\n", raddr);
 		printk(KERN_ERR "starting read retry policy count:%d\n", count);
 		udelay(10);
 		count++;
@@ -717,7 +714,7 @@ retry:
 }
 
 #ifdef KERNEL_SENSOR_DEBUG
-static int s5k3h2y_read_reg(struct i2c_client *client, u16 addr, u8 *val)
+static int s5k3h2yx_read_reg(struct i2c_client *client, u16 addr, u8 *val)
 {
 	int err;
 	struct i2c_msg msg[2];
@@ -746,36 +743,36 @@ static int s5k3h2y_read_reg(struct i2c_client *client, u16 addr, u8 *val)
 		return -EINVAL;
 
 	*val = data[2];
-	pr_info("s5k3h2y read_reg 0x%02X%02X %d\n", data[0], data[1], (data[2]<<8) + data[3]);
+	pr_info("s5k3h2yx read_reg 0x%02X%02X %d\n", data[0], data[1], (data[2]<<8) + data[3]);
 
 	return 0;
 }
 #endif
 
-static int s5k3h2y_check_sensorid()
+static int s5k3h2yx_check_sensorid(void)
 {
 	uint16_t chipid = 0;
 	int32_t rc = 0;
 
 	/* Read sensor Model ID: */
-	rc = s5k3h2y_i2c_read(S5K3H2Y_REG_MODEL_ID, &chipid, 2);
+	rc = s5k3h2yx_i2c_read(S5K3H2YX_REG_MODEL_ID, &chipid, 2);
 	if (rc < 0) {
 		pr_err("[CAM]read sensor id fail\n");
 	      rc = EIO;
 	}
 
 	/* Compare sensor ID to S5K3H2Y ID: */
-/*	pr_info("[CAM]%s, Expected id=0x%x\n", __func__, S5K3H2Y_MODEL_ID);
+/*	pr_info("[CAM]%s, Expected id=0x%x\n", __func__, S5K3H2YX_MODEL_ID);
 	pr_info("[CAM]%s, Read id=0x%x\n", __func__, chipid); */
 
-	if (chipid != S5K3H2Y_MODEL_ID) {
+	if (chipid != S5K3H2YX_MODEL_ID) {
 		pr_err("[CAM]sensor model id is incorrect\n");
 		rc = -ENODEV;
 	}
 	return rc;
 }
 
-static int s5k3h2y_write_reg(struct i2c_client *client, u16 addr, u8 val)
+static int s5k3h2yx_write_reg(struct i2c_client *client, u16 addr, u8 val)
 {
 	int err;
 	struct i2c_msg msg;
@@ -799,15 +796,15 @@ static int s5k3h2y_write_reg(struct i2c_client *client, u16 addr, u8 val)
 		if (err == 1)
 			return 0;
 		retry++;
-		pr_err("s5k3h2y: i2c transfer failed, retrying %x %x\n",
+		pr_err("s5k3h2yx: i2c transfer failed, retrying %x %x\n",
 			addr, val);
 		msleep(3);
-	} while (retry <= S5K3H2Y_MAX_RETRIES);
+	} while (retry <= S5K3H2YX_MAX_RETRIES);
 
 	return err;
 }
 
-static int s5k3h2y_write_bulk_reg(struct i2c_client *client, u8 *data, int len)
+static int s5k3h2yx_write_bulk_reg(struct i2c_client *client, u8 *data, int len)
 {
 	int err;
 	struct i2c_msg msg;
@@ -824,24 +821,24 @@ static int s5k3h2y_write_bulk_reg(struct i2c_client *client, u8 *data, int len)
 	if (err == 1)
 		return 0;
 
-	pr_err("s5k3h2y: i2c bulk transfer failed at %x\n",
+	pr_err("s5k3h2yx: i2c bulk transfer failed at %x\n",
 		(int)data[0] << 8 | data[1]);
 
 	return err;
 }
 
-static int s5k3h2y_write_table(struct i2c_client *client,
-				const struct s5k3h2y_reg table[],
-				const struct s5k3h2y_reg override_list[],
+static int s5k3h2yx_write_table(struct i2c_client *client,
+				const struct s5k3h2yx_reg table[],
+				const struct s5k3h2yx_reg override_list[],
 				int num_override_regs)
 {
 	int err;
-	const struct s5k3h2y_reg *next;
+	const struct s5k3h2yx_reg *next;
 	int i;
 	u16 val;
 
-	for (next = table; next->addr != S5K3H2Y_TABLE_END; next++) {
-		if (next->addr == S5K3H2Y_TABLE_WAIT_MS) {
+	for (next = table; next->addr != S5K3H2YX_TABLE_END; next++) {
+		if (next->addr == S5K3H2YX_TABLE_WAIT_MS) {
 			msleep(next->val);
 			continue;
 		}
@@ -859,251 +856,276 @@ static int s5k3h2y_write_table(struct i2c_client *client,
 			}
 		}
 
-		err = s5k3h2y_write_reg(client, next->addr, val);;
+		err = s5k3h2yx_write_reg(client, next->addr, val);;
 		if (err)
 			return err;
 	}
 	return 0;
 }
 
-static int s5k3h2y_reset(struct s5k3h2y_info *info)
+static int s5k3h2yx_reset(struct s5k3h2yx_info *info)
 {
 	int err = 0;
-	pr_info("[CAM]35k3h2y_reset +++");
-
+	pr_info("[CAM] s5k3h2yx_reset +++");
+	if ( info->pdata->use_rawchip )
+		rawchip_release();
 	info->pdata->power_off();
 	msleep(50);
 	info->pdata->power_on();
-
+	if ( info->pdata->use_rawchip )
+		rawchip_open_init();
 	/*sensor stream off*/
-	pr_info("[CAM]s5k3h2y_write_table reset_seq");
-	err = s5k3h2y_write_table(info->i2c_client, reset_seq, NULL, 0);
+	pr_info("[CAM]s5k3h2yx_write_table reset_seq\n");
+	err = s5k3h2yx_write_table(info->i2c_client, reset_seq, NULL, 0);
 	if (err)
-		pr_err("[CAM]set sensor stream off failed!!!");
+		pr_err("[CAM]set sensor stream off failed!!!\n");
 
 	/*set sensor init*/
-	pr_info("[CAM]s5k3h2y_write_table mode_start");
-	err = s5k3h2y_write_table(info->i2c_client, mode_start, NULL, 0);
+	pr_info("[CAM]s5k3h2yx_write_table mode_start\n");
+	err = s5k3h2yx_write_table(info->i2c_client, mode_start, NULL, 0);
 	if (err)
-		pr_err("[CAM]set sensor init failed!!");
+		pr_err("[CAM]set sensor init failed!!\n");
 
-	pr_info("[CAM]35k3h2y_reset ---");
+	pr_info("[CAM] s5k3h2yx_reset ---\n");
 	return err;
 }
 
-
-static int s5k3h2y_set_mode(struct s5k3h2y_info *info, struct s5k3h2y_mode *mode)
+static int s5k3h2yx_get_mode(struct s5k3h2yx_mode * mode)
 {
-	int sensor_mode;
+	int sensor_mode = -1;
+	if (mode) {
+		pr_info("[CAM] %s: xres %u yres %u framelength %u coarsetime %u gain %u\n",
+			__func__, mode->xres, mode->yres, mode->frame_length,
+			mode->coarse_time, mode->gain);
+		if (mode->xres == 3280 && mode->yres == 2464)
+		{
+			sensor_mode = S5K3H2YX_MODE_3280x2464_912MIPI;
+			pr_info("[CAM] set mode to (%d) -> S5K3H2YX_MODE_3280x2464_912MIPI\n", sensor_mode);
+		}
+		else if (mode->xres == 3084 && mode->yres == 1736)
+		{
+			sensor_mode = S5K3H2YX_MODE_3084x1736;
+			pr_info("[CAM] set mode to (%d) -> S5K3H2YX_MODE_3084x1736\n", sensor_mode);
+		}
+		else if (mode->xres == 768 && mode->yres == 432) {
+			sensor_mode = S5K3H2YX_MODE_768x432;
+			pr_info("[CAM] set mode to (%d) -> S5K3H2YX_MODE_768x432\n", sensor_mode);
+		}
+		else if (mode->xres == 1640 && mode->yres == 510) {
+			sensor_mode = S5K3H2YX_MODE_1640x510;
+			pr_info("[CAM] set mode to (%d) -> S5K3H2YX_MODE_1640x510\n", sensor_mode);
+		}
+		else {
+			pr_err("[CAM] %s: invalid resolution supplied to set mode %d %d\n",__func__, mode->xres, mode->yres);
+			return -1;
+		}
+	} else {
+		pr_info("[CAM] %s: setting mode with 8M\n", __func__);
+		/* If mode == NULL, then it's called in open. */
+		sensor_mode = S5K3H2YX_MODE_3280x2464_912MIPI; /* NOTE, use 3280x2464 setting as default */
+	}
+	return sensor_mode;
+}
+static int s5k3h2yx_set_mode(struct s5k3h2yx_info *info, struct s5k3h2yx_mode *mode)
+{
+	int sensor_mode = 0;
 	int err = -1;
-	bool_t	bStatus = SUCCESS;
-	struct s5k3h2y_reg reg_list[6];
-	static Yushan_New_Context_Config_t *newContextConfig;
+	struct s5k3h2yx_reg reg_list[6];
+	struct rawchip_sensor_data rawchip_data;
 	int retry = 0;
-	pr_debug("%s++\n", __func__);
+     struct clk *spi_clk = NULL;
 
-	if((err = s5k3h2y_check_sensorid())!=0)
+	pr_info("[CAM] %s++\n", __func__);
+
+	if((err = s5k3h2yx_check_sensorid())!=0)
 	{
 		info->mode = 0;
 		pr_debug("%s reading sensor id failed\n", __func__);
 		return err;
 	}
 
-	if (mode) {
-		pr_info("%s: xres %u yres %u framelength %u coarsetime %u gain %u\n",
-			__func__, mode->xres, mode->yres, mode->frame_length,
-			mode->coarse_time, mode->gain);
-		if (mode->xres == 3280 && mode->yres == 2464)
-		{
-			pr_info("[CAM] set mode to -> S5K3H2Y_MODE_3280x2464_912MIPI\n");
-			sensor_mode = S5K3H2Y_MODE_3280x2464_912MIPI;
-			newContextConfig=&(mode_rawchip[0]);
-		}
-		else if (mode->xres == 3084 && mode->yres == 1736)
-		{
-			sensor_mode = S5K3H2Y_MODE_3084x1736;
-			newContextConfig=&(mode_rawchip[3]);
-			pr_info("[CAM] set mode to -> S5K3H2Y_MODE_3084x1736\n");
-		}
-		else if (mode->xres == 768 && mode->yres == 432) {
-			sensor_mode = S5K3H2Y_MODE_768x432;
-			pr_info("[CAM] set mode to -> S5K3H2Y_MODE_768x432\n");
-			newContextConfig=&(mode_rawchip[2]);
-		}
-		else if (mode->xres == 1640 && mode->yres == 510) {
-			sensor_mode = S5K3H2Y_MODE_1640x510;
-			pr_info("[CAM] set mode to -> S5K3H2Y_MODE_1640x510\n");
-			newContextConfig=&(mode_rawchip[4]);
-		}
-		else {
-			pr_err("%s: invalid resolution supplied to set mode %d %d\n",__func__, mode->xres, mode->yres);
-			return -EINVAL;
-		}
-		if (sensor_mode == info->mode) {
-			pr_info("skip set_mode\n");
-			return 0;
-		}
+	sensor_mode = s5k3h2yx_get_mode(mode);
+	if (sensor_mode == info->mode)
+			goto s5k3h2yx_set_mode_done;
 
-		info->mode = sensor_mode;
-		pr_info("[CAM] set_mode sensor_mode %d ", sensor_mode);
-	} else {
-		pr_debug("%s: setting mode with 8M\n", __func__);
-		/* If mode == NULL, then it's called in open. */
-		info->mode = S5K3H2Y_MODE_3280x2464_912MIPI;
-		sensor_mode = info->mode;
+	if ( info->pdata->use_rawchip ) {
+		if (spi_clk) {
+			pr_info("[CAM] set spi4 clock to 24MHz\n");
+			clk_set_rate(spi_clk, 96000000);
 	}
 
+		if ( info->pdata->rawchip_need_powercycle && (rawchip_mode_table[info->mode].pixel_clk != rawchip_mode_table[sensor_mode].pixel_clk) && !FirstTimeSetMode ){
+			s5k3h2yx_reset(info);
+		}
 retry:
+		/* do rawchip setting before sensor setting */
+		pr_info("[CAM] call rawchip_set_size(%d) +++\n", sensor_mode);
+		rawchip_data.sensor_name = info->pdata->sensor_name;
+		rawchip_data.datatype = rawchip_mode_table[sensor_mode].datatype;
+		rawchip_data.lane_cnt = info->pdata->data_lane;
+		rawchip_data.pixel_clk = rawchip_mode_table[sensor_mode].pixel_clk;
+		rawchip_data.mirror_flip = info->pdata->mirror_flip;	
+		rawchip_data.width = rawchip_mode_table[sensor_mode].width;
+		rawchip_data.height = rawchip_mode_table[sensor_mode].height;
+		rawchip_data.line_length_pclk = rawchip_mode_table[sensor_mode].line_length_pclk;
+		rawchip_data.frame_length_lines = rawchip_mode_table[sensor_mode].frame_length_lines;
+		rawchip_data.x_addr_start = rawchip_mode_table[sensor_mode].x_addr_start;
+		rawchip_data.y_addr_start = rawchip_mode_table[sensor_mode].y_addr_start;
+		rawchip_data.x_addr_end = rawchip_mode_table[sensor_mode].x_addr_end;
+		rawchip_data.y_addr_end = rawchip_mode_table[sensor_mode].y_addr_end;
+		rawchip_data.x_even_inc = rawchip_mode_table[sensor_mode].x_even_inc;
+		rawchip_data.x_odd_inc = rawchip_mode_table[sensor_mode].x_odd_inc;
+		rawchip_data.y_even_inc = rawchip_mode_table[sensor_mode].y_even_inc;
+		rawchip_data.y_odd_inc = rawchip_mode_table[sensor_mode].y_odd_inc;
+		rawchip_data.binning_rawchip = rawchip_mode_table[sensor_mode].binning_rawchip;
+		rawchip_data.use_rawchip = info->pdata->use_rawchip;
+		err = rawchip_set_size(rawchip_data, &clock_init_done);
+		if (err < 0 && retry++ < 5) {
+			pr_err("[CAM] rawchip_set_size FAIL!!!");
+			s5k3h2yx_reset(info);
+			goto retry;
+		}
+
+    	if(spi_clk)
+		{
+			clk_set_rate(spi_clk, 60000000);  /* 15MHz */
+			pr_info("[CAM] set spi4 clock to 15MHz");
+		}
+	}
+
 	/* get a list of override regs for the asking frame length, */
 	/* coarse integration time, and gain.                       */
 	if(mode)
 	{
-		s5k3h2y_get_frame_length_regs(reg_list, mode->frame_length);
-		s5k3h2y_get_coarse_time_regs(reg_list + 2, mode->coarse_time);
-		s5k3h2y_get_gain_reg(reg_list + 4, mode->gain);
+		s5k3h2yx_get_frame_length_regs(reg_list, mode->frame_length);
+		s5k3h2yx_get_coarse_time_regs(reg_list + 2, mode->coarse_time);
+		s5k3h2yx_get_gain_reg(reg_list + 4, mode->gain);
 	} else {
+		// HTC_Optical: modify for initial AE
 		// AE breakdown 875*45 == 1240*32 sensor default
-		s5k3h2y_get_coarse_time_regs(reg_list, 2190); //HTC_Optical: modify for initial AE
-		s5k3h2y_get_gain_reg(reg_list + 2, 38); //HTC_Optical: modify for initial AE
+		s5k3h2yx_get_coarse_time_regs(reg_list, 1240);	//2190
+		s5k3h2yx_get_gain_reg(reg_list + 2, 32);        //38
 	}
-
 	/*sensor stream off*/
-	err = s5k3h2y_write_table(info->i2c_client, reset_seq, NULL, 0);
+	err = s5k3h2yx_write_table(info->i2c_client, reset_seq, NULL, 0);
 	if (err)
-		goto error;
+		goto s5k3h2yx_set_mode_error;
 
 	/*set sensor config*/
 	if(mode)
-		err = s5k3h2y_write_table(info->i2c_client, mode_table[sensor_mode],reg_list, 6);
+		err = s5k3h2yx_write_table(info->i2c_client, mode_table[sensor_mode],reg_list, 6);
 	else
-		err = s5k3h2y_write_table(info->i2c_client, mode_table[sensor_mode],reg_list, 4);
-	
-	if (err)
-		goto error;
+		err = s5k3h2yx_write_table(info->i2c_client, mode_table[sensor_mode],reg_list, 4);
 
-	if(!is_rawchip_init) {
-		pr_info("[CAM] call Yushan_sensor_open_init(%d) +++", sensor_mode);
-		err = Yushan_sensor_open_init(rawchip_mode_table[sensor_mode]);
-		if (err && retry++ < 5) {
-			pr_err("[CAM]Yushan_sensor_open_init FAIL!!!");
-			s5k3h2y_reset(info);
-			goto retry;
-		}
-		msleep(1);
-		pr_info("[CAM] call Yushan_sensor_open_init(%d) ---", sensor_mode);
-		is_rawchip_init = 1;
-	}
-	else {
-		pr_info("[CAM] call Yushan_ContextUpdate_Wrapper+++");
-		bStatus = Yushan_ContextUpdate_Wrapper(newContextConfig);
-		if ((!bStatus) && retry++ < 5) {
-			pr_err("[CAM] Yushan_ContextUpdate_Wrapper FAIL!!!");
-			is_rawchip_init = 0;
-			s5k3h2y_reset(info);
-			goto retry;
-		}
-		pr_info("[CAM] call Yushan_ContextUpdate_Wrapper---");
-	}
+	if (err)
+		goto s5k3h2yx_set_mode_error;
 
 	/*stream on*/
-	err = s5k3h2y_write_table(info->i2c_client, mode_end, NULL, 0);
+	err = s5k3h2yx_write_table(info->i2c_client, mode_end, NULL, 0);
 	if (err)
-		goto error;
-	pr_info("[CAM] s5k3h2y stream on!");
+		goto s5k3h2yx_set_mode_error;
+s5k3h2yx_set_mode_done:
+	info->mode = sensor_mode;
+	FirstTimeSetMode = 0;
+	pr_info("[CAM] s5k3h2yx stream on!\n");
 	pr_debug("%s --\n", __func__);
 	return 0;
-error:
+
+s5k3h2yx_set_mode_error:
 	pr_debug("%s failed\n", __func__);
 	return err;
 }
 
 static void set_mode_handler(struct work_struct *work)
 {
-	struct s5k3h2y_info *info;
+	struct s5k3h2yx_info *info;
 	int err;
 
 	pr_debug("%s ++\n", __func__);
-	info = container_of(work, struct s5k3h2y_info,
+	info = container_of(work, struct s5k3h2yx_info,
 			set_mode_work);
 	mutex_lock(&info->camera_lock);
 
 	if (info->pdata && info->pdata->power_on) {
 		info->pdata->power_on();
-		is_rawchip_init = 0;
 	}
+	if ( info->pdata->use_rawchip )
+		rawchip_open_init();
+
 
 	/*sensor stream off*/
-	pr_info("[CAM]s5k3h2y_write_table reset_seq");
-	err = s5k3h2y_write_table(info->i2c_client, reset_seq, NULL, 0);
-	if (err) 
-		pr_err("[CAM]set sensor stream off failed!!!");
+	pr_info("[CAM]s5k3h2yx_write_table reset_seq");
+	err = s5k3h2yx_write_table(info->i2c_client, reset_seq, NULL, 0);
+	if (err)
+		pr_err("[CAM]set sensor stream off failed!!!\n");
 
 	/*set sensor init*/
-	pr_info("[CAM]s5k3h2y_write_table mode_start");
-	err = s5k3h2y_write_table(info->i2c_client, mode_start, NULL, 0);
-	if (err) 
-		pr_err("[CAM]set sensor init failed!!!");
+	pr_info("[CAM]s5k3h2yx_write_table mode_start\n");
+	err = s5k3h2yx_write_table(info->i2c_client, mode_start, NULL, 0);
+	if (err)
+		pr_err("[CAM]set sensor init failed!!!\n");
 
-	s5k3h2y_set_mode(info, NULL);
+	FirstTimeSetMode = 1;
+	s5k3h2yx_set_mode(info, NULL);
 	info->power_state = true;
 	mutex_unlock(&info->camera_lock);
 	pr_debug("%s --\n", __func__);
 }
 
 
-static int s5k3h2y_set_frame_length(struct s5k3h2y_info *info, u32 frame_length)
+static int s5k3h2yx_set_frame_length(struct s5k3h2yx_info *info, u32 frame_length)
 {
 	int ret;
-	struct s5k3h2y_reg reg_list[2];
+	struct s5k3h2yx_reg reg_list[2];
 	u8 *b_ptr = info->i2c_trans_buf;
 
-	s5k3h2y_get_frame_length_regs(reg_list, frame_length);
+	s5k3h2yx_get_frame_length_regs(reg_list, frame_length);
 
 	*b_ptr++ = reg_list[0].addr >> 8;
 	*b_ptr++ = reg_list[0].addr & 0xff;
 	*b_ptr++ = reg_list[0].val & 0xff;
 	*b_ptr++ = reg_list[1].val & 0xff;
-	ret = s5k3h2y_write_bulk_reg(info->i2c_client, info->i2c_trans_buf, 4);
+	ret = s5k3h2yx_write_bulk_reg(info->i2c_client, info->i2c_trans_buf, 4);
 
 	return 0;
 }
 
-static int s5k3h2y_set_coarse_time(struct s5k3h2y_info *info, u32 coarse_time)
+static int s5k3h2yx_set_coarse_time(struct s5k3h2yx_info *info, u32 coarse_time)
 {
 	int ret;
-	struct s5k3h2y_reg reg_list[2];
+	struct s5k3h2yx_reg reg_list[2];
 	u8 *b_ptr = info->i2c_trans_buf;
 
-	s5k3h2y_get_coarse_time_regs(reg_list, coarse_time);
+	s5k3h2yx_get_coarse_time_regs(reg_list, coarse_time);
 
 	*b_ptr++ = reg_list[0].addr >> 8;
 	*b_ptr++ = reg_list[0].addr & 0xff;
 	*b_ptr++ = reg_list[0].val & 0xff;
 	*b_ptr++ = reg_list[1].val & 0xff;
-	ret = s5k3h2y_write_bulk_reg(info->i2c_client, info->i2c_trans_buf, 4);
+	ret = s5k3h2yx_write_bulk_reg(info->i2c_client, info->i2c_trans_buf, 4);
 
 	return 0;
 }
 
-static int s5k3h2y_set_gain(struct s5k3h2y_info *info, u16 gain)
+static int s5k3h2yx_set_gain(struct s5k3h2yx_info *info, u16 gain)
 {
 	int ret;
-	struct s5k3h2y_reg reg_list[2];
+	struct s5k3h2yx_reg reg_list[2];
 	u8 *b_ptr = info->i2c_trans_buf;
 
-	s5k3h2y_get_gain_reg(reg_list, gain);
+	s5k3h2yx_get_gain_reg(reg_list, gain);
 
 	*b_ptr++ = reg_list[0].addr >> 8;
 	*b_ptr++ = reg_list[0].addr & 0xff;
 	*b_ptr++ = reg_list[0].val & 0xff;
 	*b_ptr++ = reg_list[1].val & 0xff;
-	ret = s5k3h2y_write_bulk_reg(info->i2c_client, info->i2c_trans_buf, 4);
+	ret = s5k3h2yx_write_bulk_reg(info->i2c_client, info->i2c_trans_buf, 4);
 
 	return ret;
 }
 
-static int s5k3h2y_set_group_hold(struct s5k3h2y_info *info,
-	struct s5k3h2y_ae *ae)
+static int s5k3h2yx_set_group_hold(struct s5k3h2yx_info *info,
+	struct s5k3h2yx_ae *ae)
 {
 	int ret;
 	int count = 0;
@@ -1119,20 +1141,20 @@ static int s5k3h2y_set_group_hold(struct s5k3h2y_info *info,
 		groupHoldEnabled = true;
 
 	if (groupHoldEnabled) {
-		ret = s5k3h2y_write_reg(info->i2c_client, 0x0104, 0x01);
+		ret = s5k3h2yx_write_reg(info->i2c_client, 0x0104, 0x01);
 		if (ret)
 			return ret;
 	}
 
 	if (ae->gain_enable)
-		s5k3h2y_set_gain(info, ae->gain);
+		s5k3h2yx_set_gain(info, ae->gain);
 	if (ae->coarse_time_enable)
-		s5k3h2y_set_coarse_time(info, ae->coarse_time);
+		s5k3h2yx_set_coarse_time(info, ae->coarse_time);
 	if (ae->frame_length_enable)
-		s5k3h2y_set_frame_length(info, ae->frame_length);
+		s5k3h2yx_set_frame_length(info, ae->frame_length);
 
 	if (groupHoldEnabled) {
-		ret = s5k3h2y_write_reg(info->i2c_client, 0x0104, 0x0);
+		ret = s5k3h2yx_write_reg(info->i2c_client, 0x0104, 0x0);
 		if (ret)
 			return ret;
 	}
@@ -1141,22 +1163,25 @@ static int s5k3h2y_set_group_hold(struct s5k3h2y_info *info,
 }
 
 #if 0
-static int s5k3h2y_test_pattern(struct s5k3h2y_info *info,
-			       enum s5k3h2y_test_pattern pattern)
+static int s5k3h2yx_test_pattern(struct s5k3h2yx_info *info,
+			       enum s5k3h2yx_test_pattern pattern)
 {
 	if (pattern >= ARRAY_SIZE(test_pattern_modes))
 		return -EINVAL;
 
-	return s5k3h2y_write_table(info,
+	return s5k3h2yx_write_table(info,
 				  test_pattern_modes[pattern],
 				  NULL, 0);
 }
 #endif
 
-static long s5k3h2y_ioctl(struct file *file,
+static long s5k3h2yx_ioctl(struct file *file,
 			 unsigned int cmd, unsigned long arg)
 {
-	struct s5k3h2y_info *info = file->private_data;
+	struct s5k3h2yx_info *info = file->private_data;
+	struct s5k3h2yx_mode mode;
+//	Yushan_New_Context_Config_t *newContextConfig;
+
 	int ret;
 	//Yushan_Write_Exp_Time_Gain(exposure_coarse_time,exposure_gain); //HTC_Steven
 	pr_debug("%s ++%x\n", __func__, cmd);
@@ -1167,45 +1192,44 @@ static long s5k3h2y_ioctl(struct file *file,
 	};
 
 	switch (cmd) {
-	case S5K3H2Y_IOCTL_SET_MODE:
+	case S5K3H2YX_IOCTL_SET_MODE:
 	{
-		struct s5k3h2y_mode mode;
 		if (copy_from_user(&mode,
 				   (const void __user *)arg,
-				   sizeof(struct s5k3h2y_mode))) {
+				   sizeof(struct s5k3h2yx_mode))) {
 			pr_info("%s %d\n", __func__, __LINE__);
 			return -EFAULT;
 		}
-		pr_debug("%s: S5K3H2Y_IOCTL_SET_MODE\n", __func__);
+		pr_debug("%s: S5K3H2YX_IOCTL_SET_MODE\n", __func__);
 		mutex_lock(&info->camera_lock);
-		ret = s5k3h2y_set_mode(info, &mode);
+		ret = s5k3h2yx_set_mode(info, &mode);
 		mutex_unlock(&info->camera_lock);
 		return ret;
 	}
-	case S5K3H2Y_IOCTL_SET_FRAME_LENGTH:
-		pr_debug("%s: S5K3H2Y_IOCTL_SET_FRAME_LENGTH\n", __func__);
+	case S5K3H2YX_IOCTL_SET_FRAME_LENGTH:
+		pr_debug("%s: S5K3H2YX_IOCTL_SET_FRAME_LENGTH\n", __func__);
 		mutex_lock(&info->camera_lock);
-		ret = s5k3h2y_set_frame_length(info, (u32)arg);
+		ret = s5k3h2yx_set_frame_length(info, (u32)arg);
 		mutex_unlock(&info->camera_lock);
 		return ret;
-	case S5K3H2Y_IOCTL_SET_COARSE_TIME:
-		pr_debug("%s: S5K3H2Y_IOCTL_SET_COARSE_TIME\n", __func__);
+	case S5K3H2YX_IOCTL_SET_COARSE_TIME:
+		pr_debug("%s: S5K3H2YX_IOCTL_SET_COARSE_TIME\n", __func__);
 		exposure_coarse_time = arg; //HTC_Steven
 		mutex_lock(&info->camera_lock);
-		ret = s5k3h2y_set_coarse_time(info, (u32)arg);
+		ret = s5k3h2yx_set_coarse_time(info, (u32)arg);
 		mutex_unlock(&info->camera_lock);
 		return ret;
-	case S5K3H2Y_IOCTL_SET_GAIN:
-		pr_debug("%s: S5K3H2Y_IOCTL_SET_GAIN\n", __func__);
+	case S5K3H2YX_IOCTL_SET_GAIN:
+		pr_debug("%s: S5K3H2YX_IOCTL_SET_GAIN\n", __func__);
 		exposure_gain = arg; //HTC_Steven
 		mutex_lock(&info->camera_lock);
-		ret = s5k3h2y_set_gain(info, (u16)arg);
+		ret = s5k3h2yx_set_gain(info, (u16)arg);
 		mutex_unlock(&info->camera_lock);
 		return ret;
-	case S5K3H2Y_IOCTL_GET_STATUS:
+	case S5K3H2YX_IOCTL_GET_STATUS:
 	{
 		u16 status = 0;
-		pr_debug("%s: S5K3H2Y_IOCTL_GET_STATUS\n", __func__);
+		pr_debug("%s: S5K3H2YX_IOCTL_GET_STATUS\n", __func__);
 		if (copy_to_user((void __user *)arg, &status,
 				 2)) {
 			pr_info("%s %d\n", __func__, __LINE__);
@@ -1213,54 +1237,95 @@ static long s5k3h2y_ioctl(struct file *file,
 		}
 		return 0;
 	}
-	case S5K3H2Y_IOCTL_SET_GROUP_HOLD:
+	case S5K3H2YX_IOCTL_SET_GROUP_HOLD:
 	{
-		struct s5k3h2y_ae ae;
+		struct s5k3h2yx_ae ae;
 		if (copy_from_user(&ae,
 				(const void __user *)arg,
-				sizeof(struct s5k3h2y_ae))) {
+				sizeof(struct s5k3h2yx_ae))) {
 			pr_info("%s %d\n", __func__, __LINE__);
 			return -EFAULT;
 		}
-		pr_debug("%s: S5K3H2Y_IOCTL_SET_GROUP_HOLD\n", __func__);
+		pr_debug("%s: S5K3H2YX_IOCTL_SET_GROUP_HOLD\n", __func__);
 		mutex_lock(&info->camera_lock);
-		ret = s5k3h2y_set_group_hold(info, &ae);
+		ret = s5k3h2yx_set_group_hold(info, &ae);
 		mutex_unlock(&info->camera_lock);
 		return ret;
 	}
 #if 0
-	case S5K3H2Y_IOCTL_TEST_PATTERN:
+	case S5K3H2YX_IOCTL_TEST_PATTERN:
 	{
-		err = s5k3h2y_test_pattern(info, (enum s5k3h2y_test_pattern) arg);
+		err = s5k3h2yx_test_pattern(info, (enum s5k3h2yx_test_pattern) arg);
 		if (err)
 			pr_err("%s %d %d\n", __func__, __LINE__, err);
 		return err;
 	}
 #endif
+	case S5K3H2YX_IOCTL_GET_INIT_STATE:
+	{
+		struct s5k3h2yx_init_state init_state;
+		init_state.use_rawchip = info->pdata->use_rawchip;
+		if (copy_to_user((void __user *)arg, &init_state,
+					sizeof(struct s5k3h2yx_init_state))) {
+			pr_info("[CAM] %s %d\n", __func__, __LINE__);
+			return -EFAULT;
+		}
+		return 0;
+	}
+	case S5K3H2YX_IOCTL_RESET_RAWCHIP:
+	{
+		pr_info("%s: S5K3H2YX_IOCTL_RESET_RAWCHIP\n", __func__);
+
+		mutex_lock(&info->camera_lock);
+		tegra_rawchip_block_iotcl(TRUE);
+
+		/*sensor stream off*/
+		ret = s5k3h2yx_write_table(info->i2c_client, reset_seq, NULL, 0);
+		if (ret)
+			pr_err("[CAM]set sensor stream off failed!!!");
+
+		/*Delay one frame time : worse case is 66ms(15FPS)*/
+		mdelay(60);
+		Reset_Yushan();
+		mdelay(10);
+
+		/*stream on*/
+		ret = s5k3h2yx_write_table(info->i2c_client, mode_end, NULL, 0);
+		if (ret)
+			pr_err("[CAM]set sensor stream on failed!!!");
+
+		tegra_rawchip_block_iotcl(FALSE);
+		mutex_unlock(&info->camera_lock);
+		return ret;
+	}
+
 	default:
 		return -EINVAL;
 	}
 	return 0;
 }
 
-static int s5k3h2y_open(struct inode *inode, struct file *file)
+static int s5k3h2yx_open(struct inode *inode, struct file *file)
 {
-	pr_info("%s ++\n", __func__);
+	pr_info("[CAM] %s ++\n", __func__);
 	/* pr_info(KERN_INFO "START_TIME: Entering %s", __func__); */
 	file->private_data = info;
 
 	info->power_state = false;
 	// If mode is NULL, set_mode will be executed.
+	info->mode = 0;
 	schedule_work(&info->set_mode_work);
-	//s5k3h2y_get_status(info, &status);
+	//s5k3h2yx_get_status(info, &status);
 	/* pr_info(KERN_INFO "START_TIME: Leaving %s", __func__); */
 	pr_info("%s --\n", __func__);
 	return 0;
 }
 
-int s5k3h2y_release(struct inode *inode, struct file *file)
+int s5k3h2yx_release(struct inode *inode, struct file *file)
 {
 	pr_info("%s ++\n", __func__);
+	if ( info->pdata->use_rawchip )
+		rawchip_release();
 	if (info->pdata && info->pdata->power_off)
 		info->pdata->power_off();
 	file->private_data = NULL;
@@ -1272,23 +1337,23 @@ int s5k3h2y_release(struct inode *inode, struct file *file)
 }
 
 
-static const struct file_operations s5k3h2y_fileops = {
+static const struct file_operations s5k3h2yx_fileops = {
 	.owner = THIS_MODULE,
-	.open = s5k3h2y_open,
-	.unlocked_ioctl = s5k3h2y_ioctl,
-	.release = s5k3h2y_release,
+	.open = s5k3h2yx_open,
+	.unlocked_ioctl = s5k3h2yx_ioctl,
+	.release = s5k3h2yx_release,
 };
 
-static struct miscdevice s5k3h2y_device = {
+static struct miscdevice s5k3h2yx_device = {
 	.minor = MISC_DYNAMIC_MINOR,
 	.name = "s5k3h2y",
-	.fops = &s5k3h2y_fileops,
+	.fops = &s5k3h2yx_fileops,
 };
 
 /* HTC START */
-static const char *S5K3H2YVendor = "samsung";
-static const char *S5K3H2YNAME = "s5k3h2y";
-static const char *S5K3H2YSize = "8M";
+static const char *S5K3H2YXVendor = "samsung";
+static const char *S5K3H2YXNAME = "s5k3h2y";
+static const char *S5K3H2YXSize = "8M";
 static uint32_t htcwc_value;
 
 static ssize_t sensor_vendor_show(struct device *dev,
@@ -1296,7 +1361,7 @@ static ssize_t sensor_vendor_show(struct device *dev,
 {
 	ssize_t ret = 0;
 
-	sprintf(buf, "%s %s %s\n", S5K3H2YVendor, S5K3H2YNAME, S5K3H2YSize);
+	sprintf(buf, "%s %s %s\n", S5K3H2YXVendor, S5K3H2YXNAME, S5K3H2YXSize);
 	ret = strlen(buf) + 1;
 
 	return ret;
@@ -1314,6 +1379,16 @@ static ssize_t htcwc_set(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
 	uint32_t tmp = 0;
+
+	if (!strncmp(buf, "dxo on", 6)) {
+		info->pdata->use_rawchip = RAWCHIP_ENABLE;
+	        pr_info("[CAM] rawchip DxO turned ON\n");
+		return count;
+	} else if (!strncmp(buf, "dxo off", 7)) {
+		info->pdata->use_rawchip = RAWCHIP_MIPI_BYPASS;
+		pr_info("[CAM] rawchip DxO turned OFF\n");
+		return count;
+	}
 
 	tmp = buf[0] - 0x30; /* only get the first char */
 
@@ -1342,37 +1417,37 @@ static DEVICE_ATTR(sensor, 0444, sensor_vendor_show, NULL);
 static DEVICE_ATTR(htcwc, 0664, htcwc_get, htcwc_set);
 static DEVICE_ATTR(node, 0444, sensor_read_node, NULL);
 
-static struct kobject *android_s5k3h2y;
+static struct kobject *android_s5k3h2yx;
 
-static int s5k3h2y_sysfs_init(void)
+static int s5k3h2yx_sysfs_init(void)
 {
 	int ret ;
 	pr_info("[CAM] %s: kobject creat and add\n", __func__);
-	android_s5k3h2y = kobject_create_and_add("android_camera", NULL);
-	if (android_s5k3h2y == NULL) {
+	android_s5k3h2yx = kobject_create_and_add("android_camera", NULL);
+	if (android_s5k3h2yx == NULL) {
 		pr_info("[CAM] %s: subsystem_register " \
 		"failed\n", __func__);
 		ret = -ENOMEM;
 		return ret ;
 	}
 	pr_info("[CAM] %s:sysfs_create_file\n", __func__);
-	ret = sysfs_create_file(android_s5k3h2y, &dev_attr_sensor.attr);
+	ret = sysfs_create_file(android_s5k3h2yx, &dev_attr_sensor.attr);
 	if (ret) {
 		pr_info("[CAM] %s: sysfs_create_file " \
 		"failed\n", __func__);
-		kobject_del(android_s5k3h2y);
+		kobject_del(android_s5k3h2yx);
 	}
 
-	ret = sysfs_create_file(android_s5k3h2y, &dev_attr_htcwc.attr);
+	ret = sysfs_create_file(android_s5k3h2yx, &dev_attr_htcwc.attr);
 	if (ret) {
 		pr_info("[CAM] %s: sysfs_create_file htcwc failed\n", __func__);
-		kobject_del(android_s5k3h2y);
+		kobject_del(android_s5k3h2yx);
 	}
 
-       ret = sysfs_create_file(android_s5k3h2y, &dev_attr_node.attr);
+       ret = sysfs_create_file(android_s5k3h2yx, &dev_attr_node.attr);
 	if (ret) {
 		pr_info("[CAM] %s: dev_attr_node failed\n", __func__);
-		kobject_del(android_s5k3h2y);
+		kobject_del(android_s5k3h2yx);
 	}
 
 	return 0 ;
@@ -1761,13 +1836,13 @@ static int s5k3h2y_probe(struct i2c_client *client,
 	int err;
 	pr_info("%s: probing sensor.\n", __func__);
 
-	info = kzalloc(sizeof(struct s5k3h2y_info), GFP_KERNEL);
+	info = kzalloc(sizeof(struct s5k3h2yx_info), GFP_KERNEL);
 	if (!info) {
 		pr_err("s5k3h2y: Unable to allocate memory!\n");
 		return -ENOMEM;
 	}
 
-	err = misc_register(&s5k3h2y_device);
+	err = misc_register(&s5k3h2yx_device);
 	if (err) {
 		pr_err("s5k3h2y: Unable to register misc device!\n");
 		kfree(info);
@@ -1783,11 +1858,11 @@ static int s5k3h2y_probe(struct i2c_client *client,
 	mutex_init(&info->camera_lock);
 
 	/* HTC START */
-	s5k3h2y_sysfs_init();
+	s5k3h2yx_sysfs_init();
 	camera_led_sysfs_init();
 	/* HTC END */
 
-	s5k3h2_i2c_client = client;
+	s5k3h2yx_i2c_client = client;
 	return 0;
 }
 
@@ -1795,7 +1870,7 @@ static int s5k3h2y_remove(struct i2c_client *client)
 {
 	struct s5k3h2y_info *info;
 	info = i2c_get_clientdata(client);
-	misc_deregister(&s5k3h2y_device);
+	misc_deregister(&s5k3h2yx_device);
 	kfree(info);
 	return 0;
 }
@@ -1830,5 +1905,3 @@ static void __exit s5k3h2y_exit(void)
 
 module_init(s5k3h2y_init);
 module_exit(s5k3h2y_exit);
-
-	

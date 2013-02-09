@@ -143,14 +143,13 @@ static int hs_pmic_remote_adc(int *adc)
 	{
 		adc_channel = 6;
 	}
-	else if ((hi->pdata.eng_cfg == HS_EDE_U) || (hi->pdata.eng_cfg == HS_EDE_TD))
+	else if ((hi->pdata.eng_cfg == HS_EDE_U) || (hi->pdata.eng_cfg == HS_EDE_TD) || (hi->pdata.eng_cfg == HS_ENRC2_U_XB))
 	{
 		adc_channel = 4;
 	}
 	else
 	{
-		HS_LOG("Unknown adc channel");
-		return 0;
+		adc_channel = 4;
 	}
 
 	ret = tps80032_adc_select_and_read(&result, adc_channel);
@@ -389,6 +388,7 @@ static int htc_headset_pmic_probe(struct platform_device *pdev)
 	if (!hi)
 		return -ENOMEM;
 
+	HS_LOG("+++assign platform data +");
 	hi->pdata.eng_cfg = pdata->eng_cfg;
 	hi->pdata.driver_flag = pdata->driver_flag;
 	hi->pdata.hpin_gpio = pdata->hpin_gpio;
@@ -403,6 +403,7 @@ static int htc_headset_pmic_probe(struct platform_device *pdev)
 	if (!hi->pdata.adc_mic)
 		hi->pdata.adc_mic = HS_DEF_MIC_ADC_12_BIT_MIN;
 
+	HS_LOG("+++assign platform data ++");
 	if (pdata->adc_mic_bias[0] && pdata->adc_mic_bias[1]) {
 		memcpy(hi->pdata.adc_mic_bias, pdata->adc_mic_bias,
 		       sizeof(hi->pdata.adc_mic_bias));
@@ -412,10 +413,12 @@ static int htc_headset_pmic_probe(struct platform_device *pdev)
 		hi->pdata.adc_mic_bias[1] = HS_DEF_MIC_ADC_12_BIT_MAX;
 	}
 
+	HS_LOG("+++assign platform data +++");
 	if (pdata->adc_remote[5])
 		memcpy(hi->pdata.adc_remote, pdata->adc_remote,
 		       sizeof(hi->pdata.adc_remote));
 
+	HS_LOG("+++assign platform data ++++");
 	if (pdata->adc_metrico[0] && pdata->adc_metrico[1])
 		memcpy(hi->pdata.adc_metrico, pdata->adc_metrico,
 		       sizeof(hi->pdata.adc_metrico));
@@ -424,16 +427,22 @@ static int htc_headset_pmic_probe(struct platform_device *pdev)
 	hi->hpin_debounce = HS_JIFFIES_ZERO;
 	hi->key_irq_type = IRQF_TRIGGER_LOW;
 
+	HS_LOG("+++init wakelock +");
 	wake_lock_init(&hi->hs_wake_lock, WAKE_LOCK_SUSPEND, DRIVER_NAME);
+	HS_LOG("+++init wakelock -");
 
+	HS_LOG("+++create workqueue a+");
 	detect_wq = create_workqueue("HS_PMIC_DETECT");
+	HS_LOG("+++create workqueue a-");
 	if (detect_wq  == NULL) {
 		ret = -ENOMEM;
 		HS_ERR("Failed to create detect workqueue");
 		goto err_create_detect_work_queue;
 	}
 
+	HS_LOG("+++create workqueue b+");
 	button_wq = create_workqueue("HS_PMIC_BUTTON");
+	HS_LOG("+++create workqueue b-");
 	if (button_wq == NULL) {
 		ret = -ENOMEM;
 		HS_ERR("Failed to create button workqueue");
@@ -441,9 +450,11 @@ static int htc_headset_pmic_probe(struct platform_device *pdev)
 	}
 
 	if (hi->pdata.hpin_gpio) {
+		HS_LOG("+++hs_pmic_request_irq+");
 		ret = hs_pmic_request_irq(hi->pdata.hpin_gpio,
 				&hi->pdata.hpin_irq, detect_irq_handler,
 				hi->hpin_irq_type, "HS_PMIC_DETECT", 1);
+		HS_LOG("+++hs_pmic_request_irq-");
 		if (ret < 0) {
 			HS_ERR("Failed to request PMIC HPIN IRQ (0x%X)", ret);
 			goto err_request_detect_irq;
@@ -451,9 +462,11 @@ static int htc_headset_pmic_probe(struct platform_device *pdev)
 	}
 
 	if (hi->pdata.key_gpio) {
+		HS_LOG("+++hs_pmic_request_irq+");
 		ret = hs_pmic_request_irq(hi->pdata.key_gpio,
 				&hi->pdata.key_irq, button_irq_handler,
 				hi->key_irq_type, "HS_PMIC_BUTTON", 1);
+		HS_LOG("+++hs_pmic_request_irq-");
 		if (ret < 0) {
 			HS_ERR("Failed to request PMIC button IRQ (0x%X)", ret);
 			goto err_request_button_irq;
@@ -502,7 +515,9 @@ static int htc_headset_pmic_probe(struct platform_device *pdev)
 	}
 #endif
 
+	HS_LOG("+++hs_pmic_register+");
 	hs_pmic_register();
+	HS_LOG("+++hs_pmic_register-");
 	hs_notify_driver_ready(DRIVER_NAME);
 
 	HS_LOG("--------------------");
@@ -562,6 +577,8 @@ static struct platform_driver htc_headset_pmic_driver = {
 
 static int __init htc_headset_pmic_init(void)
 {
+	if (board_mfg_mode() == BOARD_MFG_MODE_OFFMODE_CHARGING)
+		return 0;
 	HS_LOG("INIT");
 	return platform_driver_register(&htc_headset_pmic_driver);
 }

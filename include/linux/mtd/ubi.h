@@ -21,7 +21,7 @@
 #ifndef __LINUX_UBI_H__
 #define __LINUX_UBI_H__
 
-#include <asm/ioctl.h>
+#include <linux/ioctl.h>
 #include <linux/types.h>
 #include <mtd/ubi-user.h>
 
@@ -87,7 +87,7 @@ enum {
  * physical eraseblock size and on how much bytes UBI headers consume. But
  * because of the volume alignment (@alignment), the usable size of logical
  * eraseblocks if a volume may be less. The following equation is true:
- * 	@usable_leb_size = LEB size - (LEB size mod @alignment),
+ *	@usable_leb_size = LEB size - (LEB size mod @alignment),
  * where LEB size is the logical eraseblock size defined by the UBI device.
  *
  * The alignment is multiple to the minimal flash input/output unit size or %1
@@ -155,12 +155,14 @@ struct ubi_device_info {
 };
 
 /*
- * enum - volume notification types.
- * @UBI_VOLUME_ADDED: volume has been added
- * @UBI_VOLUME_REMOVED: start volume volume
- * @UBI_VOLUME_RESIZED: volume size has been re-sized
- * @UBI_VOLUME_RENAMED: volume name has been re-named
- * @UBI_VOLUME_UPDATED: volume name has been updated
+ * Volume notification types.
+ * @UBI_VOLUME_ADDED: a volume has been added (an UBI device was attached or a
+ *                    volume was created)
+ * @UBI_VOLUME_REMOVED: a volume has been removed (an UBI device was detached
+ *			or a volume was removed)
+ * @UBI_VOLUME_RESIZED: a volume has been re-sized
+ * @UBI_VOLUME_RENAMED: a volume has been re-named
+ * @UBI_VOLUME_UPDATED: data has been written to a volume
  *
  * These constants define which type of event has happened when a volume
  * notification function is invoked.

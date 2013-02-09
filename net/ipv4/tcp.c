@@ -1003,7 +1003,8 @@ new_segment:
 				/* We have some space in skb head. Superb! */
 				if (copy > skb_tailroom(skb))
 					copy = skb_tailroom(skb);
-				if ((err = skb_add_data(skb, from, copy)) != 0)
+				err = skb_add_data_nocache(sk, skb, from, copy);
+				if (err)
 					goto do_fault;
 			} else {
 				int merge = 0;
@@ -1046,8 +1047,8 @@ new_segment:
 
 				/* Time to copy data. We are close to
 				 * the end! */
-				err = skb_copy_to_page(sk, from, skb, page,
-						       off, copy);
+				err = skb_copy_to_page_nocache(sk, from, skb,
+							       page, off, copy);
 				if (err) {
 					/* If this page was new, give it to the
 					 * socket so it does not get leaked.
@@ -1797,9 +1798,20 @@ recv_urg:
 }
 EXPORT_SYMBOL(tcp_recvmsg);
 
+#ifdef CONFIG_HTC_TCP_SYN_FAIL
+EXPORT_SYMBOL(sysctl_tcp_syn_fail);
+__be32 sysctl_tcp_syn_fail=0;
+#endif /* CONFIG_HTC_TCP_SYN_FAIL */
+
 void tcp_set_state(struct sock *sk, int state)
 {
 	int oldstate = sk->sk_state;
+
+#ifdef CONFIG_HTC_TCP_SYN_FAIL
+    struct inet_sock *inet;
+    struct inet_connection_sock *icsk = inet_csk(sk);
+    __be32 dst = icsk->icsk_inet.inet_daddr;
+#endif /* CONFIG_HTC_TCP_SYN_FAIL */
 
 	switch (state) {
 	case TCP_ESTABLISHED:
@@ -1815,6 +1827,19 @@ void tcp_set_state(struct sock *sk, int state)
 		if (inet_csk(sk)->icsk_bind_hash &&
 		    !(sk->sk_userlocks & SOCK_BINDPORT_LOCK))
 			inet_put_port(sk);
+
+#ifdef CONFIG_HTC_TCP_SYN_FAIL
+        	if (sk!=NULL) {
+	            inet = inet_sk(sk);
+        	    if (inet !=NULL && ntohs(inet->inet_sport) != 0 ) {
+        	        if ( dst != 0x0100007F && sk->sk_state== TCP_SYN_SENT && icsk->icsk_retransmits >= 2 ) {
+        	            printk(KERN_INFO "[NET][SMD] TCP SYN SENT fail, dst=%x, retransmit=%d \n",dst,icsk->icsk_retransmits);
+        	            sysctl_tcp_syn_fail = dst;
+        	        }
+        	    }
+        	}
+#endif /* CONFIG_HTC_TCP_SYN_FAIL */
+
 		/* fall through */
 	default:
 		if (oldstate == TCP_ESTABLISHED)
@@ -1916,7 +1941,9 @@ void tcp_close(struct sock *sk, long timeout)
 		u32 len = TCP_SKB_CB(skb)->end_seq - TCP_SKB_CB(skb)->seq -
 			  tcp_hdr(skb)->fin;
 		data_was_unread += len;
-		__kfree_skb(skb);
+
+		if ((skb) && (!IS_ERR(skb)))
+		  __kfree_skb(skb);
 	}
 
 	sk_mem_reclaim(sk);
@@ -3234,7 +3261,7 @@ __setup("thash_entries=", set_thash_entries);
 void __init tcp_init(void)
 {
 	struct sk_buff *skb = NULL;
-	unsigned long nr_pages, limit;
+	unsigned long limit;
 	int i, max_share, cnt;
 	unsigned long jiffy = jiffies;
 
@@ -3291,13 +3318,7 @@ void __init tcp_init(void)
 	sysctl_tcp_max_orphans = cnt / 2;
 	sysctl_max_syn_backlog = max(128, cnt / 256);
 
-	/* Set the pressure threshold to be a fraction of global memory that
-	 * is up to 1/2 at 256 MB, decreasing toward zero with the amount of
-	 * memory, with a floor of 128 pages.
-	 */
-	nr_pages = totalram_pages - totalhigh_pages;
-	limit = min(nr_pages, 1UL<<(28-PAGE_SHIFT)) >> (20-PAGE_SHIFT);
-	limit = (limit * (nr_pages >> (20-PAGE_SHIFT))) >> (PAGE_SHIFT-11);
+	limit = nr_free_buffer_pages() / 8;
 	limit = max(limit, 128UL);
 	sysctl_tcp_mem[0] = limit / 4 * 3;
 	sysctl_tcp_mem[1] = limit;

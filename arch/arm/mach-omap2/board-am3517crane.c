@@ -45,8 +45,6 @@ static struct omap_board_config_kernel am3517_crane_config[] __initdata = {
 static struct omap_board_mux board_mux[] __initdata = {
 	{ .reg_offset = OMAP_MUX_TERMINATOR },
 };
-#else
-#define board_mux	NULL
 #endif
 
 static void __init am3517_crane_init_early(void)
@@ -89,16 +87,10 @@ static void __init am3517_crane_init(void)
 		return;
 	}
 
-	ret = gpio_request(GPIO_USB_POWER, "usb_ehci_enable");
+	ret = gpio_request_one(GPIO_USB_POWER, GPIOF_OUT_INIT_HIGH,
+			       "usb_ehci_enable");
 	if (ret < 0) {
 		pr_err("Can not request GPIO %d\n", GPIO_USB_POWER);
-		return;
-	}
-
-	ret = gpio_direction_output(GPIO_USB_POWER, 1);
-	if (ret < 0) {
-		gpio_free(GPIO_USB_POWER);
-		pr_err("Unable to initialize EHCI power\n");
 		return;
 	}
 
@@ -110,7 +102,7 @@ MACHINE_START(CRANEBOARD, "AM3517/05 CRANEBOARD")
 	.reserve	= omap_reserve,
 	.map_io		= omap3_map_io,
 	.init_early	= am3517_crane_init_early,
-	.init_irq	= omap_init_irq,
+	.init_irq	= omap3_init_irq,
 	.init_machine	= am3517_crane_init,
-	.timer		= &omap_timer,
+	.timer		= &omap3_timer,
 MACHINE_END

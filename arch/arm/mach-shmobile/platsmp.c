@@ -16,6 +16,7 @@
 #include <linux/device.h>
 #include <linux/smp.h>
 #include <linux/io.h>
+#include <asm/hardware/gic.h>
 #include <asm/localtimer.h>
 #include <asm/mach-types.h>
 #include <mach/common.h>
@@ -55,16 +56,19 @@ void __init smp_init_cpus(void)
 	unsigned int ncores = shmobile_smp_get_core_count();
 	unsigned int i;
 
+	if (ncores > nr_cpu_ids) {
+		pr_warn("SMP: %u cores greater than maximum (%u), clipping\n",
+			ncores, nr_cpu_ids);
+		ncores = nr_cpu_ids;
+	}
+
 	for (i = 0; i < ncores; i++)
 		set_cpu_possible(i, true);
+
+	set_smp_cross_call(gic_raise_softirq);
 }
 
 void __init platform_smp_prepare_cpus(unsigned int max_cpus)
 {
-	int i;
-
-	for (i = 0; i < max_cpus; i++)
-		set_cpu_present(i, true);
-
 	shmobile_smp_prepare_cpus();
 }

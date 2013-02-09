@@ -36,12 +36,14 @@ int tegra_cpu_process_id(void);
 int tegra_core_process_id(void);
 int tegra_soc_speedo_id(void);
 void tegra_init_speedo_data(void);
+int tegra_get_age(void);
 
 #ifndef CONFIG_ARCH_TEGRA_2x_SOC
 int tegra_package_id(void);
 int tegra_cpu_speedo_id(void);
 int tegra_cpu_speedo_mv(void);
 int tegra_core_speedo_mv(void);
+int tegra_get_sku_override(void);
 #else
 static inline int tegra_package_id(void) { return -1; }
 static inline int tegra_cpu_speedo_id(void) { return 0; }

@@ -527,15 +527,6 @@ config USB_SERIAL_SAFE_PADDED
 	bool "USB Secure Encapsulated Driver - Padded"
 	depends on USB_SERIAL_SAFE
 
-config USB_SERIAL_SAMBA
-	tristate "USB Atmel SAM Boot Assistant (SAM-BA) driver"
-	help
-	  Say Y here if you want to access the SAM-BA boot application of an
-	  Atmel AT91SAM device.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called sam-ba.
-
 config USB_SERIAL_SIEMENS_MPI
 	tristate "USB Siemens MPI driver"
 	help
@@ -682,13 +673,5 @@ config USB_SERIAL_BASEBAND
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called baseband_chr.
-
-config USB_STE6718_MODEM
-       bool "STE6718 USB IPC modem driver"
-       depends on USB_SERIAL=y
-       default n
-       ---help---
-         Say Y here if you want to enable the AP/BP USB IPC link
-         driver for AP30 with STE6718 modem.
 
 endif # USB_SERIAL

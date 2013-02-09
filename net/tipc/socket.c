@@ -36,9 +36,6 @@
 
 #include <net/sock.h>
 
-#include <linux/tipc.h>
-#include <linux/tipc_config.h>
-
 #include "core.h"
 #include "port.h"
 
@@ -535,6 +532,9 @@ static int send_msg(struct kiocb *iocb, struct socket *sock,
 	if (unlikely((m->msg_namelen < sizeof(*dest)) ||
 		     (dest->family != AF_TIPC)))
 		return -EINVAL;
+	if ((total_len > TIPC_MAX_USER_MSG_SIZE) ||
+	    (m->msg_iovlen > (unsigned)INT_MAX))
+		return -EMSGSIZE;
 
 	if (iocb)
 		lock_sock(sk);
@@ -573,12 +573,14 @@ static int send_msg(struct kiocb *iocb, struct socket *sock,
 					     &dest->addr.name.name,
 					     dest->addr.name.domain,
 					     m->msg_iovlen,
-					     m->msg_iov);
+					     m->msg_iov,
+					     total_len);
 		} else if (dest->addrtype == TIPC_ADDR_ID) {
 			res = tipc_send2port(tport->ref,
 					     &dest->addr.id,
 					     m->msg_iovlen,
-					     m->msg_iov);
+					     m->msg_iov,
+					     total_len);
 		} else if (dest->addrtype == TIPC_ADDR_MCAST) {
 			if (needs_conn) {
 				res = -EOPNOTSUPP;
@@ -590,7 +592,8 @@ static int send_msg(struct kiocb *iocb, struct socket *sock,
 			res = tipc_multicast(tport->ref,
 					     &dest->addr.nameseq,
 					     m->msg_iovlen,
-					     m->msg_iov);
+					     m->msg_iov,
+					     total_len);
 		}
 		if (likely(res != -ELINKCONG)) {
 			if (needs_conn && (res >= 0))
@@ -640,6 +643,10 @@ static int send_packet(struct kiocb *iocb, struct socket *sock,
 	if (unlikely(dest))
 		return send_msg(iocb, sock, m, total_len);
 
+	if ((total_len > TIPC_MAX_USER_MSG_SIZE) ||
+	    (m->msg_iovlen > (unsigned)INT_MAX))
+		return -EMSGSIZE;
+
 	if (iocb)
 		lock_sock(sk);
 
@@ -652,7 +659,8 @@ static int send_packet(struct kiocb *iocb, struct socket *sock,
 			break;
 		}
 
-		res = tipc_send(tport->ref, m->msg_iovlen, m->msg_iov);
+		res = tipc_send(tport->ref, m->msg_iovlen, m->msg_iov,
+				total_len);
 		if (likely(res != -ELINKCONG))
 			break;
 		if (m->msg_flags & MSG_DONTWAIT) {
@@ -723,6 +731,12 @@ static int send_stream(struct kiocb *iocb, struct socket *sock,
 		goto exit;
 	}
 
+	if ((total_len > (unsigned)INT_MAX) ||
+	    (m->msg_iovlen > (unsigned)INT_MAX)) {
+		res = -EMSGSIZE;
+		goto exit;
+	}
+
 	/*
 	 * Send each iovec entry using one or more messages
 	 *
@@ -753,7 +767,7 @@ static int send_stream(struct kiocb *iocb, struct socket *sock,
 				bytes_to_send = curr_left;
 			my_iov.iov_base = curr_start;
 			my_iov.iov_len = bytes_to_send;
-			res = send_packet(NULL, sock, &my_msg, 0);
+			res = send_packet(NULL, sock, &my_msg, bytes_to_send);
 			if (res < 0) {
 				if (bytes_sent)
 					res = bytes_sent;

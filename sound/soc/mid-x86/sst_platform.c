@@ -249,10 +249,13 @@ static int sst_platform_open(struct snd_pcm_substream *substream)
 		return -ENOMEM;
 	}
 	stream->sstdrv_ops->vendor_id = MSIC_VENDOR_ID;
+	stream->sstdrv_ops->module_name = SST_CARD_NAMES;
 	/* registering with SST driver to get access to SST APIs to use */
 	ret_val = register_sst_card(stream->sstdrv_ops);
 	if (ret_val) {
 		pr_err("sst: sst card registration failed\n");
+		kfree(stream->sstdrv_ops);
+		kfree(stream);
 		return ret_val;
 	}
 	runtime->private_data = stream;
@@ -270,6 +273,7 @@ static int sst_platform_close(struct snd_pcm_substream *substream)
 	str_id = stream->stream_info.str_id;
 	if (str_id)
 		ret_val = stream->sstdrv_ops->pcm_control->close(str_id);
+	unregister_sst_card(stream->sstdrv_ops);
 	kfree(stream->sstdrv_ops);
 	kfree(stream);
 	return ret_val;
@@ -398,9 +402,10 @@ static void sst_pcm_free(struct snd_pcm *pcm)
 	snd_pcm_lib_preallocate_free_for_all(pcm);
 }
 
-int sst_pcm_new(struct snd_card *card, struct snd_soc_dai *dai,
-			struct snd_pcm *pcm)
+int sst_pcm_new(struct snd_soc_pcm_runtime *rtd)
 {
+	struct snd_soc_dai *dai = rtd->cpu_dai;
+	struct snd_pcm *pcm = rtd->pcm;
 	int retval = 0;
 
 	pr_debug("sst_pcm_new called\n");

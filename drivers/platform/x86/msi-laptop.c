@@ -135,7 +135,7 @@ static int set_lcd_level(int level)
 	buf[1] = (u8) (level*31);
 
 	return ec_transaction(MSI_EC_COMMAND_LCD_LEVEL, buf, sizeof(buf),
-			      NULL, 0, 1);
+			      NULL, 0);
 }
 
 static int get_lcd_level(void)
@@ -144,7 +144,7 @@ static int get_lcd_level(void)
 	int result;
 
 	result = ec_transaction(MSI_EC_COMMAND_LCD_LEVEL, &wdata, 1,
-				&rdata, 1, 1);
+				&rdata, 1);
 	if (result < 0)
 		return result;
 
@@ -157,7 +157,7 @@ static int get_auto_brightness(void)
 	int result;
 
 	result = ec_transaction(MSI_EC_COMMAND_LCD_LEVEL, &wdata, 1,
-				&rdata, 1, 1);
+				&rdata, 1);
 	if (result < 0)
 		return result;
 
@@ -172,7 +172,7 @@ static int set_auto_brightness(int enable)
 	wdata[0] = 4;
 
 	result = ec_transaction(MSI_EC_COMMAND_LCD_LEVEL, wdata, 1,
-				&rdata, 1, 1);
+				&rdata, 1);
 	if (result < 0)
 		return result;
 
@@ -180,7 +180,7 @@ static int set_auto_brightness(int enable)
 	wdata[1] = (rdata & 0xF7) | (enable ? 8 : 0);
 
 	return ec_transaction(MSI_EC_COMMAND_LCD_LEVEL, wdata, 2,
-			      NULL, 0, 1);
+			      NULL, 0);
 }
 
 static ssize_t set_device_state(const char *buf, size_t count, u8 mask)
@@ -217,7 +217,7 @@ static int get_wireless_state(int *wlan, int *bluetooth)
 	u8 wdata = 0, rdata;
 	int result;
 
-	result = ec_transaction(MSI_EC_COMMAND_WIRELESS, &wdata, 1, &rdata, 1, 1);
+	result = ec_transaction(MSI_EC_COMMAND_WIRELESS, &wdata, 1, &rdata, 1);
 	if (result < 0)
 		return -1;
 
@@ -447,7 +447,7 @@ static struct platform_device *msipf_device;
 
 static int dmi_check_cb(const struct dmi_system_id *id)
 {
-	pr_info("Identified laptop model '%s'.\n", id->ident);
+	pr_info("Identified laptop model '%s'\n", id->ident);
 	return 1;
 }
 
@@ -535,6 +535,15 @@ static struct dmi_system_id __initdata msi_load_scm_models_dmi_table[] = {
 			DMI_MATCH(DMI_SYS_VENDOR,
 				"Micro-Star International"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "CR620"),
+		},
+		.callback = dmi_check_cb
+	},
+	{
+		.ident = "MSI U270",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR,
+				"Micro-Star International Co., Ltd."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "U270 series"),
 		},
 		.callback = dmi_check_cb
 	},
@@ -800,7 +809,7 @@ static void msi_laptop_input_destroy(void)
 	input_unregister_device(msi_laptop_input_dev);
 }
 
-static int load_scm_model_init(struct platform_device *sdev)
+static int __init load_scm_model_init(struct platform_device *sdev)
 {
 	u8 data;
 	int result;
@@ -875,8 +884,7 @@ static int __init msi_init(void)
 	/* Register backlight stuff */
 
 	if (acpi_video_backlight_support()) {
-		pr_info("Brightness ignored, must be controlled "
-		       "by ACPI video driver\n");
+		pr_info("Brightness ignored, must be controlled by ACPI video driver\n");
 	} else {
 		struct backlight_properties props;
 		memset(&props, 0, sizeof(struct backlight_properties));
@@ -930,7 +938,7 @@ static int __init msi_init(void)
 	if (auto_brightness != 2)
 		set_auto_brightness(auto_brightness);
 
-	pr_info("driver "MSI_DRIVER_VERSION" successfully loaded.\n");
+	pr_info("driver " MSI_DRIVER_VERSION " successfully loaded\n");
 
 	return 0;
 
@@ -978,7 +986,7 @@ static void __exit msi_cleanup(void)
 	if (auto_brightness != 2)
 		set_auto_brightness(1);
 
-	pr_info("driver unloaded.\n");
+	pr_info("driver unloaded\n");
 }
 
 module_init(msi_init);
@@ -997,3 +1005,4 @@ MODULE_ALIAS("dmi:*:svnMICRO-STARINTERNATIONAL*:pnMS-N034:*");
 MODULE_ALIAS("dmi:*:svnMICRO-STARINTERNATIONAL*:pnMS-N051:*");
 MODULE_ALIAS("dmi:*:svnMICRO-STARINTERNATIONAL*:pnMS-N014:*");
 MODULE_ALIAS("dmi:*:svnMicro-StarInternational*:pnCR620:*");
+MODULE_ALIAS("dmi:*:svnMicro-StarInternational*:pnU270series:*");

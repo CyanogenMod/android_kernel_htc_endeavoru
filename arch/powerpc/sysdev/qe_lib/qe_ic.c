@@ -197,12 +197,10 @@ static inline struct qe_ic *qe_ic_from_irq_data(struct irq_data *d)
 	return irq_data_get_irq_chip_data(d);
 }
 
-#define virq_to_hw(virq)	((unsigned int)irq_map[virq].hwirq)
-
 static void qe_ic_unmask_irq(struct irq_data *d)
 {
 	struct qe_ic *qe_ic = qe_ic_from_irq_data(d);
-	unsigned int src = virq_to_hw(d->irq);
+	unsigned int src = irqd_to_hwirq(d);
 	unsigned long flags;
 	u32 temp;
 
@@ -218,7 +216,7 @@ static void qe_ic_unmask_irq(struct irq_data *d)
 static void qe_ic_mask_irq(struct irq_data *d)
 {
 	struct qe_ic *qe_ic = qe_ic_from_irq_data(d);
-	unsigned int src = virq_to_hw(d->irq);
+	unsigned int src = irqd_to_hwirq(d);
 	unsigned long flags;
 	u32 temp;
 
@@ -349,7 +347,7 @@ void __init qe_ic_init(struct device_node *node, unsigned int flags,
 		return;
 	}
 
-	qe_ic->regs = ioremap(res.start, res.end - res.start + 1);
+	qe_ic->regs = ioremap(res.start, resource_size(&res));
 
 	qe_ic->irqhost->host_data = qe_ic;
 	qe_ic->hc_irq = qe_ic_irq_chip;

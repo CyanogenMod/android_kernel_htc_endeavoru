@@ -20,7 +20,8 @@
 #include <linux/bma250.h>
 #include <asm/gpio.h>
 #include <linux/delay.h>
-#include<linux/earlysuspend.h>
+#include <linux/earlysuspend.h>
+#include <mach/mfootprint.h>
 
 /*#define EARLY_SUSPEND_BMA 1*/
 
@@ -280,7 +281,7 @@ static int BMA_set_mode(unsigned char mode)
 
 		switch (mode) {
 		case bma250_MODE_NORMAL:
-			if(bma250_chip)		
+			if(bma250_chip)
 				data1 = buffer[0] & 0x1F;
 			else
 				data1 = buffer[0] & 0x7F;
@@ -475,10 +476,12 @@ static long bma_ioctl(struct file *file, unsigned int cmd,
 
 static void bma250_early_suspend(struct early_suspend *handler)
 {
+	MF_DEBUG("00030000");
 	if (!atomic_read(&PhoneOn_flag))
 		BMA_set_mode(bma250_MODE_SUSPEND);
 	else
 		printk(KERN_DEBUG "bma250_early_suspend: PhoneOn_flag is set\n");
+	MF_DEBUG("00030001");
 }
 
 static void bma250_late_resume(struct early_suspend *handler)

@@ -27,11 +27,13 @@
 
 #include <mach/iomap.h>
 #include <mach/powergate.h>
+#include <mach/mfootprint.h>
 
 #include "pm.h"
 #include "clock.h"
 #include "reset.h"
 #include "sleep.h"
+#include "cpu-tegra.h"
 
 bool tegra_all_cpus_booted;
 
@@ -188,6 +190,7 @@ int boot_secondary(unsigned int cpu, struct task_struct *idle)
 {
 	int status;
 
+	MF_DEBUG("00UP0011");
 	/* Avoid timer calibration on slave cpus. Use the value calibrated
 	 * on master cpu. This reduces the bringup time for each slave cpu
 	 * by around 260ms.
@@ -196,28 +199,41 @@ int boot_secondary(unsigned int cpu, struct task_struct *idle)
 	if (is_lp_cluster()) {
 		struct clk *cpu_clk, *cpu_g_clk;
 
+		MF_DEBUG("00UP0012");
 		/* The G CPU may not be available for a variety of reasons. */
 		status = is_g_cluster_available(cpu);
 		if (status)
 			goto done;
 
+		MF_DEBUG("00UP0013");
 		cpu_clk = tegra_get_clock_by_name("cpu");
 		cpu_g_clk = tegra_get_clock_by_name("cpu_g");
 
+		MF_DEBUG("00UP0014");
 		/* Switch to G CPU before continuing. */
 		if (!cpu_clk || !cpu_g_clk) {
 			/* Early boot, clock infrastructure is not initialized
 			   - CPU mode switch is not allowed */
 			status = -EINVAL;
-		} else
+		} else {
+#ifdef CONFIG_CPU_FREQ
+			/* set cpu rate is within g-mode range before switch */
+			unsigned int speed = max(
+				(unsigned long)tegra_getspeed(0),
+				clk_get_min_rate(cpu_g_clk) / 1000);
+			tegra_update_cpu_speed(speed);
+#endif
 			status = clk_set_parent(cpu_clk, cpu_g_clk);
+		}
 
+		MF_DEBUG("00UP0015");
 		if (status)
 			goto done;
 	}
 
 	smp_wmb();
 
+	MF_DEBUG("00UP0016");
 	/* Force the CPU into reset. The CPU must remain in reset when the
 	   flow controller state is cleared (which will cause the flow
 	   controller to stop driving reset if the CPU has been power-gated
@@ -226,19 +242,23 @@ int boot_secondary(unsigned int cpu, struct task_struct *idle)
 	writel(CPU_RESET(cpu), CLK_RST_CONTROLLER_RST_CPU_CMPLX_SET);
 	dmb();
 
+	MF_DEBUG("00UP0017");
 	/* Unhalt the CPU. If the flow controller was used to power-gate the
 	   CPU this will cause the flow controller to stop driving reset.
 	   The CPU will remain in reset because the clock and reset block
 	   is now driving reset. */
 	flowctrl_writel(0, FLOW_CTRL_HALT_CPU(cpu));
 
+	MF_DEBUG("00UP0018");
 	status = power_up_cpu(cpu);
+	MF_DEBUG("00UP0019");
 	if (status)
 		goto done;
 
 	/* Take the CPU out of reset. */
 	writel(CPU_RESET(cpu), CLK_RST_CONTROLLER_RST_CPU_CMPLX_CLR);
 	wmb();
+	MF_DEBUG("00UP0020");
 done:
 	return status;
 }
@@ -252,14 +272,14 @@ void __init smp_init_cpus(void)
 	unsigned int ncores = available_cpus();
 	unsigned int i;
 
-	if (ncores > NR_CPUS) {
-		printk(KERN_ERR "Tegra: no. of cores (%u) greater than configured (%u), clipping\n",
-			ncores, NR_CPUS);
-		ncores = NR_CPUS;
+	if (ncores > nr_cpu_ids) {
+		pr_warn("SMP: %u cores greater than maximum (%u), clipping\n",
+			ncores, nr_cpu_ids);
+		ncores = nr_cpu_ids;
 	}
 
 	for (i = 0; i < ncores; i++)
-		cpu_set(i, cpu_possible_map);
+		set_cpu_possible(i, true);
 
 	/* If only one CPU is possible, platform_smp_prepare_cpus() will
 	   never get called. We must therefore initialize the reset handler
@@ -270,18 +290,12 @@ void __init smp_init_cpus(void)
 		tegra_cpu_reset_handler_init();
 		tegra_all_cpus_booted = true;
 	}
+
+	set_smp_cross_call(gic_raise_softirq);
 }
 
 void __init platform_smp_prepare_cpus(unsigned int max_cpus)
 {
-	int i;
-
-	/*
-	 * Initialise the present map, which describes the set of CPUs
-	 * actually populated at the present time.
-	 */
-	for (i = 0; i < max_cpus; i++)
-		set_cpu_present(i, true);
 
 	/* Always mark the boot CPU as initialized. */
 	cpumask_set_cpu(0, to_cpumask(tegra_cpu_init_bits));
@@ -293,5 +307,16 @@ void __init platform_smp_prepare_cpus(unsigned int max_cpus)
 	   smp_init_cpus() which also means that it did not initialize the
 	   reset handler. Do it now before the secondary CPUs are started. */
 	tegra_cpu_reset_handler_init();
+
+#if defined(CONFIG_HAVE_ARM_SCU)
+	{
+		u32 scu_ctrl = __raw_readl(scu_base) |
+				1 << 3 | /* Enable speculative line fill*/
+				1 << 5 | /* Enable IC standby */
+				1 << 6; /* Enable SCU standby */
+		if (!(scu_ctrl & 1))
+			__raw_writel(scu_ctrl, scu_base);
+	}
+#endif
 	scu_enable(scu_base);
 }

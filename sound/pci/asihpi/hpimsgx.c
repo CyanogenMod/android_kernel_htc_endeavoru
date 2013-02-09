@@ -16,7 +16,7 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
-Extended Message Function With Response Cacheing
+Extended Message Function With Response Caching
 
 (C) Copyright AudioScience Inc. 2002
 *****************************************************************************/
@@ -186,7 +186,6 @@ static void subsys_message(struct hpi_message *phm, struct hpi_response *phr,
 		/* Initialize this module's internal state */
 		hpios_msgxlock_init(&msgx_lock);
 		memset(&hpi_entry_points, 0, sizeof(hpi_entry_points));
-		hpios_locked_mem_init();
 		/* Init subsys_findadapters response to no-adapters */
 		HPIMSGX__reset(HPIMSGX_ALLADAPTERS);
 		hpi_init_response(phr, HPI_OBJ_SUBSYSTEM,
@@ -197,7 +196,6 @@ static void subsys_message(struct hpi_message *phm, struct hpi_response *phr,
 	case HPI_SUBSYS_DRIVER_UNLOAD:
 		HPI_COMMON(phm, phr);
 		HPIMSGX__cleanup(HPIMSGX_ALLADAPTERS, h_owner);
-		hpios_locked_mem_free_all();
 		hpi_init_response(phr, HPI_OBJ_SUBSYSTEM,
 			HPI_SUBSYS_DRIVER_UNLOAD, 0);
 		return;
@@ -211,24 +209,6 @@ static void subsys_message(struct hpi_message *phm, struct hpi_response *phr,
 		HPIMSGX__init(phm, phr);
 		break;
 
-	case HPI_SUBSYS_DELETE_ADAPTER:
-		HPIMSGX__cleanup(phm->obj_index, h_owner);
-		{
-			struct hpi_message hm;
-			struct hpi_response hr;
-			hpi_init_message_response(&hm, &hr, HPI_OBJ_ADAPTER,
-				HPI_ADAPTER_CLOSE);
-			hm.adapter_index = phm->obj_index;
-			hw_entry_point(&hm, &hr);
-		}
-		if ((phm->obj_index < HPI_MAX_ADAPTERS)
-			&& hpi_entry_points[phm->obj_index]) {
-			hpi_entry_points[phm->obj_index] (phm, phr);
-			hpi_entry_points[phm->obj_index] = NULL;
-		} else
-			phr->error = HPI_ERROR_INVALID_OBJ_INDEX;
-
-		break;
 	default:
 		/* Must explicitly handle every subsys message in this switch */
 		hpi_init_response(phr, HPI_OBJ_SUBSYSTEM, phm->function,
@@ -247,6 +227,19 @@ static void adapter_message(struct hpi_message *phm, struct hpi_response *phr,
 	case HPI_ADAPTER_CLOSE:
 		adapter_close(phm, phr);
 		break;
+	case HPI_ADAPTER_DELETE:
+		HPIMSGX__cleanup(phm->adapter_index, h_owner);
+		{
+			struct hpi_message hm;
+			struct hpi_response hr;
+			hpi_init_message_response(&hm, &hr, HPI_OBJ_ADAPTER,
+				HPI_ADAPTER_CLOSE);
+			hm.adapter_index = phm->adapter_index;
+			hw_entry_point(&hm, &hr);
+		}
+		hw_entry_point(phm, phr);
+		break;
+
 	default:
 		hw_entry_point(phm, phr);
 		break;
@@ -320,7 +313,7 @@ void hpi_send_recv_ex(struct hpi_message *phm, struct hpi_response *phr,
 {
 	HPI_DEBUG_MESSAGE(DEBUG, phm);
 
-	if (phm->type != HPI_TYPE_MESSAGE) {
+	if (phm->type != HPI_TYPE_REQUEST) {
 		hpi_init_response(phr, phm->object, phm->function,
 			HPI_ERROR_INVALID_TYPE);
 		return;

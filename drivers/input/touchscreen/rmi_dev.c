@@ -347,7 +347,7 @@ int rmi_char_dev_register(void)
 		result = alloc_chrdev_region(&dev_no, 0, 1, CHAR_DEVICE_NAME);
 		/* let kernel allocate a major for us */
 		rmi_char_dev_major_num = MAJOR(dev_no);
-		printk(KERN_ERR "Major number of rmi_char_dev: %d\n",
+		printk(KERN_INFO "Major number of rmi_char_dev: %d\n",
 				 rmi_char_dev_major_num);
 	}
 	if (result < 0)

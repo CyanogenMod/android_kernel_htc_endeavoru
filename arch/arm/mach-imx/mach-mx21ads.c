@@ -25,7 +25,6 @@
 #include <asm/mach/time.h>
 #include <asm/mach/map.h>
 #include <mach/iomux-mx21.h>
-#include <mach/mxc_nand.h>
 
 #include "devices-imx21.h"
 
@@ -280,6 +279,8 @@ static struct platform_device *platform_devices[] __initdata = {
 
 static void __init mx21ads_board_init(void)
 {
+	imx21_soc_init();
+
 	mxc_gpio_setup_multiple_pins(mx21ads_pins, ARRAY_SIZE(mx21ads_pins),
 			"mx21ads");
 

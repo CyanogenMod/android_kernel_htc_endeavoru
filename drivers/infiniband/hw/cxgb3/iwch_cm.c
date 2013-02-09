@@ -287,7 +287,7 @@ void __free_ep(struct kref *kref)
 	if (test_bit(RELEASE_RESOURCES, &ep->com.flags)) {
 		cxgb3_remove_tid(ep->com.tdev, (void *)ep, ep->hwtid);
 		dst_release(ep->dst);
-		l2t_release(L2DATA(ep->com.tdev), ep->l2t);
+		l2t_release(ep->com.tdev, ep->l2t);
 	}
 	kfree(ep);
 }
@@ -338,8 +338,9 @@ static struct rtable *find_route(struct t3cdev *dev, __be32 local_ip,
 				 __be16 peer_port, u8 tos)
 {
 	struct rtable *rt;
+	struct flowi4 fl4;
 
-	rt = ip_route_output_ports(&init_net, NULL, peer_ip, local_ip,
+	rt = ip_route_output_ports(&init_net, &fl4, NULL, peer_ip, local_ip,
 				   peer_port, local_port, IPPROTO_TCP,
 				   tos, 0);
 	if (IS_ERR(rt))
@@ -913,7 +914,7 @@ static void process_mpa_reply(struct iwch_ep *ep, struct sk_buff *skb)
 		goto err;
 
 	if (peer2peer && iwch_rqes_posted(ep->com.qp) == 0) {
-		iwch_post_zb_read(ep->com.qp);
+		iwch_post_zb_read(ep);
 	}
 
 	goto out;
@@ -1077,6 +1078,8 @@ static int tx_ack(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
 	struct iwch_ep *ep = ctx;
 	struct cpl_wr_ack *hdr = cplhdr(skb);
 	unsigned int credits = ntohs(hdr->credits);
+	unsigned long flags;
+	int post_zb = 0;
 
 	PDBG("%s ep %p credits %u\n", __func__, ep, credits);
 
@@ -1086,28 +1089,34 @@ static int tx_ack(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
 		return CPL_RET_BUF_DONE;
 	}
 
+	spin_lock_irqsave(&ep->com.lock, flags);
 	BUG_ON(credits != 1);
 	dst_confirm(ep->dst);
 	if (!ep->mpa_skb) {
 		PDBG("%s rdma_init wr_ack ep %p state %u\n",
-			__func__, ep, state_read(&ep->com));
+			__func__, ep, ep->com.state);
 		if (ep->mpa_attr.initiator) {
 			PDBG("%s initiator ep %p state %u\n",
-				__func__, ep, state_read(&ep->com));
-			if (peer2peer)
-				iwch_post_zb_read(ep->com.qp);
+				__func__, ep, ep->com.state);
+			if (peer2peer && ep->com.state == FPDU_MODE)
+				post_zb = 1;
 		} else {
 			PDBG("%s responder ep %p state %u\n",
-				__func__, ep, state_read(&ep->com));
-			ep->com.rpl_done = 1;
-			wake_up(&ep->com.waitq);
+				__func__, ep, ep->com.state);
+			if (ep->com.state == MPA_REQ_RCVD) {
+				ep->com.rpl_done = 1;
+				wake_up(&ep->com.waitq);
+			}
 		}
 	} else {
 		PDBG("%s lsm ack ep %p state %u freeing skb\n",
-			__func__, ep, state_read(&ep->com));
+			__func__, ep, ep->com.state);
 		kfree_skb(ep->mpa_skb);
 		ep->mpa_skb = NULL;
 	}
+	spin_unlock_irqrestore(&ep->com.lock, flags);
+	if (post_zb)
+		iwch_post_zb_read(ep);
 	return CPL_RET_BUF_DONE;
 }
 
@@ -1169,7 +1178,7 @@ static int act_open_rpl(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
 		release_tid(ep->com.tdev, GET_TID(rpl), NULL);
 	cxgb3_free_atid(ep->com.tdev, ep->atid);
 	dst_release(ep->dst);
-	l2t_release(L2DATA(ep->com.tdev), ep->l2t);
+	l2t_release(ep->com.tdev, ep->l2t);
 	put_ep(&ep->com);
 	return CPL_RET_BUF_DONE;
 }
@@ -1319,6 +1328,7 @@ static int pass_accept_req(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
 	struct iwch_ep *child_ep, *parent_ep = ctx;
 	struct cpl_pass_accept_req *req = cplhdr(skb);
 	unsigned int hwtid = GET_TID(req);
+	struct neighbour *neigh;
 	struct dst_entry *dst;
 	struct l2t_entry *l2t;
 	struct rtable *rt;
@@ -1355,7 +1365,10 @@ static int pass_accept_req(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
 		goto reject;
 	}
 	dst = &rt->dst;
-	l2t = t3_l2t_get(tdev, dst->neighbour, dst->neighbour->dev);
+	rcu_read_lock();
+	neigh = dst_get_neighbour(dst);
+	l2t = t3_l2t_get(tdev, neigh, neigh->dev);
+	rcu_read_unlock();
 	if (!l2t) {
 		printk(KERN_ERR MOD "%s - failed to allocate l2t entry!\n",
 		       __func__);
@@ -1366,7 +1379,7 @@ static int pass_accept_req(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
 	if (!child_ep) {
 		printk(KERN_ERR MOD "%s - failed to allocate ep entry!\n",
 		       __func__);
-		l2t_release(L2DATA(tdev), l2t);
+		l2t_release(tdev, l2t);
 		dst_release(dst);
 		goto reject;
 	}
@@ -1865,10 +1878,11 @@ static int is_loopback_dst(struct iw_cm_id *cm_id)
 
 int iwch_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 {
-	int err = 0;
 	struct iwch_dev *h = to_iwch_dev(cm_id->device);
+	struct neighbour *neigh;
 	struct iwch_ep *ep;
 	struct rtable *rt;
+	int err = 0;
 
 	if (is_loopback_dst(cm_id)) {
 		err = -ENOSYS;
@@ -1924,9 +1938,12 @@ int iwch_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 	}
 	ep->dst = &rt->dst;
 
+	rcu_read_lock();
+	neigh = dst_get_neighbour(ep->dst);
+
 	/* get a l2t entry */
-	ep->l2t = t3_l2t_get(ep->com.tdev, ep->dst->neighbour,
-			     ep->dst->neighbour->dev);
+	ep->l2t = t3_l2t_get(ep->com.tdev, neigh, neigh->dev);
+	rcu_read_unlock();
 	if (!ep->l2t) {
 		printk(KERN_ERR MOD "%s - cannot alloc l2e.\n", __func__);
 		err = -ENOMEM;
@@ -1943,7 +1960,7 @@ int iwch_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 	if (!err)
 		goto out;
 
-	l2t_release(L2DATA(h->rdev.t3cdev_p), ep->l2t);
+	l2t_release(h->rdev.t3cdev_p, ep->l2t);
 fail4:
 	dst_release(ep->dst);
 fail3:
@@ -2114,7 +2131,7 @@ int iwch_ep_redirect(void *ctx, struct dst_entry *old, struct dst_entry *new,
 	PDBG("%s ep %p redirect to dst %p l2t %p\n", __func__, ep, new,
 	     l2t);
 	dst_hold(new);
-	l2t_release(L2DATA(ep->com.tdev), ep->l2t);
+	l2t_release(ep->com.tdev, ep->l2t);
 	ep->l2t = l2t;
 	dst_release(old);
 	ep->dst = new;

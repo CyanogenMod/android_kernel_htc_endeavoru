@@ -182,7 +182,10 @@ void clockevents_register_device(struct clock_event_device *dev)
 	unsigned long flags;
 
 	BUG_ON(dev->mode != CLOCK_EVT_MODE_UNUSED);
-	BUG_ON(!dev->cpumask);
+	if (!dev->cpumask) {
+		WARN_ON(num_possible_cpus() > 1);
+		dev->cpumask = cpumask_of(smp_processor_id());
+	}
 
 	raw_spin_lock_irqsave(&clockevents_lock, flags);
 
@@ -197,7 +200,7 @@ EXPORT_SYMBOL_GPL(clockevents_register_device);
 static void clockevents_config(struct clock_event_device *dev,
 			       u32 freq)
 {
-	unsigned long sec;
+	u64 sec;
 
 	if (!(dev->features & CLOCK_EVT_FEAT_ONESHOT))
 		return;

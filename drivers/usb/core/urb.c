@@ -413,6 +413,7 @@ int usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	if (usb_pipetype(urb->pipe) != pipetypes[xfertype]) {
 		dev_err(&dev->dev, "BOGUS urb xfer, pipe %x != type %x\n",
 			usb_pipetype(urb->pipe), pipetypes[xfertype]);
+		pr_info("%s BOGUS urb xfer, pipe %x!=type %x\n",usb_pipetype(urb->pipe), pipetypes[xfertype]);
 		return -EPIPE;		/* The most suitable error code :-) */
 	}
 

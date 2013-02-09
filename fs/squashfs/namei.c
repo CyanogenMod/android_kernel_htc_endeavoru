@@ -2,7 +2,7 @@
  * Squashfs - a compressed read only filesystem for Linux
  *
  * Copyright (c) 2002, 2003, 2004, 2005, 2006, 2007, 2008
- * Phillip Lougher <phillip@lougher.demon.co.uk>
+ * Phillip Lougher <phillip@squashfs.org.uk>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -220,11 +220,6 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 					blk, off, ino_num);
 
 				inode = squashfs_iget(dir->i_sb, ino, ino_num);
-				if (IS_ERR(inode)) {
-					err = PTR_ERR(inode);
-					goto failed;
-				}
-
 				goto exit_lookup;
 			}
 		}
@@ -232,10 +227,7 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 
 exit_lookup:
 	kfree(dire);
-	if (inode)
-		return d_splice_alias(inode, dentry);
-	d_add(dentry, inode);
-	return ERR_PTR(0);
+	return d_splice_alias(inode, dentry);
 
 data_error:
 	err = -EIO;

@@ -124,7 +124,7 @@ static void calc_layout(struct ceph_osd_client *osdc,
 	ceph_calc_raw_layout(osdc, layout, vino.snap, off,
 			     plen, &bno, req, op);
 
-	sprintf(req->r_oid, "%llx.%08llx", vino.ino, bno);
+	snprintf(req->r_oid, sizeof(req->r_oid), "%llx.%08llx", vino.ino, bno);
 	req->r_oid_len = strlen(req->r_oid);
 }
 
@@ -217,6 +217,7 @@ struct ceph_osd_request *ceph_osdc_alloc_request(struct ceph_osd_client *osdc,
 	INIT_LIST_HEAD(&req->r_unsafe_item);
 	INIT_LIST_HEAD(&req->r_linger_item);
 	INIT_LIST_HEAD(&req->r_linger_osd);
+	INIT_LIST_HEAD(&req->r_req_lru_item);
 	req->r_flags = flags;
 
 	WARN_ON((flags & (CEPH_OSD_FLAG_READ|CEPH_OSD_FLAG_WRITE)) == 0);
@@ -477,8 +478,9 @@ struct ceph_osd_request *ceph_osdc_new_request(struct ceph_osd_client *osdc,
 	calc_layout(osdc, vino, layout, off, plen, req, ops);
 	req->r_file_layout = *layout;  /* keep a copy */
 
-	/* in case it differs from natural alignment that calc_layout
-	   filled in for us */
+	/* in case it differs from natural (file) alignment that
+	   calc_layout filled in for us */
+	req->r_num_pages = calc_pages_for(page_align, *plen);
 	req->r_page_alignment = page_align;
 
 	ceph_osdc_build_request(req, off, plen, ops,
@@ -684,6 +686,18 @@ static void __remove_osd(struct ceph_osd_client *osdc, struct ceph_osd *osd)
 	put_osd(osd);
 }
 
+static void remove_all_osds(struct ceph_osd_client *osdc)
+{
+	dout("__remove_old_osds %p\n", osdc);
+	mutex_lock(&osdc->request_mutex);
+	while (!RB_EMPTY_ROOT(&osdc->osds)) {
+		struct ceph_osd *osd = rb_entry(rb_first(&osdc->osds),
+						struct ceph_osd, o_node);
+		__remove_osd(osdc, osd);
+	}
+	mutex_unlock(&osdc->request_mutex);
+}
+
 static void __move_osd_to_lru(struct ceph_osd_client *osdc,
 			      struct ceph_osd *osd)
 {
@@ -700,14 +714,14 @@ static void __remove_osd_from_lru(struct ceph_osd *osd)
 		list_del_init(&osd->o_osd_lru);
 }
 
-static void remove_old_osds(struct ceph_osd_client *osdc, int remove_all)
+static void remove_old_osds(struct ceph_osd_client *osdc)
 {
 	struct ceph_osd *osd, *nosd;
 
 	dout("__remove_old_osds %p\n", osdc);
 	mutex_lock(&osdc->request_mutex);
 	list_for_each_entry_safe(osd, nosd, &osdc->osd_lru, o_osd_lru) {
-		if (!remove_all && time_before(jiffies, osd->lru_ttl))
+		if (time_before(jiffies, osd->lru_ttl))
 			break;
 		__remove_osd(osdc, osd);
 	}
@@ -750,6 +764,7 @@ static void __insert_osd(struct ceph_osd_client *osdc, struct ceph_osd *new)
 	struct rb_node *parent = NULL;
 	struct ceph_osd *osd = NULL;
 
+	dout("__insert_osd %p osd%d\n", new, new->o_osd);
 	while (*p) {
 		parent = *p;
 		osd = rb_entry(parent, struct ceph_osd, o_node);
@@ -802,13 +817,10 @@ static void __register_request(struct ceph_osd_client *osdc,
 {
 	req->r_tid = ++osdc->last_tid;
 	req->r_request->hdr.tid = cpu_to_le64(req->r_tid);
-	INIT_LIST_HEAD(&req->r_req_lru_item);
-
 	dout("__register_request %p tid %lld\n", req, req->r_tid);
 	__insert_request(osdc, req);
 	ceph_osdc_get_request(req);
 	osdc->num_requests++;
-
 	if (osdc->num_requests == 1) {
 		dout(" first request, scheduling timeout\n");
 		__schedule_osd_timeout(osdc);
@@ -1084,7 +1096,13 @@ static void handle_timeout(struct work_struct *work)
 		req = list_entry(osdc->req_lru.next, struct ceph_osd_request,
 				 r_req_lru_item);
 
+		/* hasn't been long enough since we sent it? */
 		if (time_before(jiffies, req->r_stamp + timeout))
+			break;
+
+		/* hasn't been long enough since it was acked? */
+		if (req->r_request->ack_stamp == 0 ||
+		    time_before(jiffies, req->r_request->ack_stamp + timeout))
 			break;
 
 		BUG_ON(req == last_req && req->r_stamp == last_stamp);
@@ -1137,11 +1155,18 @@ static void handle_osds_timeout(struct work_struct *work)
 
 	dout("osds timeout\n");
 	down_read(&osdc->map_sem);
-	remove_old_osds(osdc, 0);
+	remove_old_osds(osdc);
 	up_read(&osdc->map_sem);
 
 	schedule_delayed_work(&osdc->osds_timeout_work,
 			      round_jiffies_relative(delay));
+}
+
+static void complete_request(struct ceph_osd_request *req)
+{
+	if (req->r_safe_callback)
+		req->r_safe_callback(req, NULL);
+	complete_all(&req->r_safe_completion);  /* fsync waiter */
 }
 
 /*
@@ -1226,11 +1251,8 @@ static void handle_reply(struct ceph_osd_client *osdc, struct ceph_msg *msg,
 	else
 		complete_all(&req->r_completion);
 
-	if (flags & CEPH_OSD_FLAG_ONDISK) {
-		if (req->r_safe_callback)
-			req->r_safe_callback(req, msg);
-		complete_all(&req->r_safe_completion);  /* fsync waiter */
-	}
+	if (flags & CEPH_OSD_FLAG_ONDISK)
+		complete_request(req);
 
 done:
 	dout("req=%p req->r_linger=%d\n", req, req->r_linger);
@@ -1421,6 +1443,15 @@ void ceph_osdc_handle_map(struct ceph_osd_client *osdc, struct ceph_msg *msg)
 done:
 	downgrade_write(&osdc->map_sem);
 	ceph_monc_got_osdmap(&osdc->client->monc, osdc->osdmap->epoch);
+
+	/*
+	 * subscribe to subsequent osdmap updates if full to ensure
+	 * we find out when we are no longer full and stop returning
+	 * ENOSPC.
+	 */
+	if (ceph_osdmap_flag(osdc->osdmap, CEPH_OSDMAP_FULL))
+		ceph_monc_request_next_osdmap(&osdc->client->monc);
+
 	send_queued(osdc);
 	up_read(&osdc->map_sem);
 	wake_up_all(&osdc->client->auth_wq);
@@ -1677,8 +1708,14 @@ int ceph_osdc_start_request(struct ceph_osd_client *osdc,
 	 */
 	if (req->r_sent == 0) {
 		rc = __map_request(osdc, req);
-		if (rc < 0)
+		if (rc < 0) {
+			if (nofail) {
+				dout("osdc_start_request failed map, "
+				     " will retry %lld\n", req->r_tid);
+				rc = 0;
+			}
 			goto out_unlock;
+		}
 		if (req->r_osd == NULL) {
 			dout("send_request %p no up osds in pg\n", req);
 			ceph_monc_request_next_osdmap(&osdc->client->monc);
@@ -1717,6 +1754,7 @@ int ceph_osdc_wait_request(struct ceph_osd_client *osdc,
 		__cancel_request(req);
 		__unregister_request(osdc, req);
 		mutex_unlock(&osdc->request_mutex);
+		complete_request(req);
 		dout("wait_request tid %llu canceled/timed out\n", req->r_tid);
 		return rc;
 	}
@@ -1835,8 +1873,7 @@ void ceph_osdc_stop(struct ceph_osd_client *osdc)
 		ceph_osdmap_destroy(osdc->osdmap);
 		osdc->osdmap = NULL;
 	}
-	remove_old_osds(osdc, 1);
-	WARN_ON(!RB_EMPTY_ROOT(&osdc->osds));
+	remove_all_osds(osdc);
 	mempool_destroy(osdc->req_mempool);
 	ceph_msgpool_destroy(&osdc->msgpool_op);
 	ceph_msgpool_destroy(&osdc->msgpool_op_reply);
@@ -2007,8 +2044,9 @@ static struct ceph_msg *get_reply(struct ceph_connection *con,
 		int want = calc_pages_for(req->r_page_alignment, data_len);
 
 		if (unlikely(req->r_num_pages < want)) {
-			pr_warning("tid %lld reply %d > expected %d pages\n",
-				   tid, want, m->nr_pages);
+			pr_warning("tid %lld reply has %d bytes %d pages, we"
+				   " had only %d pages ready\n", tid, data_len,
+				   want, req->r_num_pages);
 			*skip = 1;
 			ceph_msg_put(m);
 			m = NULL;

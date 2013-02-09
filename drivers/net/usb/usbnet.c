@@ -35,6 +35,7 @@
 
 #include <linux/module.h>
 #include <linux/init.h>
+#include <linux/if_arp.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/ctype.h>
@@ -46,9 +47,13 @@
 #include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/pm_runtime.h>
+#include <linux/pm_qos_params.h> //HTC
 
 #define DRIVER_VERSION		"22-Aug-2005"
 
+//++SSD_RIL:20121017: get -71 but already register rmnet netdev
+int already_register_rmNET = 0;
+//--SSD_RIL:20121017: get -71 but already register rmnet netdev
 
 /*-------------------------------------------------------------------------*/
 
@@ -92,6 +97,62 @@ module_param (msg_level, int, 0);
 MODULE_PARM_DESC (msg_level, "Override default message level");
 
 /*-------------------------------------------------------------------------*/
+//HTC+++
+#define USBNET_DONE_QUEUE_HIGH_WATERMARK 1000
+#define USBNET_DONE_QUEUE_LOW_WATERMARK 5
+#define PM_QOS_USBNET_PERF_UNLOCK_TIMER 3000
+#define PM_QOS_USBNET_CPU_FREQ_MIN_VALUE 475000
+#define PM_QOS_USBNET_MIN_ONLINE_CPUS 2
+
+#ifdef CONFIG_PERFLOCK
+static struct perf_lock usbnet_perf_lock;
+#endif
+static struct pm_qos_request_list usbnet_req_freq;
+static struct pm_qos_request_list usbnet_req_cpus;
+static int is_usbnet_perf_locked = 0;
+static struct	delayed_work usbnet_unlock_perf_delayed_work;
+static unsigned int usbnet_rx_len = 0;
+
+static void usbnet_lock_perf(void)
+{
+	pr_info("[USBNET] %s\n", __func__);
+
+#ifdef CONFIG_PERFLOCK
+	if (!is_perf_lock_active(&usbnet_perf_lock))
+		perf_lock(&usbnet_perf_lock);
+#endif
+	pm_qos_update_request(&usbnet_req_freq, (s32)PM_QOS_USBNET_CPU_FREQ_MIN_VALUE);
+	pm_qos_update_request(&usbnet_req_cpus, (s32)PM_QOS_USBNET_MIN_ONLINE_CPUS);
+
+	is_usbnet_perf_locked = 1;
+}
+
+static void usbnet_unlock_perf(void)
+{
+	pr_info("[USBNET] %s\n", __func__);
+
+#ifdef CONFIG_PERFLOCK
+	if (is_perf_lock_active(&usbnet_perf_lock))
+		perf_unlock(&usbnet_perf_lock);
+#endif
+	pm_qos_update_request(&usbnet_req_freq, (s32)PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE);
+	pm_qos_update_request(&usbnet_req_cpus, (s32)PM_QOS_MIN_ONLINE_CPUS_DEFAULT_VALUE);
+
+	is_usbnet_perf_locked = 0;
+}
+
+static void usbnet_unlock_perf_delayed_work_fn(struct work_struct *work)
+{
+	pr_info("%s [USBNET] usbnet_rx_len:%u \n", __func__, usbnet_rx_len);
+
+	if (usbnet_rx_len < 9*1024*1024)
+		usbnet_unlock_perf();
+	else {
+		usbnet_rx_len = 0;
+		schedule_delayed_work(&usbnet_unlock_perf_delayed_work, msecs_to_jiffies(PM_QOS_USBNET_PERF_UNLOCK_TIMER));
+	}
+}
+//HTC---
 
 /* handles CDC Ethernet and many other network "bulk data" interfaces */
 int usbnet_get_endpoints(struct usbnet *dev, struct usb_interface *intf)
@@ -109,7 +170,7 @@ int usbnet_get_endpoints(struct usbnet *dev, struct usb_interface *intf)
 
 		/* take the first altsetting with in-bulk + out-bulk;
 		 * remember any status endpoint, just in case;
-		 * ignore other endpoints and altsetttings.
+		 * ignore other endpoints and altsettings.
 		 */
 		for (ep = 0; ep < alt->desc.bNumEndpoints; ep++) {
 			struct usb_host_endpoint	*e;
@@ -231,7 +292,9 @@ void usbnet_skb_return (struct usbnet *dev, struct sk_buff *skb)
 		return;
 	}
 
+	if (!skb->protocol)
 	skb->protocol = eth_type_trans (skb, dev->net);
+
 	dev->net->stats.rx_packets++;
 	dev->net->stats.rx_bytes += skb->len;
 
@@ -287,13 +350,42 @@ static void defer_bh(struct usbnet *dev, struct sk_buff *skb, struct sk_buff_hea
 {
 	unsigned long		flags;
 
+
 	spin_lock_irqsave(&list->lock, flags);
-	__skb_unlink(skb, list);
+	//HTC: ensure next and prev pointer are both valid before call __skb_unlink()
+	if (skb->next != NULL && skb->prev!=NULL)
+		__skb_unlink(skb, list);
+	else {
+		pr_info("%s(%d) skb next:%p prev:%p !!!\n", __func__, __LINE__, skb->next, skb->prev);
+		list->qlen--;
+	}
+
+	//HTC: if qlen is already 0, but list->next != list, it means the list is corrupted
+	//     call __skb_queue_head_init() to recover the list to inital state
+	if ((list->qlen == 0) && !skb_queue_empty(list)){
+		pr_info("%s(%d) __skb_queue_head_init list:%p next:%p prev:%p !!!\n", __func__, __LINE__, list, list->next, list->prev);
+		__skb_queue_head_init(list);
+	}
 	spin_unlock(&list->lock);
 	spin_lock(&dev->done.lock);
 	__skb_queue_tail(&dev->done, skb);
+
+    //HTC+++
+	if (!test_bit (EVENT_DEV_ASLEEP, &dev->flags) && (dev->done.qlen > USBNET_DONE_QUEUE_HIGH_WATERMARK))
+		pr_info("%s(%d) [USBNET] dev->done.qlen:%d\n", __func__, __LINE__, dev->done.qlen);
+    //HTC---
+
 	if (dev->done.qlen == 1)
 		tasklet_schedule(&dev->bh);
+	//HTC+++
+	else if (dev->done.qlen > USBNET_DONE_QUEUE_HIGH_WATERMARK) {
+		// HALT HSIC RX
+		if (!test_bit (EVENT_RX_HALT, &dev->flags) && !test_bit (EVENT_DEV_ASLEEP, &dev->flags)) {
+			netdev_err(dev->net, "!!! [USBNET] dev->done.qlen %d > USBNET_DONE_QUEUE_HIGH_WATERMARK, set EVENT_RX_HALT !!!\n", dev->done.qlen);
+			usbnet_defer_kevent (dev, EVENT_RX_HALT);
+		}
+	}
+	//HTC---
 	spin_unlock_irqrestore(&dev->done.lock, flags);
 }
 
@@ -330,7 +422,9 @@ static int rx_submit (struct usbnet *dev, struct urb *urb, gfp_t flags)
 		usb_free_urb (urb);
 		return -ENOMEM;
 	}
-	skb_reserve (skb, NET_IP_ALIGN);
+
+	if (dev->net->type != ARPHRD_RAWIP)
+		skb_reserve(skb, NET_IP_ALIGN);
 
 	entry = (struct skb_data *) skb->cb;
 	entry->urb = urb;
@@ -367,6 +461,12 @@ static int rx_submit (struct usbnet *dev, struct urb *urb, gfp_t flags)
 			tasklet_schedule (&dev->bh);
 			break;
 		case 0:
+//--------------------------------------------------------
+#ifdef CONFIG_HTC_QCT_9K_MDM_HSIC_PM_DBG
+			usb_mark_intf_last_busy(dev->intf, true);
+#endif	//CONFIG_HTC_QCT_9K_MDM_HSIC_PM_DBG
+//--------------------------------------------------------
+			usb_mark_last_busy(dev->udev);
 			__skb_queue_tail (&dev->rxq, skb);
 		}
 	} else {
@@ -433,6 +533,9 @@ static void rx_complete (struct urb *urb)
 			netif_dbg(dev, rx_err, dev->net,
 				  "rx length %d\n", skb->len);
 		}
+		//HTC+++
+		usbnet_rx_len += skb->len;
+		//HTC---
 		break;
 
 	/* stalls need manual reset. this is rare ... except that
@@ -489,8 +592,17 @@ block:
 		if (netif_running (dev->net) &&
 		    !test_bit (EVENT_RX_HALT, &dev->flags)) {
 			rx_submit (dev, urb, GFP_ATOMIC);
+//--------------------------------------------------------
+#ifdef CONFIG_HTC_QCT_9K_MDM_HSIC_PM_DBG
+			usb_mark_intf_last_busy(dev->intf, true);
+#endif	//CONFIG_HTC_QCT_9K_MDM_HSIC_PM_DBG
+//--------------------------------------------------------
+			usb_mark_last_busy(dev->udev);
 			return;
 		}
+		//HTC+++
+		pr_info("%s(%d) [USBNET] usb_free_urb urb:%p !!!\n", __func__, __LINE__, urb);
+		//HTC---
 		usb_free_urb (urb);
 	}
 	netif_dbg(dev, rx_err, dev->net, "no read resubmitted\n");
@@ -581,7 +693,12 @@ static int unlink_urbs (struct usbnet *dev, struct sk_buff_head *q)
 		struct skb_data		*entry;
 		struct urb		*urb;
 		int			retval;
-
+		//HTC+++
+		if (skbnext == NULL) {
+			pr_info("%s(%d) q is corruptted, skb:%p skb->next:%p skb->prev:%p !!! \n", __func__, __LINE__, skb, skb->next, skb->prev);
+			break;
+		}
+		//HTC---
 		entry = (struct skb_data *) skb->cb;
 		urb = entry->urb;
 
@@ -625,18 +742,24 @@ static void usbnet_terminate_urbs(struct usbnet *dev)
 	temp = unlink_urbs(dev, &dev->txq) +
 		unlink_urbs(dev, &dev->rxq);
 
+
+pr_info("%s+\n", __func__);
+
 	/* maybe wait for deletions to finish. */
 	while (!skb_queue_empty(&dev->rxq)
 		&& !skb_queue_empty(&dev->txq)
 		&& !skb_queue_empty(&dev->done)) {
 			schedule_timeout(msecs_to_jiffies(UNLINK_TIMEOUT_MS));
 			set_current_state(TASK_UNINTERRUPTIBLE);
-			netif_dbg(dev, ifdown, dev->net,
+			pr_info("%s+ :waited for %d urb completions\n", __func__,temp);
+				netif_dbg(dev, ifdown, dev->net,
 				  "waited for %d urb completions\n", temp);
 	}
 	set_current_state(TASK_RUNNING);
 	dev->wait = NULL;
 	remove_wait_queue(&unlink_wakeup, &wait);
+
+	pr_info("%s-\n", __func__);
 }
 
 int usbnet_stop (struct net_device *net)
@@ -906,11 +1029,27 @@ fail_pipe:
 		}
 	}
 	if (test_bit (EVENT_RX_HALT, &dev->flags)) {
+
+		//HTC+++
+		//lock cpu perf
+		usbnet_lock_perf();
+
+		//queue usbnet_unlock_perf_delayed_work
+		usbnet_rx_len = 0;
+		schedule_delayed_work(&usbnet_unlock_perf_delayed_work, msecs_to_jiffies(PM_QOS_USBNET_PERF_UNLOCK_TIMER));
+
+		pr_info("%s(%d) [USBNET] EVENT_RX_HALT unlink_urbs !!!\n", __func__, __LINE__);
+		pr_info("%s(%d) [USBNET] dev->rxq.qlen:%d\n", __func__, __LINE__, dev->rxq.qlen);
+		//HTC---
 		unlink_urbs (dev, &dev->rxq);
 		status = usb_autopm_get_interface(dev->intf);
 		if (status < 0)
 			goto fail_halt;
 		status = usb_clear_halt (dev->udev, dev->in);
+
+		//HTC+++
+		pr_info("%s(%d) [USBNET] EVENT_RX_HALT usb_clear_halt:%d !!!\n", __func__, __LINE__, status);
+		//HTC---
 		usb_autopm_put_interface(dev->intf);
 		if (status < 0 &&
 		    status != -EPIPE &&
@@ -920,6 +1059,10 @@ fail_halt:
 				netdev_err(dev->net, "can't clear rx halt, status %d\n",
 					   status);
 		} else {
+
+			//HTC+++
+			pr_info("%s(%d) [USBNET] clear_bit EVENT_RX_HALT !!!\n", __func__, __LINE__);
+			//HTC---
 			clear_bit (EVENT_RX_HALT, &dev->flags);
 			tasklet_schedule (&dev->bh);
 		}
@@ -1005,6 +1148,11 @@ static void tx_complete (struct urb *urb)
 		case -EPROTO:
 		case -ETIME:
 		case -EILSEQ:
+//--------------------------------------------------------
+#ifdef CONFIG_HTC_QCT_9K_MDM_HSIC_PM_DBG
+			usb_mark_intf_last_busy(dev->intf, true);
+#endif	//CONFIG_HTC_QCT_9K_MDM_HSIC_PM_DBG
+//--------------------------------------------------------
 			usb_mark_last_busy(dev->udev);
 			if (!timer_pending (&dev->delay)) {
 				mod_timer (&dev->delay,
@@ -1171,6 +1319,13 @@ static void usbnet_bh (unsigned long param)
 	struct skb_data		*entry;
 
 	while ((skb = skb_dequeue (&dev->done))) {
+		//HTC+++
+		if (test_bit (EVENT_RX_HALT, &dev->flags) && !test_bit (EVENT_DEV_ASLEEP, &dev->flags)) {
+			if (dev->done.qlen <= USBNET_DONE_QUEUE_LOW_WATERMARK) {
+				pr_info("%s(%d) [USBNET] dev->done.qlen:%d dev->rxq.qlen:%d\n", __func__, __LINE__, dev->done.qlen, dev->rxq.qlen);	
+			}
+		}
+		//HTC---
 		entry = (struct skb_data *) skb->cb;
 		switch (entry->state) {
 		case rx_done:
@@ -1266,6 +1421,8 @@ void usbnet_disconnect (struct usb_interface *intf)
 
 	free_netdev(net);
 	usb_put_dev (xdev);
+
+	already_register_rmNET = 0;
 }
 EXPORT_SYMBOL_GPL(usbnet_disconnect);
 
@@ -1425,6 +1582,10 @@ usbnet_probe (struct usb_interface *udev, const struct usb_device_id *prod)
 	if ((dev->driver_info->flags & FLAG_WWAN) != 0)
 		SET_NETDEV_DEVTYPE(net, &wwan_type);
 
+//++SSD_RIL:20121017: get -71 but already register rmnet netdev
+	already_register_rmNET  = 0;
+//--SSD_RIL:20121017: get -71 but already register rmnet netdev
+
 	status = register_netdev (net);
 	if (status)
 		goto out3;
@@ -1434,6 +1595,10 @@ usbnet_probe (struct usb_interface *udev, const struct usb_device_id *prod)
 		   xdev->bus->bus_name, xdev->devpath,
 		   dev->driver_info->description,
 		   net->dev_addr);
+
+//++SSD_RIL:20121017: get -71 but already register rmnet netdev
+	already_register_rmNET  = 1;  //register network device success
+//--SSD_RIL:20121017: get -71 but already register rmnet netdev
 
 	// ok, it's ready to go.
 	usb_set_intfdata (udev, dev);
@@ -1467,11 +1632,14 @@ int usbnet_suspend (struct usb_interface *intf, pm_message_t message)
 {
 	struct usbnet		*dev = usb_get_intfdata(intf);
 
+	pr_info("%s+\n", __func__);
+
 	if (!dev->suspend_count++) {
 		spin_lock_irq(&dev->txq.lock);
 		/* don't autosuspend while transmitting */
 		if (dev->txq.qlen && (message.event & PM_EVENT_AUTO)) {
 			spin_unlock_irq(&dev->txq.lock);
+			--dev->suspend_count;
 			return -EBUSY;
 		} else {
 			set_bit(EVENT_DEV_ASLEEP, &dev->flags);
@@ -1481,16 +1649,21 @@ int usbnet_suspend (struct usb_interface *intf, pm_message_t message)
 		 * accelerate emptying of the rx and queues, to avoid
 		 * having everything error out.
 		 */
+		pr_info("%s+:d\n", __func__);
 		netif_device_detach (dev->net);
+		pr_info("%s+:t\n", __func__);
 		usbnet_terminate_urbs(dev);
+		pr_info("%s+:k\n", __func__);
 		usb_kill_urb(dev->interrupt);
 
 		/*
 		 * reattach so runtime management can use and
 		 * wake the device
 		 */
+		pr_info("%s+:a\n", __func__);
 		netif_device_attach (dev->net);
 	}
+	pr_info("%s-\n", __func__);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usbnet_suspend);
@@ -1509,6 +1682,11 @@ int usbnet_resume (struct usb_interface *intf)
 
 		spin_lock_irq(&dev->txq.lock);
 		while ((res = usb_get_from_anchor(&dev->deferred))) {
+			//HTC +++
+			// refer to acm_write_start() and usb_net_raw_ip_tx_urb_work(), need to
+			// decrement urb ref count after usb_get_from_anchor() to prevent memory leak
+			usb_put_urb(res);
+			//HTC ---
 
 			skb = (struct sk_buff *)res->context;
 			retval = usb_submit_urb(res, GFP_ATOMIC);
@@ -1541,9 +1719,18 @@ EXPORT_SYMBOL_GPL(usbnet_resume);
 
 static int __init usbnet_init(void)
 {
-	/* compiler should optimize this out */
-	BUILD_BUG_ON (sizeof (((struct sk_buff *)0)->cb)
-			< sizeof (struct skb_data));
+	/* Compiler should optimize this out. */
+	BUILD_BUG_ON(
+		FIELD_SIZEOF(struct sk_buff, cb) < sizeof(struct skb_data));
+
+	//HTC+++
+	INIT_DELAYED_WORK(&usbnet_unlock_perf_delayed_work, usbnet_unlock_perf_delayed_work_fn);
+#ifdef CONFIG_PERFLOCK
+	perf_lock_init(&usbnet_perf_lock, PERF_LOCK_HIGHEST, "usbnet");
+#endif
+	pm_qos_add_request(&usbnet_req_freq, PM_QOS_CPU_FREQ_MIN, (s32)PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE);
+	pm_qos_add_request(&usbnet_req_cpus, PM_QOS_MIN_ONLINE_CPUS, (s32)PM_QOS_MIN_ONLINE_CPUS_DEFAULT_VALUE);
+	//HTC---
 
 	random_ether_addr(node_id);
 	return 0;

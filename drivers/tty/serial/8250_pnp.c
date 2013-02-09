@@ -1,6 +1,4 @@
 /*
- *  linux/drivers/char/8250_pnp.c
- *
  *  Probe module for 8250/16550-type ISAPNP serial ports.
  *
  *  Based on drivers/char/serial.c, by Linus Torvalds, Theodore Ts'o.
@@ -111,6 +109,9 @@ static const struct pnp_device_id pnp_dev_table[] = {
 	/* IBM */
 	/* IBM Thinkpad 701 Internal Modem Voice */
 	{	"IBM0033",		0	},
+	/* Intermec */
+	/* Intermec CV60 touchscreen port */
+	{	"PNP4972",		0	},
 	/* Intertex */
 	/* Intertex 28k8 33k6 Voice EXT PnP */
 	{	"IXDC801",		0	},

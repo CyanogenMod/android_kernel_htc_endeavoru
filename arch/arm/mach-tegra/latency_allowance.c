@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-tegra/latency_allowance.c
  *
- * Copyright (C) 2011 NVIDIA Corporation
+ * Copyright (C) 2011-2012, NVIDIA CORPORATION. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -44,7 +44,7 @@
 #define MC_LA_EPP_0		0x300
 #define MC_LA_EPP_1		0x304
 #define MC_LA_G2_0		0x308
-#define MC_LA_G2_1		0x304
+#define MC_LA_G2_1		0x30c
 #define MC_LA_HC_0		0x310
 #define MC_LA_HC_1		0x314
 #define MC_LA_HDA_0		0x318
@@ -100,6 +100,9 @@
 		printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__); \
 	}
 
+/* Bug 995270 */
+#define HACK_LA_FIFO 1
+
 static struct dentry *latency_debug_dir;
 
 struct la_client_info {
@@ -115,7 +118,7 @@ struct la_client_info {
 
 static DEFINE_SPINLOCK(safety_lock);
 
-static const int ns_per_tick = 30;
+static int ns_per_tick = 30;
 /* fifo atom size in bytes for non-fdc clients*/
 static const int normal_atom_size = 16;
 /* fifo atom size in bytes for fdc clients*/
@@ -384,7 +387,9 @@ int tegra_set_latency_allowance(enum tegra_la_id id,
 	int la_to_set;
 	unsigned long reg_read;
 	unsigned long reg_write;
+	unsigned int fifo_size_in_atoms;
 	int bytes_per_atom = normal_atom_size;
+	const int fifo_scale = 4;		/* 25% of the FIFO */
 	struct la_client_info *ci;
 
 	VALIDATE_ID(id);
@@ -394,11 +399,19 @@ int tegra_set_latency_allowance(enum tegra_la_id id,
 		bytes_per_atom = fdc_atom_size;
 
 	ci = &la_info[id];
+	fifo_size_in_atoms = ci->fifo_size_in_atoms;
+
+#if HACK_LA_FIFO
+	/* pretend that our FIFO is only as deep as the lowest fullness
+	 * we expect to see */
+	if (id >= ID(DISPLAY_0A) && id <= ID(DISPLAY_HCB))
+		fifo_size_in_atoms /= fifo_scale;
+#endif
 
 	if (bandwidth_in_mbps == 0) {
 		la_to_set = MC_LA_MAX_VALUE;
 	} else {
-		ideal_la = (ci->fifo_size_in_atoms * bytes_per_atom * 1000) /
+		ideal_la = (fifo_size_in_atoms * bytes_per_atom * 1000) /
 			   (bandwidth_in_mbps * ns_per_tick);
 		la_to_set = ideal_la - (ci->expiration_in_ns/ns_per_tick) - 1;
 	}
@@ -408,11 +421,6 @@ int tegra_set_latency_allowance(enum tegra_la_id id,
 	la_to_set = (la_to_set < 0) ? 0 : la_to_set;
 	la_to_set = (la_to_set > MC_LA_MAX_VALUE) ? MC_LA_MAX_VALUE : la_to_set;
 	scaling_info[id].actual_la_to_set = la_to_set;
-
-	/* until display can use latency allowance scaling, use a more
-	 * aggressive LA setting. Bug 862709 */
-	if (id >= ID(DISPLAY_0A) && id <= ID(DISPLAY_HCB))
-		la_to_set /= 3;
 
 	spin_lock(&safety_lock);
 	reg_read = readl(ci->reg_addr);
@@ -498,6 +506,39 @@ void tegra_disable_latency_scaling(enum tegra_la_id id)
 	spin_unlock(&safety_lock);
 }
 
+void tegra_latency_allowance_update_tick_length(unsigned int new_ns_per_tick)
+{
+	int i = 0;
+	int la;
+	unsigned long reg_read;
+	unsigned long reg_write;
+	unsigned long scale_factor = 0;
+
+	if (new_ns_per_tick != 30) {
+		ns_per_tick = new_ns_per_tick;
+		scale_factor = new_ns_per_tick / 30;
+
+		spin_lock(&safety_lock);
+		for (i = 0; i < ARRAY_SIZE(la_info) - 1; i++) {
+			reg_read = readl(la_info[i].reg_addr);
+			la = ((reg_read & la_info[i].mask) >> la_info[i].shift)
+				/ scale_factor;
+
+			reg_write = (reg_read & ~la_info[i].mask) |
+					(la << la_info[i].shift);
+			writel(reg_write, la_info[i].reg_addr);
+			scaling_info[i].la_set = la;
+		}
+		spin_unlock(&safety_lock);
+
+		/* Re-scale G2PR, G2SR, G2DR, G2DW with updated ns_per_tick */
+		tegra_set_latency_allowance(TEGRA_LA_G2PR, 20);
+		tegra_set_latency_allowance(TEGRA_LA_G2SR, 20);
+		tegra_set_latency_allowance(TEGRA_LA_G2DR, 20);
+		tegra_set_latency_allowance(TEGRA_LA_G2DW, 20);
+	}
+}
+
 static int la_regs_show(struct seq_file *s, void *unused)
 {
 	unsigned i;
@@ -543,6 +584,11 @@ late_initcall(tegra_latency_allowance_debugfs_init);
 static int __init tegra_latency_allowance_init(void)
 {
 	la_scaling_enable_count = 0;
+
+	tegra_set_latency_allowance(TEGRA_LA_G2PR, 20);
+	tegra_set_latency_allowance(TEGRA_LA_G2SR, 20);
+	tegra_set_latency_allowance(TEGRA_LA_G2DR, 20);
+	tegra_set_latency_allowance(TEGRA_LA_G2DW, 20);
 	return 0;
 }
 

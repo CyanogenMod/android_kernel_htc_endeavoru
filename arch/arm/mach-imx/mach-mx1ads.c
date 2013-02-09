@@ -25,7 +25,6 @@
 
 #include <mach/common.h>
 #include <mach/hardware.h>
-#include <mach/i2c.h>
 #include <mach/iomux-mx1.h>
 #include <mach/irqs.h>
 
@@ -116,6 +115,8 @@ static struct i2c_board_info mx1ads_i2c_devices[] = {
  */
 static void __init mx1ads_init(void)
 {
+	imx1_soc_init();
+
 	mxc_gpio_setup_multiple_pins(mx1ads_pins,
 		ARRAY_SIZE(mx1ads_pins), "mx1ads");
 

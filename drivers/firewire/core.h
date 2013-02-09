@@ -9,7 +9,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 
 struct device;
 struct fw_card;
@@ -96,6 +96,8 @@ struct fw_card_driver {
 			 struct fw_iso_packet *packet,
 			 struct fw_iso_buffer *buffer,
 			 unsigned long payload);
+
+	void (*flush_queue_iso)(struct fw_iso_context *ctx);
 
 	int (*stop_iso)(struct fw_iso_context *ctx);
 };

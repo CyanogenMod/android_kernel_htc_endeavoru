@@ -168,10 +168,16 @@
 #define		SE_DB_BUSY					(1 << 30)
 #define		SE_CB_BUSY					(1 << 31)
 /* evergreen */
+#define	CG_THERMAL_CTRL					0x72c
+#define		TOFFSET_MASK			        0x00003FE0
+#define		TOFFSET_SHIFT			        5
 #define	CG_MULT_THERMAL_STATUS				0x740
 #define		ASIC_T(x)			        ((x) << 16)
-#define		ASIC_T_MASK			        0x7FF0000
+#define		ASIC_T_MASK			        0x07FF0000
 #define		ASIC_T_SHIFT			        16
+#define	CG_TS0_STATUS					0x760
+#define		TS0_ADC_DOUT_MASK			0x000003FF
+#define		TS0_ADC_DOUT_SHIFT			0
 /* APU */
 #define	CG_THERMAL_STATUS			        0x678
 
@@ -345,6 +351,7 @@
 #define		COLOR_BUFFER_SIZE(x)				((x) << 0)
 #define		POSITION_BUFFER_SIZE(x)				((x) << 8)
 #define		SMX_BUFFER_SIZE(x)				((x) << 16)
+#define	SX_MEMORY_EXPORT_BASE				0x9010
 #define	SX_MISC						0x28350
 
 #define CB_PERF_CTR0_SEL_0				0x9A20
@@ -1116,6 +1123,7 @@
 #define CAYMAN_PA_SC_AA_CONFIG				0x28BE0
 #define         CAYMAN_MSAA_NUM_SAMPLES_SHIFT           0
 #define         CAYMAN_MSAA_NUM_SAMPLES_MASK            0x7
+#define CAYMAN_SX_SCATTER_EXPORT_BASE			0x28358
 /* cayman packet3 addition */
 #define	CAYMAN_PACKET3_DEALLOC_STATE			0x14
 

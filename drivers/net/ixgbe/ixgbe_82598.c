@@ -37,6 +37,7 @@
 #define IXGBE_82598_RAR_ENTRIES   16
 #define IXGBE_82598_MC_TBL_SIZE  128
 #define IXGBE_82598_VFT_TBL_SIZE 128
+#define IXGBE_82598_RX_PB_SIZE	 512
 
 static s32 ixgbe_setup_copper_link_82598(struct ixgbe_hw *hw,
                                          ixgbe_link_speed speed,
@@ -197,13 +198,34 @@ out:
  *  @hw: pointer to hardware structure
  *
  *  Starts the hardware using the generic start_hw function.
- *  Then set pcie completion timeout
+ *  Disables relaxed ordering Then set pcie completion timeout
+ *
  **/
 static s32 ixgbe_start_hw_82598(struct ixgbe_hw *hw)
 {
+	u32 regval;
+	u32 i;
 	s32 ret_val = 0;
 
 	ret_val = ixgbe_start_hw_generic(hw);
+
+	/* Disable relaxed ordering */
+	for (i = 0; ((i < hw->mac.max_tx_queues) &&
+	     (i < IXGBE_DCA_MAX_QUEUES_82598)); i++) {
+		regval = IXGBE_READ_REG(hw, IXGBE_DCA_TXCTRL(i));
+		regval &= ~IXGBE_DCA_TXCTRL_TX_WB_RO_EN;
+		IXGBE_WRITE_REG(hw, IXGBE_DCA_TXCTRL(i), regval);
+	}
+
+	for (i = 0; ((i < hw->mac.max_rx_queues) &&
+	     (i < IXGBE_DCA_MAX_QUEUES_82598)); i++) {
+		regval = IXGBE_READ_REG(hw, IXGBE_DCA_RXCTRL(i));
+		regval &= ~(IXGBE_DCA_RXCTRL_DESC_WRO_EN |
+			    IXGBE_DCA_RXCTRL_DESC_HSRO_EN);
+		IXGBE_WRITE_REG(hw, IXGBE_DCA_RXCTRL(i), regval);
+	}
+
+	hw->mac.rx_pb_size = IXGBE_82598_RX_PB_SIZE;
 
 	/* set the completion timeout for interface */
 	if (ret_val == 0)
@@ -1064,7 +1086,7 @@ static s32 ixgbe_read_i2c_eeprom_82598(struct ixgbe_hw *hw, u8 byte_offset,
 			sfp_stat = sfp_stat & IXGBE_I2C_EEPROM_STATUS_MASK;
 			if (sfp_stat != IXGBE_I2C_EEPROM_STATUS_IN_PROGRESS)
 				break;
-			msleep(10);
+			usleep_range(10000, 20000);
 		}
 
 		if (sfp_stat != IXGBE_I2C_EEPROM_STATUS_PASS) {
@@ -1188,6 +1210,79 @@ out:
 	return physical_layer;
 }
 
+/**
+ *  ixgbe_set_lan_id_multi_port_pcie_82598 - Set LAN id for PCIe multiple
+ *  port devices.
+ *  @hw: pointer to the HW structure
+ *
+ *  Calls common function and corrects issue with some single port devices
+ *  that enable LAN1 but not LAN0.
+ **/
+static void ixgbe_set_lan_id_multi_port_pcie_82598(struct ixgbe_hw *hw)
+{
+	struct ixgbe_bus_info *bus = &hw->bus;
+	u16 pci_gen = 0;
+	u16 pci_ctrl2 = 0;
+
+	ixgbe_set_lan_id_multi_port_pcie(hw);
+
+	/* check if LAN0 is disabled */
+	hw->eeprom.ops.read(hw, IXGBE_PCIE_GENERAL_PTR, &pci_gen);
+	if ((pci_gen != 0) && (pci_gen != 0xFFFF)) {
+
+		hw->eeprom.ops.read(hw, pci_gen + IXGBE_PCIE_CTRL2, &pci_ctrl2);
+
+		/* if LAN0 is completely disabled force function to 0 */
+		if ((pci_ctrl2 & IXGBE_PCIE_CTRL2_LAN_DISABLE) &&
+		    !(pci_ctrl2 & IXGBE_PCIE_CTRL2_DISABLE_SELECT) &&
+		    !(pci_ctrl2 & IXGBE_PCIE_CTRL2_DUMMY_ENABLE)) {
+
+			bus->func = 0;
+		}
+	}
+}
+
+/**
+ * ixgbe_set_rxpba_82598 - Configure packet buffers
+ * @hw: pointer to hardware structure
+ * @dcb_config: pointer to ixgbe_dcb_config structure
+ *
+ * Configure packet buffers.
+ */
+static void ixgbe_set_rxpba_82598(struct ixgbe_hw *hw, int num_pb, u32 headroom,
+				  int strategy)
+{
+	u32 rxpktsize = IXGBE_RXPBSIZE_64KB;
+	u8  i = 0;
+
+	if (!num_pb)
+		return;
+
+	/* Setup Rx packet buffer sizes */
+	switch (strategy) {
+	case PBA_STRATEGY_WEIGHTED:
+		/* Setup the first four at 80KB */
+		rxpktsize = IXGBE_RXPBSIZE_80KB;
+		for (; i < 4; i++)
+			IXGBE_WRITE_REG(hw, IXGBE_RXPBSIZE(i), rxpktsize);
+		/* Setup the last four at 48KB...don't re-init i */
+		rxpktsize = IXGBE_RXPBSIZE_48KB;
+		/* Fall Through */
+	case PBA_STRATEGY_EQUAL:
+	default:
+		/* Divide the remaining Rx packet buffer evenly among the TCs */
+		for (; i < IXGBE_MAX_PACKET_BUFFERS; i++)
+			IXGBE_WRITE_REG(hw, IXGBE_RXPBSIZE(i), rxpktsize);
+		break;
+	}
+
+	/* Setup Tx packet buffer sizes */
+	for (i = 0; i < IXGBE_MAX_PACKET_BUFFERS; i++)
+		IXGBE_WRITE_REG(hw, IXGBE_TXPBSIZE(i), IXGBE_TXPBSIZE_40KB);
+
+	return;
+}
+
 static struct ixgbe_mac_operations mac_ops_82598 = {
 	.init_hw		= &ixgbe_init_hw_generic,
 	.reset_hw		= &ixgbe_reset_hw_82598,
@@ -1199,10 +1294,11 @@ static struct ixgbe_mac_operations mac_ops_82598 = {
 	.get_mac_addr		= &ixgbe_get_mac_addr_generic,
 	.stop_adapter		= &ixgbe_stop_adapter_generic,
 	.get_bus_info           = &ixgbe_get_bus_info_generic,
-	.set_lan_id             = &ixgbe_set_lan_id_multi_port_pcie,
+	.set_lan_id             = &ixgbe_set_lan_id_multi_port_pcie_82598,
 	.read_analog_reg8	= &ixgbe_read_analog_reg8_82598,
 	.write_analog_reg8	= &ixgbe_write_analog_reg8_82598,
 	.setup_link		= &ixgbe_setup_mac_link_82598,
+	.set_rxpba		= &ixgbe_set_rxpba_82598,
 	.check_link		= &ixgbe_check_mac_link_82598,
 	.get_link_capabilities	= &ixgbe_get_link_capabilities_82598,
 	.led_on			= &ixgbe_led_on_generic,
@@ -1220,6 +1316,7 @@ static struct ixgbe_mac_operations mac_ops_82598 = {
 	.clear_vfta		= &ixgbe_clear_vfta_82598,
 	.set_vfta		= &ixgbe_set_vfta_82598,
 	.fc_enable		= &ixgbe_fc_enable_82598,
+	.set_fw_drv_ver         = NULL,
 	.acquire_swfw_sync      = &ixgbe_acquire_swfw_sync,
 	.release_swfw_sync      = &ixgbe_release_swfw_sync,
 };
@@ -1227,6 +1324,7 @@ static struct ixgbe_mac_operations mac_ops_82598 = {
 static struct ixgbe_eeprom_operations eeprom_ops_82598 = {
 	.init_params		= &ixgbe_init_eeprom_params_generic,
 	.read			= &ixgbe_read_eerd_generic,
+	.read_buffer		= &ixgbe_read_eerd_buffer_generic,
 	.calc_checksum          = &ixgbe_calc_eeprom_checksum_generic,
 	.validate_checksum	= &ixgbe_validate_eeprom_checksum_generic,
 	.update_checksum	= &ixgbe_update_eeprom_checksum_generic,

@@ -60,8 +60,6 @@ unsigned long VMALLOC_RESERVE = CONFIG_VMALLOC_RESERVE;
 EXPORT_SYMBOL(VMALLOC_RESERVE);
 #endif
 
-DEFINE_PER_CPU(struct mmu_gather, mmu_gathers);
-
 /* Create an L2 page table */
 static pte_t * __init alloc_pte(void)
 {
@@ -838,8 +836,7 @@ void __init mem_init(void)
 #endif
 
 #ifdef CONFIG_FLATMEM
-	if (!mem_map)
-		BUG();
+	BUG_ON(!mem_map);
 #endif
 
 #ifdef CONFIG_HIGHMEM

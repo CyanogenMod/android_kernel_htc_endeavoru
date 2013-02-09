@@ -11,6 +11,7 @@
  */
 
 #include <linux/device.h>
+#include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
 #include <linux/mfd/tmio.h>
 #include <linux/mmc/host.h>
@@ -22,11 +23,14 @@
 
 #define TMIO_MMC_MIN_DMA_LEN 8
 
-static void tmio_mmc_enable_dma(struct tmio_mmc_host *host, bool enable)
+void tmio_mmc_enable_dma(struct tmio_mmc_host *host, bool enable)
 {
+	if (!host->chan_tx || !host->chan_rx)
+		return;
+
 #if defined(CONFIG_SUPERH) || defined(CONFIG_ARCH_SHMOBILE)
 	/* Switch DMA mode on or off - SuperH specific? */
-	writew(enable ? 2 : 0, host->ctl + (0xd8 << host->bus_shift));
+	sd_ctrl_write16(host, CTL_DMA_ENABLE, enable ? 2 : 0);
 #endif
 }
 
@@ -256,7 +260,10 @@ static bool tmio_mmc_filter(struct dma_chan *chan, void *arg)
 void tmio_mmc_request_dma(struct tmio_mmc_host *host, struct tmio_mmc_data *pdata)
 {
 	/* We can only either use DMA for both Tx and Rx or not use it at all */
-	if (pdata->dma) {
+	if (!pdata->dma)
+		return;
+
+	if (!host->chan_tx && !host->chan_rx) {
 		dma_cap_mask_t mask;
 
 		dma_cap_zero(mask);
@@ -284,18 +291,18 @@ void tmio_mmc_request_dma(struct tmio_mmc_host *host, struct tmio_mmc_data *pdat
 
 		tasklet_init(&host->dma_complete, tmio_mmc_tasklet_fn, (unsigned long)host);
 		tasklet_init(&host->dma_issue, tmio_mmc_issue_tasklet_fn, (unsigned long)host);
-
-		tmio_mmc_enable_dma(host, true);
-
-		return;
-ebouncebuf:
-		dma_release_channel(host->chan_rx);
-		host->chan_rx = NULL;
-ereqrx:
-		dma_release_channel(host->chan_tx);
-		host->chan_tx = NULL;
-		return;
 	}
+
+	tmio_mmc_enable_dma(host, true);
+
+	return;
+
+ebouncebuf:
+	dma_release_channel(host->chan_rx);
+	host->chan_rx = NULL;
+ereqrx:
+	dma_release_channel(host->chan_tx);
+	host->chan_tx = NULL;
 }
 
 void tmio_mmc_release_dma(struct tmio_mmc_host *host)

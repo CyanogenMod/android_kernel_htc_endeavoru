@@ -25,39 +25,34 @@ ccflags-y :=				\
 	-DBCMNVRAMR				\
 	-Idrivers/staging/brcm80211/brcmsmac \
 	-Idrivers/staging/brcm80211/brcmsmac/phy \
-	-Idrivers/staging/brcm80211/util \
 	-Idrivers/staging/brcm80211/include
 
 BRCMSMAC_OFILES := \
-	wl_mac80211.o \
-	wl_ucode_loader.o \
-	wlc_alloc.o \
-	wlc_ampdu.o \
-	wlc_antsel.o \
-	wlc_bmac.o \
-	wlc_channel.o \
-	wlc_main.o \
-	wlc_phy_shim.o \
-	wlc_rate.o \
-	wlc_stf.o \
-	phy/wlc_phy_cmn.o \
-	phy/wlc_phy_lcn.o \
-	phy/wlc_phy_n.o \
-	phy/wlc_phytbl_lcn.o \
-	phy/wlc_phytbl_n.o \
-	../util/aiutils.o \
-	../util/siutils.o \
-	../util/bcmutils.o \
-	../util/bcmwifi.o \
-	../util/bcmotp.o \
-	../util/bcmsrom.o \
-	../util/hnddma.o \
-	../util/hndpmu.o \
-	../util/nicpci.o \
-	../util/qmath.o \
-	../util/nvram/nvram_ro.o
+	mac80211_if.o \
+	ucode_loader.o \
+	alloc.o \
+	ampdu.o \
+	antsel.o \
+	bmac.o \
+	channel.o \
+	main.o \
+	phy_shim.o \
+	pmu.o \
+	rate.o \
+	stf.o \
+	aiutils.o \
+	phy/phy_cmn.o \
+	phy/phy_lcn.o \
+	phy/phy_n.o \
+	phy/phytbl_lcn.o \
+	phy/phytbl_n.o \
+	phy/phy_qmath.o \
+	otp.o \
+	srom.o \
+	dma.o \
+	nicpci.o
 
 MODULEPFX := brcmsmac
 
-obj-m	+= $(MODULEPFX).o
+obj-$(CONFIG_BRCMSMAC)	+= $(MODULEPFX).o
 $(MODULEPFX)-objs	= $(BRCMSMAC_OFILES)

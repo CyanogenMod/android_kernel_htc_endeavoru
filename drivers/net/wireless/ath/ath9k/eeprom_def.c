@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2009 Atheros Communications Inc.
+ * Copyright (c) 2008-2011 Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <asm/unaligned.h>
 #include "hw.h"
 #include "ar9002_phy.h"
 
@@ -231,6 +232,10 @@ static int ath9k_hw_def_check_eeprom(struct ath_hw *ah)
 				integer = swab32(pModal->antCtrlChain[i]);
 				pModal->antCtrlChain[i] = integer;
 			}
+			for (i = 0; i < 3; i++) {
+				word = swab16(pModal->xpaBiasLvlFreq[i]);
+				pModal->xpaBiasLvlFreq[i] = word;
+			}
 
 			for (i = 0; i < AR_EEPROM_MODAL_SPURS; i++) {
 				word = swab16(pModal->spurChans[i].spurChan);
@@ -272,11 +277,11 @@ static u32 ath9k_hw_def_get_eeprom(struct ath_hw *ah,
 	case EEP_NFTHRESH_2:
 		return pModal[1].noiseFloorThreshCh[0];
 	case EEP_MAC_LSW:
-		return pBase->macAddr[0] << 8 | pBase->macAddr[1];
+		return get_unaligned_be16(pBase->macAddr);
 	case EEP_MAC_MID:
-		return pBase->macAddr[2] << 8 | pBase->macAddr[3];
+		return get_unaligned_be16(pBase->macAddr + 2);
 	case EEP_MAC_MSW:
-		return pBase->macAddr[4] << 8 | pBase->macAddr[5];
+		return get_unaligned_be16(pBase->macAddr + 4);
 	case EEP_REG_0:
 		return pBase->regDmn[0];
 	case EEP_REG_1:
@@ -799,6 +804,8 @@ static void ath9k_hw_set_def_power_cal_table(struct ath_hw *ah,
 							   pwr_table_offset,
 							   &diff);
 
+			ENABLE_REGWRITE_BUFFER(ah);
+
 			if ((i == 0) || AR_SREV_5416_20_OR_LATER(ah)) {
 				if (OLC_FOR_AR9280_20_LATER) {
 					REG_WRITE(ah,
@@ -825,10 +832,7 @@ static void ath9k_hw_set_def_power_cal_table(struct ath_hw *ah,
 
 			regOffset = AR_PHY_BASE + (672 << 2) + regChainOffset;
 			for (j = 0; j < 32; j++) {
-				reg32 = ((pdadcValues[4 * j + 0] & 0xFF) << 0) |
-					((pdadcValues[4 * j + 1] & 0xFF) << 8) |
-					((pdadcValues[4 * j + 2] & 0xFF) << 16)|
-					((pdadcValues[4 * j + 3] & 0xFF) << 24);
+				reg32 = get_unaligned_le32(&pdadcValues[4 * j]);
 				REG_WRITE(ah, regOffset, reg32);
 
 				ath_dbg(common, ATH_DBG_EEPROM,
@@ -847,6 +851,7 @@ static void ath9k_hw_set_def_power_cal_table(struct ath_hw *ah,
 
 				regOffset += 4;
 			}
+			REGWRITE_BUFFER_FLUSH(ah);
 		}
 	}
 
@@ -1205,6 +1210,8 @@ static void ath9k_hw_def_set_txpower(struct ath_hw *ah,
 		}
 	}
 
+	ENABLE_REGWRITE_BUFFER(ah);
+
 	REG_WRITE(ah, AR_PHY_POWER_TX_RATE1,
 		  ATH9K_POW_SM(ratesArray[rate18mb], 24)
 		  | ATH9K_POW_SM(ratesArray[rate12mb], 16)
@@ -1291,6 +1298,8 @@ static void ath9k_hw_def_set_txpower(struct ath_hw *ah,
 	REG_WRITE(ah, AR_PHY_POWER_TX_SUB,
 		  ATH9K_POW_SM(pModal->pwrDecreaseFor3Chain, 6)
 		  | ATH9K_POW_SM(pModal->pwrDecreaseFor2Chain, 0));
+
+	REGWRITE_BUFFER_FLUSH(ah);
 }
 
 static u16 ath9k_hw_def_get_spur_channel(struct ath_hw *ah, u16 i, bool is2GHz)

@@ -30,10 +30,10 @@
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/random.h>
-#include <linux/version.h>
 #include <linux/usb.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-ioctl.h>
+#include <media/tuner.h>
 #include <linux/interrupt.h>
 #include <linux/kthread.h>
 #include <linux/highmem.h>
@@ -179,9 +179,6 @@ static inline void get_next_buf(struct tm6000_dmaqueue *dma_q,
 	*buf = list_entry(dma_q->active.next,
 			struct tm6000_buffer, vb.queue);
 
-	if (!buf)
-		return;
-
 	/* Cleans up buffer - Useful for testing for frame/URB loss */
 	outp = videobuf_to_vmalloc(&(*buf)->vb);
 
@@ -228,7 +225,7 @@ static int copy_streams(u8 *data, unsigned long len,
 	unsigned long header = 0;
 	int rc = 0;
 	unsigned int cmd, cpysize, pktsize, size, field, block, line, pos = 0;
-	struct tm6000_buffer *vbuf;
+	struct tm6000_buffer *vbuf = NULL;
 	char *voutp = NULL;
 	unsigned int linewidth;
 
@@ -318,7 +315,7 @@ static int copy_streams(u8 *data, unsigned long len,
 					if (pos + size > vbuf->vb.size)
 						cmd = TM6000_URB_MSG_ERR;
 					dev->isoc_ctl.vfield = field;
-			}
+				}
 				break;
 			case TM6000_URB_MSG_VBI:
 				break;
@@ -333,6 +330,7 @@ static int copy_streams(u8 *data, unsigned long len,
 			size = dev->isoc_ctl.size;
 			pos = dev->isoc_ctl.pos;
 			pktsize = dev->isoc_ctl.pktsize;
+			field = dev->isoc_ctl.field;
 		}
 		cpysize = (endp - ptr > size) ? size : endp - ptr;
 		if (cpysize) {
@@ -343,23 +341,25 @@ static int copy_streams(u8 *data, unsigned long len,
 				if (vbuf)
 					memcpy(&voutp[pos], ptr, cpysize);
 				break;
-			case TM6000_URB_MSG_AUDIO:
-				/* Need some code to copy audio buffer */
-				if (dev->fourcc == V4L2_PIX_FMT_YUYV) {
-					/* Swap word bytes */
-					int i;
+			case TM6000_URB_MSG_AUDIO: {
+				int i;
+				for (i = 0; i < cpysize; i += 2)
+					swab16s((u16 *)(ptr + i));
 
-					for (i = 0; i < cpysize; i += 2)
-						swab16s((u16 *)(ptr + i));
-				}
 				tm6000_call_fillbuf(dev, TM6000_AUDIO, ptr, cpysize);
 				break;
+			}
 			case TM6000_URB_MSG_VBI:
 				/* Need some code to copy vbi buffer */
 				break;
-			case TM6000_URB_MSG_PTS:
+			case TM6000_URB_MSG_PTS: {
 				/* Need some code to copy pts */
+				u32 pts;
+				pts = *(u32 *)ptr;
+				dprintk(dev, V4L2_DEBUG_ISOC, "field %d, PTS %x",
+					field, pts);
 				break;
+			}
 			}
 		}
 		if (ptr + pktsize > endp) {
@@ -369,6 +369,7 @@ static int copy_streams(u8 *data, unsigned long len,
 			dev->isoc_ctl.pos = pos + cpysize;
 			dev->isoc_ctl.size = size - cpysize;
 			dev->isoc_ctl.cmd = cmd;
+			dev->isoc_ctl.field = field;
 			dev->isoc_ctl.pktsize = pktsize - (endp - ptr);
 			ptr += endp - ptr;
 		} else {
@@ -772,7 +773,8 @@ buffer_prepare(struct videobuf_queue *vq, struct videobuf_buffer *vb,
 	}
 
 	if (VIDEOBUF_NEEDS_INIT == buf->vb.state) {
-		if (0 != (rc = videobuf_iolock(vq, &buf->vb, NULL)))
+		rc = videobuf_iolock(vq, &buf->vb, NULL);
+		if (rc != 0)
 			goto fail;
 		urb_init = 1;
 	}
@@ -883,14 +885,19 @@ static void res_free(struct tm6000_core *dev, struct tm6000_fh *fh)
 static int vidioc_querycap(struct file *file, void  *priv,
 					struct v4l2_capability *cap)
 {
+	struct tm6000_core *dev = ((struct tm6000_fh *)priv)->dev;
 
 	strlcpy(cap->driver, "tm6000", sizeof(cap->driver));
 	strlcpy(cap->card, "Trident TVMaster TM5600/6000/6010", sizeof(cap->card));
 	cap->version = TM6000_VERSION;
 	cap->capabilities =	V4L2_CAP_VIDEO_CAPTURE |
 				V4L2_CAP_STREAMING     |
-				V4L2_CAP_TUNER	       |
+				V4L2_CAP_AUDIO         |
 				V4L2_CAP_READWRITE;
+
+	if (dev->tuner_type != TUNER_ABSENT)
+		cap->capabilities |= V4L2_CAP_TUNER;
+
 	return 0;
 }
 
@@ -1038,12 +1045,12 @@ static int vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
 
 	if (!res_get(dev, fh, false))
 		return -EBUSY;
-	return (videobuf_streamon(&fh->vb_vidq));
+	return videobuf_streamon(&fh->vb_vidq);
 }
 
 static int vidioc_streamoff(struct file *file, void *priv, enum v4l2_buf_type i)
 {
-	struct tm6000_fh  *fh=priv;
+	struct tm6000_fh  *fh = priv;
 	struct tm6000_core *dev    = fh->dev;
 
 	if (fh->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
@@ -1052,15 +1059,15 @@ static int vidioc_streamoff(struct file *file, void *priv, enum v4l2_buf_type i)
 		return -EINVAL;
 
 	videobuf_streamoff(&fh->vb_vidq);
-	res_free(dev,fh);
+	res_free(dev, fh);
 
-	return (0);
+	return 0;
 }
 
-static int vidioc_s_std (struct file *file, void *priv, v4l2_std_id *norm)
+static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *norm)
 {
-	int rc=0;
-	struct tm6000_fh   *fh=priv;
+	int rc = 0;
+	struct tm6000_fh   *fh = priv;
 	struct tm6000_core *dev = fh->dev;
 
 	dev->norm = *norm;
@@ -1069,7 +1076,7 @@ static int vidioc_s_std (struct file *file, void *priv, v4l2_std_id *norm)
 	fh->width  = dev->width;
 	fh->height = dev->height;
 
-	if (rc<0)
+	if (rc < 0)
 		return rc;
 
 	v4l2_device_call_all(&dev->v4l2_dev, 0, core, s_std, dev->norm);
@@ -1077,35 +1084,37 @@ static int vidioc_s_std (struct file *file, void *priv, v4l2_std_id *norm)
 	return 0;
 }
 
+static const char *iname[] = {
+	[TM6000_INPUT_TV] = "Television",
+	[TM6000_INPUT_COMPOSITE1] = "Composite 1",
+	[TM6000_INPUT_COMPOSITE2] = "Composite 2",
+	[TM6000_INPUT_SVIDEO] = "S-Video",
+};
+
 static int vidioc_enum_input(struct file *file, void *priv,
-				struct v4l2_input *inp)
+				struct v4l2_input *i)
 {
 	struct tm6000_fh   *fh = priv;
 	struct tm6000_core *dev = fh->dev;
+	unsigned int n;
 
-	switch (inp->index) {
-	case TM6000_INPUT_TV:
-		inp->type = V4L2_INPUT_TYPE_TUNER;
-		strcpy(inp->name, "Television");
-		break;
-	case TM6000_INPUT_COMPOSITE:
-		if (dev->caps.has_input_comp) {
-			inp->type = V4L2_INPUT_TYPE_CAMERA;
-			strcpy(inp->name, "Composite");
-		} else
-			return -EINVAL;
-		break;
-	case TM6000_INPUT_SVIDEO:
-		if (dev->caps.has_input_svid) {
-			inp->type = V4L2_INPUT_TYPE_CAMERA;
-			strcpy(inp->name, "S-Video");
-		} else
-			return -EINVAL;
-		break;
-	default:
+	n = i->index;
+	if (n >= 3)
 		return -EINVAL;
-	}
-	inp->std = TM6000_STD;
+
+	if (!dev->vinput[n].type)
+		return -EINVAL;
+
+	i->index = n;
+
+	if (dev->vinput[n].type == TM6000_INPUT_TV)
+		i->type = V4L2_INPUT_TYPE_TUNER;
+	else
+		i->type = V4L2_INPUT_TYPE_CAMERA;
+
+	strcpy(i->name, iname[dev->vinput[n].type]);
+
+	i->std = TM6000_STD;
 
 	return 0;
 }
@@ -1119,38 +1128,26 @@ static int vidioc_g_input(struct file *file, void *priv, unsigned int *i)
 
 	return 0;
 }
+
 static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 {
 	struct tm6000_fh   *fh = priv;
 	struct tm6000_core *dev = fh->dev;
 	int rc = 0;
-	char buf[1];
 
-	switch (i) {
-	case TM6000_INPUT_TV:
-		dev->input = i;
-		*buf = 0;
-		break;
-	case TM6000_INPUT_COMPOSITE:
-	case TM6000_INPUT_SVIDEO:
-		dev->input = i;
-		*buf = 1;
-		break;
-	default:
+	if (i >= 3)
 		return -EINVAL;
-	}
-	rc = tm6000_read_write_usb(dev, USB_DIR_OUT | USB_TYPE_VENDOR,
-			       REQ_03_SET_GET_MCU_PIN, 0x03, 1, buf, 1);
+	if (!dev->vinput[i].type)
+		return -EINVAL;
 
-	if (!rc) {
-		dev->input = i;
-		rc = vidioc_s_std(file, priv, &dev->vfd->current_norm);
-	}
+	dev->input = i;
+
+	rc = vidioc_s_std(file, priv, &dev->vfd->current_norm);
 
 	return rc;
 }
 
-	/* --- controls ---------------------------------------------- */
+/* --- controls ---------------------------------------------- */
 static int vidioc_queryctrl(struct file *file, void *priv,
 				struct v4l2_queryctrl *qc)
 {
@@ -1251,7 +1248,11 @@ static int vidioc_g_tuner(struct file *file, void *priv,
 	t->type       = V4L2_TUNER_ANALOG_TV;
 	t->capability = V4L2_TUNER_CAP_NORM;
 	t->rangehigh  = 0xffffffffUL;
-	t->rxsubchans = V4L2_TUNER_SUB_MONO;
+	t->rxsubchans = V4L2_TUNER_SUB_STEREO;
+
+	v4l2_device_call_all(&dev->v4l2_dev, 0, tuner, g_tuner, t);
+
+	t->audmode = dev->amode;
 
 	return 0;
 }
@@ -1266,6 +1267,11 @@ static int vidioc_s_tuner(struct file *file, void *priv,
 		return -EINVAL;
 	if (0 != t->index)
 		return -EINVAL;
+
+	dev->amode = t->audmode;
+	dprintk(dev, 3, "audio mode: %x\n", t->audmode);
+
+	v4l2_device_call_all(&dev->v4l2_dev, 0, tuner, s_tuner, t);
 
 	return 0;
 }
@@ -1320,7 +1326,11 @@ static int radio_querycap(struct file *file, void *priv,
 		le16_to_cpu(dev->udev->descriptor.idVendor),
 		le16_to_cpu(dev->udev->descriptor.idProduct));
 	cap->version = dev->dev_type;
-	cap->capabilities = V4L2_CAP_TUNER;
+	cap->capabilities = V4L2_CAP_TUNER |
+			V4L2_CAP_AUDIO     |
+			V4L2_CAP_RADIO     |
+			V4L2_CAP_READWRITE |
+			V4L2_CAP_STREAMING;
 
 	return 0;
 }
@@ -1337,16 +1347,9 @@ static int radio_g_tuner(struct file *file, void *priv,
 	memset(t, 0, sizeof(*t));
 	strcpy(t->name, "Radio");
 	t->type = V4L2_TUNER_RADIO;
+	t->rxsubchans = V4L2_TUNER_SUB_STEREO;
 
 	v4l2_device_call_all(&dev->v4l2_dev, 0, tuner, g_tuner, t);
-
-	if ((dev->aradio == TM6000_AIP_LINE1) ||
-				(dev->aradio == TM6000_AIP_LINE2)) {
-		t->rxsubchans = V4L2_TUNER_SUB_MONO;
-	}
-	else {
-		t->rxsubchans = V4L2_TUNER_SUB_STEREO;
-	}
 
 	return 0;
 }
@@ -1368,7 +1371,13 @@ static int radio_s_tuner(struct file *file, void *priv,
 static int radio_enum_input(struct file *file, void *priv,
 					struct v4l2_input *i)
 {
+	struct tm6000_fh *fh = priv;
+	struct tm6000_core *dev = fh->dev;
+
 	if (i->index != 0)
+		return -EINVAL;
+
+	if (!dev->rinput.type)
 		return -EINVAL;
 
 	strcpy(i->name, "Radio");
@@ -1379,7 +1388,14 @@ static int radio_enum_input(struct file *file, void *priv,
 
 static int radio_g_input(struct file *filp, void *priv, unsigned int *i)
 {
-	*i = 0;
+	struct tm6000_fh *fh = priv;
+	struct tm6000_core *dev = fh->dev;
+
+	if (dev->input != 5)
+		return -EINVAL;
+
+	*i = dev->input - 5;
+
 	return 0;
 }
 
@@ -1399,6 +1415,17 @@ static int radio_s_audio(struct file *file, void *priv,
 
 static int radio_s_input(struct file *filp, void *priv, unsigned int i)
 {
+	struct tm6000_fh *fh = priv;
+	struct tm6000_core *dev = fh->dev;
+
+	if (i)
+		return -EINVAL;
+
+	if (!dev->rinput.type)
+		return -EINVAL;
+
+	dev->input = i + 5;
+
 	return 0;
 }
 
@@ -1478,18 +1505,18 @@ static int tm6000_open(struct file *file)
 
 	fh->fmt      = format_by_fourcc(dev->fourcc);
 
-	tm6000_get_std_res (dev);
+	tm6000_get_std_res(dev);
 
 	fh->width    = dev->width;
 	fh->height   = dev->height;
 
 	dprintk(dev, V4L2_DEBUG_OPEN, "Open: fh=0x%08lx, dev=0x%08lx, "
 						"dev->vidq=0x%08lx\n",
-		(unsigned long)fh,(unsigned long)dev,(unsigned long)&dev->vidq);
+		(unsigned long)fh, (unsigned long)dev, (unsigned long)&dev->vidq);
 	dprintk(dev, V4L2_DEBUG_OPEN, "Open: list_empty "
-				"queued=%d\n",list_empty(&dev->vidq.queued));
+				"queued=%d\n", list_empty(&dev->vidq.queued));
 	dprintk(dev, V4L2_DEBUG_OPEN, "Open: list_empty "
-				"active=%d\n",list_empty(&dev->vidq.active));
+				"active=%d\n", list_empty(&dev->vidq.active));
 
 	/* initialize hardware on analog mode */
 	rc = tm6000_init_analog_mode(dev);
@@ -1512,15 +1539,11 @@ static int tm6000_open(struct file *file)
 
 	if (fh->radio) {
 		dprintk(dev, V4L2_DEBUG_OPEN, "video_open: setting radio device\n");
-		tm6000_set_audio_input(dev, dev->aradio);
-		tm6000_set_volume(dev, dev->ctl_volume);
+		dev->input = 5;
+		tm6000_set_audio_rinput(dev);
 		v4l2_device_call_all(&dev->v4l2_dev, 0, tuner, s_radio);
 		tm6000_prepare_isoc(dev);
 		tm6000_start_thread(dev);
-	}
-	else {
-		tm6000_set_audio_input(dev, dev->avideo);
-		tm6000_set_volume(dev, dev->ctl_volume);
 	}
 
 	return 0;
@@ -1531,7 +1554,7 @@ tm6000_read(struct file *file, char __user *data, size_t count, loff_t *pos)
 {
 	struct tm6000_fh        *fh = file->private_data;
 
-	if (fh->type==V4L2_BUF_TYPE_VIDEO_CAPTURE) {
+	if (fh->type == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
 		if (!res_get(fh->dev, fh, true))
 			return -EBUSY;
 
@@ -1557,7 +1580,7 @@ tm6000_poll(struct file *file, struct poll_table_struct *wait)
 		/* streaming capture */
 		if (list_empty(&fh->vb_vidq.stream))
 			return POLLERR;
-		buf = list_entry(fh->vb_vidq.stream.next,struct tm6000_buffer,vb.stream);
+		buf = list_entry(fh->vb_vidq.stream.next, struct tm6000_buffer, vb.stream);
 	} else {
 		/* read() capture */
 		return videobuf_poll_stream(file, &fh->vb_vidq,
@@ -1647,10 +1670,10 @@ static struct video_device tm6000_template = {
 };
 
 static const struct v4l2_file_operations radio_fops = {
-	.owner	  = THIS_MODULE,
-	.open	  = tm6000_open,
-	.release  = tm6000_release,
-	.ioctl	  = video_ioctl2,
+	.owner		= THIS_MODULE,
+	.open		= tm6000_open,
+	.release	= tm6000_release,
+	.unlocked_ioctl	= video_ioctl2,
 };
 
 static const struct v4l2_ioctl_ops radio_ioctl_ops = {
@@ -1673,7 +1696,7 @@ static const struct v4l2_ioctl_ops radio_ioctl_ops = {
 struct video_device tm6000_radio_template = {
 	.name			= "tm6000",
 	.fops			= &radio_fops,
-	.ioctl_ops 		= &radio_ioctl_ops,
+	.ioctl_ops		= &radio_ioctl_ops,
 };
 
 /* -----------------------------------------------------------------
@@ -1730,24 +1753,26 @@ int tm6000_v4l2_register(struct tm6000_core *dev)
 	printk(KERN_INFO "%s: registered device %s\n",
 	       dev->name, video_device_node_name(dev->vfd));
 
-	dev->radio_dev = vdev_init(dev, &tm6000_radio_template,
-						   "radio");
-	if (!dev->radio_dev) {
-		printk(KERN_INFO "%s: can't register radio device\n",
-		       dev->name);
-		return ret; /* FIXME release resource */
-	}
+	if (dev->caps.has_radio) {
+		dev->radio_dev = vdev_init(dev, &tm6000_radio_template,
+							   "radio");
+		if (!dev->radio_dev) {
+			printk(KERN_INFO "%s: can't register radio device\n",
+			       dev->name);
+			return ret; /* FIXME release resource */
+		}
 
-	ret = video_register_device(dev->radio_dev, VFL_TYPE_RADIO,
-				    radio_nr);
-	if (ret < 0) {
-		printk(KERN_INFO "%s: can't register radio device\n",
-		       dev->name);
-		return ret; /* FIXME release resource */
-	}
+		ret = video_register_device(dev->radio_dev, VFL_TYPE_RADIO,
+					    radio_nr);
+		if (ret < 0) {
+			printk(KERN_INFO "%s: can't register radio device\n",
+			       dev->name);
+			return ret; /* FIXME release resource */
+		}
 
-	printk(KERN_INFO "%s: registered device %s\n",
-	       dev->name, video_device_node_name(dev->radio_dev));
+		printk(KERN_INFO "%s: registered device %s\n",
+		       dev->name, video_device_node_name(dev->radio_dev));
+	}
 
 	printk(KERN_INFO "Trident TVMaster TM5600/TM6000/TM6010 USB2 board (Load status: %d)\n", ret);
 	return ret;

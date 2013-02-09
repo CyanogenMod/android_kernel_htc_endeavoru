@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2003 - 2010 Intel Corporation. All rights reserved.
+ * Copyright(c) 2003 - 2011 Intel Corporation. All rights reserved.
  *
  * Portions of this file are derived from the ipw3945 project, as well
  * as portions of the ieee80211 subsystem header files.
@@ -41,238 +41,12 @@
 #include "iwl-agn-calib.h"
 #include "iwl-agn.h"
 
-/******************************************************************************
- *
- * RX path functions
- *
- ******************************************************************************/
-
-/*
- * Rx theory of operation
- *
- * Driver allocates a circular buffer of Receive Buffer Descriptors (RBDs),
- * each of which point to Receive Buffers to be filled by the NIC.  These get
- * used not only for Rx frames, but for any command response or notification
- * from the NIC.  The driver and NIC manage the Rx buffers by means
- * of indexes into the circular buffer.
- *
- * Rx Queue Indexes
- * The host/firmware share two index registers for managing the Rx buffers.
- *
- * The READ index maps to the first position that the firmware may be writing
- * to -- the driver can read up to (but not including) this position and get
- * good data.
- * The READ index is managed by the firmware once the card is enabled.
- *
- * The WRITE index maps to the last position the driver has read from -- the
- * position preceding WRITE is the last slot the firmware can place a packet.
- *
- * The queue is empty (no good data) if WRITE = READ - 1, and is full if
- * WRITE = READ.
- *
- * During initialization, the host sets up the READ queue position to the first
- * INDEX position, and WRITE to the last (READ - 1 wrapped)
- *
- * When the firmware places a packet in a buffer, it will advance the READ index
- * and fire the RX interrupt.  The driver can then query the READ index and
- * process as many packets as possible, moving the WRITE index forward as it
- * resets the Rx queue buffers with new memory.
- *
- * The management in the driver is as follows:
- * + A list of pre-allocated SKBs is stored in iwl->rxq->rx_free.  When
- *   iwl->rxq->free_count drops to or below RX_LOW_WATERMARK, work is scheduled
- *   to replenish the iwl->rxq->rx_free.
- * + In iwl_rx_replenish (scheduled) if 'processed' != 'read' then the
- *   iwl->rxq is replenished and the READ INDEX is updated (updating the
- *   'processed' and 'read' driver indexes as well)
- * + A received packet is processed and handed to the kernel network stack,
- *   detached from the iwl->rxq.  The driver 'processed' index is updated.
- * + The Host/Firmware iwl->rxq is replenished at tasklet time from the rx_free
- *   list. If there are no allocated buffers in iwl->rxq->rx_free, the READ
- *   INDEX is not incremented and iwl->status(RX_STALLED) is set.  If there
- *   were enough free buffers and RX_STALLED is set it is cleared.
- *
- *
- * Driver sequence:
- *
- * iwl_rx_queue_alloc()   Allocates rx_free
- * iwl_rx_replenish()     Replenishes rx_free list from rx_used, and calls
- *                            iwl_rx_queue_restock
- * iwl_rx_queue_restock() Moves available buffers from rx_free into Rx
- *                            queue, updates firmware pointers, and updates
- *                            the WRITE index.  If insufficient rx_free buffers
- *                            are available, schedules iwl_rx_replenish
- *
- * -- enable interrupts --
- * ISR - iwl_rx()         Detach iwl_rx_mem_buffers from pool up to the
- *                            READ INDEX, detaching the SKB from the pool.
- *                            Moves the packet buffer from queue to rx_used.
- *                            Calls iwl_rx_queue_restock to refill any empty
- *                            slots.
- * ...
- *
- */
-
-/**
- * iwl_rx_queue_space - Return number of free slots available in queue.
- */
-int iwl_rx_queue_space(const struct iwl_rx_queue *q)
-{
-	int s = q->read - q->write;
-	if (s <= 0)
-		s += RX_QUEUE_SIZE;
-	/* keep some buffer to not confuse full and empty queue */
-	s -= 2;
-	if (s < 0)
-		s = 0;
-	return s;
-}
-
-/**
- * iwl_rx_queue_update_write_ptr - Update the write pointer for the RX queue
- */
-void iwl_rx_queue_update_write_ptr(struct iwl_priv *priv, struct iwl_rx_queue *q)
-{
-	unsigned long flags;
-	u32 rx_wrt_ptr_reg = priv->hw_params.rx_wrt_ptr_reg;
-	u32 reg;
-
-	spin_lock_irqsave(&q->lock, flags);
-
-	if (q->need_update == 0)
-		goto exit_unlock;
-
-	if (priv->cfg->base_params->shadow_reg_enable) {
-		/* shadow register enabled */
-		/* Device expects a multiple of 8 */
-		q->write_actual = (q->write & ~0x7);
-		iwl_write32(priv, rx_wrt_ptr_reg, q->write_actual);
-	} else {
-		/* If power-saving is in use, make sure device is awake */
-		if (test_bit(STATUS_POWER_PMI, &priv->status)) {
-			reg = iwl_read32(priv, CSR_UCODE_DRV_GP1);
-
-			if (reg & CSR_UCODE_DRV_GP1_BIT_MAC_SLEEP) {
-				IWL_DEBUG_INFO(priv,
-					"Rx queue requesting wakeup,"
-					" GP1 = 0x%x\n", reg);
-				iwl_set_bit(priv, CSR_GP_CNTRL,
-					CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
-				goto exit_unlock;
-			}
-
-			q->write_actual = (q->write & ~0x7);
-			iwl_write_direct32(priv, rx_wrt_ptr_reg,
-					q->write_actual);
-
-		/* Else device is assumed to be awake */
-		} else {
-			/* Device expects a multiple of 8 */
-			q->write_actual = (q->write & ~0x7);
-			iwl_write_direct32(priv, rx_wrt_ptr_reg,
-				q->write_actual);
-		}
-	}
-	q->need_update = 0;
-
- exit_unlock:
-	spin_unlock_irqrestore(&q->lock, flags);
-}
-
-int iwl_rx_queue_alloc(struct iwl_priv *priv)
-{
-	struct iwl_rx_queue *rxq = &priv->rxq;
-	struct device *dev = &priv->pci_dev->dev;
-	int i;
-
-	spin_lock_init(&rxq->lock);
-	INIT_LIST_HEAD(&rxq->rx_free);
-	INIT_LIST_HEAD(&rxq->rx_used);
-
-	/* Alloc the circular buffer of Read Buffer Descriptors (RBDs) */
-	rxq->bd = dma_alloc_coherent(dev, 4 * RX_QUEUE_SIZE, &rxq->bd_dma,
-				     GFP_KERNEL);
-	if (!rxq->bd)
-		goto err_bd;
-
-	rxq->rb_stts = dma_alloc_coherent(dev, sizeof(struct iwl_rb_status),
-					  &rxq->rb_stts_dma, GFP_KERNEL);
-	if (!rxq->rb_stts)
-		goto err_rb;
-
-	/* Fill the rx_used queue with _all_ of the Rx buffers */
-	for (i = 0; i < RX_FREE_BUFFERS + RX_QUEUE_SIZE; i++)
-		list_add_tail(&rxq->pool[i].list, &rxq->rx_used);
-
-	/* Set us so that we have processed and used all buffers, but have
-	 * not restocked the Rx queue with fresh buffers */
-	rxq->read = rxq->write = 0;
-	rxq->write_actual = 0;
-	rxq->free_count = 0;
-	rxq->need_update = 0;
-	return 0;
-
-err_rb:
-	dma_free_coherent(&priv->pci_dev->dev, 4 * RX_QUEUE_SIZE, rxq->bd,
-			  rxq->bd_dma);
-err_bd:
-	return -ENOMEM;
-}
 
 /******************************************************************************
  *
  * Generic RX handler implementations
  *
  ******************************************************************************/
-
-static void iwl_rx_reply_alive(struct iwl_priv *priv,
-			       struct iwl_rx_mem_buffer *rxb)
-{
-	struct iwl_rx_packet *pkt = rxb_addr(rxb);
-	struct iwl_alive_resp *palive;
-	struct delayed_work *pwork;
-
-	palive = &pkt->u.alive_frame;
-
-	IWL_DEBUG_INFO(priv, "Alive ucode status 0x%08X revision "
-		       "0x%01X 0x%01X\n",
-		       palive->is_valid, palive->ver_type,
-		       palive->ver_subtype);
-
-	if (palive->ver_subtype == INITIALIZE_SUBTYPE) {
-		IWL_DEBUG_INFO(priv, "Initialization Alive received.\n");
-		memcpy(&priv->card_alive_init,
-		       &pkt->u.alive_frame,
-		       sizeof(struct iwl_init_alive_resp));
-		pwork = &priv->init_alive_start;
-	} else {
-		IWL_DEBUG_INFO(priv, "Runtime Alive received.\n");
-		memcpy(&priv->card_alive, &pkt->u.alive_frame,
-		       sizeof(struct iwl_alive_resp));
-		pwork = &priv->alive_start;
-	}
-
-	/* We delay the ALIVE response by 5ms to
-	 * give the HW RF Kill time to activate... */
-	if (palive->is_valid == UCODE_VALID_OK)
-		queue_delayed_work(priv->workqueue, pwork,
-				   msecs_to_jiffies(5));
-	else {
-		IWL_WARN(priv, "%s uCode did not respond OK.\n",
-			(palive->ver_subtype == INITIALIZE_SUBTYPE) ?
-			"init" : "runtime");
-		/*
-		 * If fail to load init uCode,
-		 * let's try to load the init uCode again.
-		 * We should not get into this situation, but if it
-		 * does happen, we should not move on and loading "runtime"
-		 * without proper calibrate the device.
-		 */
-		if (palive->ver_subtype == INITIALIZE_SUBTYPE)
-			priv->ucode_type = UCODE_NONE;
-		queue_work(priv->workqueue, &priv->restart);
-	}
-}
 
 static void iwl_rx_reply_error(struct iwl_priv *priv,
 			       struct iwl_rx_mem_buffer *rxb)
@@ -390,21 +164,16 @@ static void iwl_rx_beacon_notif(struct iwl_priv *priv,
  * the BA_TIMEOUT_MAX, reload firmware and bring system back to normal
  * operation state.
  */
-static bool iwl_good_ack_health(struct iwl_priv *priv, struct iwl_rx_packet *pkt)
+static bool iwl_good_ack_health(struct iwl_priv *priv,
+				struct statistics_tx *cur)
 {
 	int actual_delta, expected_delta, ba_timeout_delta;
-	struct statistics_tx *cur, *old;
+	struct statistics_tx *old;
 
-	if (priv->_agn.agg_tids_count)
+	if (priv->agg_tids_count)
 		return true;
 
-	if (iwl_bt_statistics(priv)) {
-		cur = &pkt->u.stats_bt.tx;
-		old = &priv->_agn.statistics_bt.tx;
-	} else {
-		cur = &pkt->u.stats.tx;
-		old = &priv->_agn.statistics.tx;
-	}
+	old = &priv->statistics.tx;
 
 	actual_delta = le32_to_cpu(cur->actual_ack_cnt) -
 		       le32_to_cpu(old->actual_ack_cnt);
@@ -430,10 +199,10 @@ static bool iwl_good_ack_health(struct iwl_priv *priv, struct iwl_rx_packet *pkt
 		 * DEBUG is not, these will just compile out.
 		 */
 		IWL_DEBUG_RADIO(priv, "rx_detected_cnt delta %d\n",
-				priv->_agn.delta_statistics.tx.rx_detected_cnt);
+				priv->delta_stats.tx.rx_detected_cnt);
 		IWL_DEBUG_RADIO(priv,
 				"ack_or_ba_timeout_collision delta %d\n",
-				priv->_agn.delta_statistics.tx.ack_or_ba_timeout_collision);
+				priv->delta_stats.tx.ack_or_ba_timeout_collision);
 #endif
 
 		if (ba_timeout_delta >= BA_TIMEOUT_MAX)
@@ -450,7 +219,9 @@ static bool iwl_good_ack_health(struct iwl_priv *priv, struct iwl_rx_packet *pkt
  * to improve the throughput.
  */
 static bool iwl_good_plcp_health(struct iwl_priv *priv,
-				 struct iwl_rx_packet *pkt, unsigned int msecs)
+				 struct statistics_rx_phy *cur_ofdm,
+				 struct statistics_rx_ht_phy *cur_ofdm_ht,
+				 unsigned int msecs)
 {
 	int delta;
 	int threshold = priv->cfg->base_params->plcp_delta_threshold;
@@ -460,29 +231,12 @@ static bool iwl_good_plcp_health(struct iwl_priv *priv,
 		return true;
 	}
 
-	if (iwl_bt_statistics(priv)) {
-		struct statistics_rx_bt *cur, *old;
+	delta = le32_to_cpu(cur_ofdm->plcp_err) -
+		le32_to_cpu(priv->statistics.rx_ofdm.plcp_err) +
+		le32_to_cpu(cur_ofdm_ht->plcp_err) -
+		le32_to_cpu(priv->statistics.rx_ofdm_ht.plcp_err);
 
-		cur = &pkt->u.stats_bt.rx;
-		old = &priv->_agn.statistics_bt.rx;
-
-		delta = le32_to_cpu(cur->ofdm.plcp_err) -
-			le32_to_cpu(old->ofdm.plcp_err) +
-			le32_to_cpu(cur->ofdm_ht.plcp_err) -
-			le32_to_cpu(old->ofdm_ht.plcp_err);
-	} else {
-		struct statistics_rx *cur, *old;
-
-		cur = &pkt->u.stats.rx;
-		old = &priv->_agn.statistics.rx;
-
-		delta = le32_to_cpu(cur->ofdm.plcp_err) -
-			le32_to_cpu(old->ofdm.plcp_err) +
-			le32_to_cpu(cur->ofdm_ht.plcp_err) -
-			le32_to_cpu(old->ofdm_ht.plcp_err);
-	}
-
-	/* Can be negative if firmware reseted statistics */
+	/* Can be negative if firmware reset statistics */
 	if (delta <= 0)
 		return true;
 
@@ -497,44 +251,35 @@ static bool iwl_good_plcp_health(struct iwl_priv *priv,
 }
 
 static void iwl_recover_from_statistics(struct iwl_priv *priv,
-					struct iwl_rx_packet *pkt)
+					struct statistics_rx_phy *cur_ofdm,
+					struct statistics_rx_ht_phy *cur_ofdm_ht,
+					struct statistics_tx *tx,
+					unsigned long stamp)
 {
-	const struct iwl_mod_params *mod_params = priv->cfg->mod_params;
 	unsigned int msecs;
-	unsigned long stamp;
 
 	if (test_bit(STATUS_EXIT_PENDING, &priv->status))
 		return;
 
-	stamp = jiffies;
 	msecs = jiffies_to_msecs(stamp - priv->rx_statistics_jiffies);
 
 	/* Only gather statistics and update time stamp when not associated */
 	if (!iwl_is_any_associated(priv))
-		goto out;
+		return;
 
 	/* Do not check/recover when do not have enough statistics data */
 	if (msecs < 99)
 		return;
 
-	if (mod_params->ack_check && !iwl_good_ack_health(priv, pkt)) {
+	if (iwlagn_mod_params.ack_check && !iwl_good_ack_health(priv, tx)) {
 		IWL_ERR(priv, "low ack count detected, restart firmware\n");
 		if (!iwl_force_reset(priv, IWL_FW_RESET, false))
 			return;
 	}
 
-	if (mod_params->plcp_check && !iwl_good_plcp_health(priv, pkt, msecs))
+	if (iwlagn_mod_params.plcp_check &&
+	    !iwl_good_plcp_health(priv, cur_ofdm, cur_ofdm_ht, msecs))
 		iwl_force_reset(priv, IWL_RF_RESET, false);
-
-out:
-	if (iwl_bt_statistics(priv))
-		memcpy(&priv->_agn.statistics_bt, &pkt->u.stats_bt,
-			sizeof(priv->_agn.statistics_bt));
-	else
-		memcpy(&priv->_agn.statistics, &pkt->u.stats,
-			sizeof(priv->_agn.statistics));
-
-	priv->rx_statistics_jiffies = stamp;
 }
 
 /* Calculate noise level, based on measurements during network silence just
@@ -548,10 +293,8 @@ static void iwl_rx_calc_noise(struct iwl_priv *priv)
 	int bcn_silence_a, bcn_silence_b, bcn_silence_c;
 	int last_rx_noise;
 
-	if (iwl_bt_statistics(priv))
-		rx_info = &(priv->_agn.statistics_bt.rx.general.common);
-	else
-		rx_info = &(priv->_agn.statistics.rx.general);
+	rx_info = &priv->statistics.rx_non_phy;
+
 	bcn_silence_a =
 		le32_to_cpu(rx_info->beacon_silence_rssi_a) & IN_BAND_FILTER;
 	bcn_silence_b =
@@ -583,105 +326,153 @@ static void iwl_rx_calc_noise(struct iwl_priv *priv)
 			last_rx_noise);
 }
 
+#ifdef CONFIG_IWLWIFI_DEBUGFS
 /*
  *  based on the assumption of all statistics counter are in DWORD
  *  FIXME: This function is for debugging, do not deal with
  *  the case of counters roll-over.
  */
-static void iwl_accumulative_statistics(struct iwl_priv *priv,
-					__le32 *stats)
+static void accum_stats(__le32 *prev, __le32 *cur, __le32 *delta,
+			__le32 *max_delta, __le32 *accum, int size)
 {
-#ifdef CONFIG_IWLWIFI_DEBUGFS
-	int i, size;
-	__le32 *prev_stats;
-	u32 *accum_stats;
-	u32 *delta, *max_delta;
-	struct statistics_general_common *general, *accum_general;
-	struct statistics_tx *tx, *accum_tx;
+	int i;
 
-	if (iwl_bt_statistics(priv)) {
-		prev_stats = (__le32 *)&priv->_agn.statistics_bt;
-		accum_stats = (u32 *)&priv->_agn.accum_statistics_bt;
-		size = sizeof(struct iwl_bt_notif_statistics);
-		general = &priv->_agn.statistics_bt.general.common;
-		accum_general = &priv->_agn.accum_statistics_bt.general.common;
-		tx = &priv->_agn.statistics_bt.tx;
-		accum_tx = &priv->_agn.accum_statistics_bt.tx;
-		delta = (u32 *)&priv->_agn.delta_statistics_bt;
-		max_delta = (u32 *)&priv->_agn.max_delta_bt;
-	} else {
-		prev_stats = (__le32 *)&priv->_agn.statistics;
-		accum_stats = (u32 *)&priv->_agn.accum_statistics;
-		size = sizeof(struct iwl_notif_statistics);
-		general = &priv->_agn.statistics.general.common;
-		accum_general = &priv->_agn.accum_statistics.general.common;
-		tx = &priv->_agn.statistics.tx;
-		accum_tx = &priv->_agn.accum_statistics.tx;
-		delta = (u32 *)&priv->_agn.delta_statistics;
-		max_delta = (u32 *)&priv->_agn.max_delta;
-	}
-	for (i = sizeof(__le32); i < size;
-	     i += sizeof(__le32), stats++, prev_stats++, delta++,
-	     max_delta++, accum_stats++) {
-		if (le32_to_cpu(*stats) > le32_to_cpu(*prev_stats)) {
-			*delta = (le32_to_cpu(*stats) -
-				le32_to_cpu(*prev_stats));
-			*accum_stats += *delta;
-			if (*delta > *max_delta)
+	for (i = 0;
+	     i < size / sizeof(__le32);
+	     i++, prev++, cur++, delta++, max_delta++, accum++) {
+		if (le32_to_cpu(*cur) > le32_to_cpu(*prev)) {
+			*delta = cpu_to_le32(
+				le32_to_cpu(*cur) - le32_to_cpu(*prev));
+			le32_add_cpu(accum, le32_to_cpu(*delta));
+			if (le32_to_cpu(*delta) > le32_to_cpu(*max_delta))
 				*max_delta = *delta;
 		}
 	}
-
-	/* reset accumulative statistics for "no-counter" type statistics */
-	accum_general->temperature = general->temperature;
-	accum_general->temperature_m = general->temperature_m;
-	accum_general->ttl_timestamp = general->ttl_timestamp;
-	accum_tx->tx_power.ant_a = tx->tx_power.ant_a;
-	accum_tx->tx_power.ant_b = tx->tx_power.ant_b;
-	accum_tx->tx_power.ant_c = tx->tx_power.ant_c;
-#endif
 }
+
+static void
+iwl_accumulative_statistics(struct iwl_priv *priv,
+			    struct statistics_general_common *common,
+			    struct statistics_rx_non_phy *rx_non_phy,
+			    struct statistics_rx_phy *rx_ofdm,
+			    struct statistics_rx_ht_phy *rx_ofdm_ht,
+			    struct statistics_rx_phy *rx_cck,
+			    struct statistics_tx *tx,
+			    struct statistics_bt_activity *bt_activity)
+{
+#define ACCUM(_name)	\
+	accum_stats((__le32 *)&priv->statistics._name,		\
+		    (__le32 *)_name,				\
+		    (__le32 *)&priv->delta_stats._name,		\
+		    (__le32 *)&priv->max_delta_stats._name,	\
+		    (__le32 *)&priv->accum_stats._name,		\
+		    sizeof(*_name));
+
+	ACCUM(common);
+	ACCUM(rx_non_phy);
+	ACCUM(rx_ofdm);
+	ACCUM(rx_ofdm_ht);
+	ACCUM(rx_cck);
+	ACCUM(tx);
+	if (bt_activity)
+		ACCUM(bt_activity);
+#undef ACCUM
+}
+#else
+static inline void
+iwl_accumulative_statistics(struct iwl_priv *priv,
+			    struct statistics_general_common *common,
+			    struct statistics_rx_non_phy *rx_non_phy,
+			    struct statistics_rx_phy *rx_ofdm,
+			    struct statistics_rx_ht_phy *rx_ofdm_ht,
+			    struct statistics_rx_phy *rx_cck,
+			    struct statistics_tx *tx,
+			    struct statistics_bt_activity *bt_activity)
+{
+}
+#endif
 
 static void iwl_rx_statistics(struct iwl_priv *priv,
 			      struct iwl_rx_mem_buffer *rxb)
 {
+	unsigned long stamp = jiffies;
 	const int reg_recalib_period = 60;
 	int change;
 	struct iwl_rx_packet *pkt = rxb_addr(rxb);
+	u32 len = le32_to_cpu(pkt->len_n_flags) & FH_RSCSR_FRAME_SIZE_MSK;
+	__le32 *flag;
+	struct statistics_general_common *common;
+	struct statistics_rx_non_phy *rx_non_phy;
+	struct statistics_rx_phy *rx_ofdm;
+	struct statistics_rx_ht_phy *rx_ofdm_ht;
+	struct statistics_rx_phy *rx_cck;
+	struct statistics_tx *tx;
+	struct statistics_bt_activity *bt_activity;
 
-	if (iwl_bt_statistics(priv)) {
-		IWL_DEBUG_RX(priv,
-			     "Statistics notification received (%d vs %d).\n",
-			     (int)sizeof(struct iwl_bt_notif_statistics),
-			     le32_to_cpu(pkt->len_n_flags) &
-			     FH_RSCSR_FRAME_SIZE_MSK);
+	len -= sizeof(struct iwl_cmd_header); /* skip header */
 
-		change = ((priv->_agn.statistics_bt.general.common.temperature !=
-			   pkt->u.stats_bt.general.common.temperature) ||
-			   ((priv->_agn.statistics_bt.flag &
-			   STATISTICS_REPLY_FLG_HT40_MODE_MSK) !=
-			   (pkt->u.stats_bt.flag &
-			   STATISTICS_REPLY_FLG_HT40_MODE_MSK)));
+	IWL_DEBUG_RX(priv, "Statistics notification received (%d bytes).\n",
+		     len);
 
-		iwl_accumulative_statistics(priv, (__le32 *)&pkt->u.stats_bt);
+	if (len == sizeof(struct iwl_bt_notif_statistics)) {
+		struct iwl_bt_notif_statistics *stats;
+		stats = &pkt->u.stats_bt;
+		flag = &stats->flag;
+		common = &stats->general.common;
+		rx_non_phy = &stats->rx.general.common;
+		rx_ofdm = &stats->rx.ofdm;
+		rx_ofdm_ht = &stats->rx.ofdm_ht;
+		rx_cck = &stats->rx.cck;
+		tx = &stats->tx;
+		bt_activity = &stats->general.activity;
+
+#ifdef CONFIG_IWLWIFI_DEBUGFS
+		/* handle this exception directly */
+		priv->statistics.num_bt_kills = stats->rx.general.num_bt_kills;
+		le32_add_cpu(&priv->statistics.accum_num_bt_kills,
+			     le32_to_cpu(stats->rx.general.num_bt_kills));
+#endif
+	} else if (len == sizeof(struct iwl_notif_statistics)) {
+		struct iwl_notif_statistics *stats;
+		stats = &pkt->u.stats;
+		flag = &stats->flag;
+		common = &stats->general.common;
+		rx_non_phy = &stats->rx.general;
+		rx_ofdm = &stats->rx.ofdm;
+		rx_ofdm_ht = &stats->rx.ofdm_ht;
+		rx_cck = &stats->rx.cck;
+		tx = &stats->tx;
+		bt_activity = NULL;
 	} else {
-		IWL_DEBUG_RX(priv,
-			     "Statistics notification received (%d vs %d).\n",
-			     (int)sizeof(struct iwl_notif_statistics),
-			     le32_to_cpu(pkt->len_n_flags) &
-			     FH_RSCSR_FRAME_SIZE_MSK);
-
-		change = ((priv->_agn.statistics.general.common.temperature !=
-			   pkt->u.stats.general.common.temperature) ||
-			   ((priv->_agn.statistics.flag &
-			   STATISTICS_REPLY_FLG_HT40_MODE_MSK) !=
-			   (pkt->u.stats.flag &
-			   STATISTICS_REPLY_FLG_HT40_MODE_MSK)));
-
-		iwl_accumulative_statistics(priv, (__le32 *)&pkt->u.stats);
+		WARN_ONCE(1, "len %d doesn't match BT (%zu) or normal (%zu)\n",
+			  len, sizeof(struct iwl_bt_notif_statistics),
+			  sizeof(struct iwl_notif_statistics));
+		return;
 	}
 
-	iwl_recover_from_statistics(priv, pkt);
+	change = common->temperature != priv->statistics.common.temperature ||
+		 (*flag & STATISTICS_REPLY_FLG_HT40_MODE_MSK) !=
+		 (priv->statistics.flag & STATISTICS_REPLY_FLG_HT40_MODE_MSK);
+
+	iwl_accumulative_statistics(priv, common, rx_non_phy, rx_ofdm,
+				    rx_ofdm_ht, rx_cck, tx, bt_activity);
+
+	iwl_recover_from_statistics(priv, rx_ofdm, rx_ofdm_ht, tx, stamp);
+
+	priv->statistics.flag = *flag;
+	memcpy(&priv->statistics.common, common, sizeof(*common));
+	memcpy(&priv->statistics.rx_non_phy, rx_non_phy, sizeof(*rx_non_phy));
+	memcpy(&priv->statistics.rx_ofdm, rx_ofdm, sizeof(*rx_ofdm));
+	memcpy(&priv->statistics.rx_ofdm_ht, rx_ofdm_ht, sizeof(*rx_ofdm_ht));
+	memcpy(&priv->statistics.rx_cck, rx_cck, sizeof(*rx_cck));
+	memcpy(&priv->statistics.tx, tx, sizeof(*tx));
+#ifdef CONFIG_IWLWIFI_DEBUGFS
+	if (bt_activity)
+		memcpy(&priv->statistics.bt_activity, bt_activity,
+			sizeof(*bt_activity));
+#endif
+
+	priv->rx_statistics_jiffies = stamp;
 
 	set_bit(STATUS_STATISTICS, &priv->status);
 
@@ -697,8 +488,8 @@ static void iwl_rx_statistics(struct iwl_priv *priv,
 		iwl_rx_calc_noise(priv);
 		queue_work(priv->workqueue, &priv->run_time_calib_work);
 	}
-	if (priv->cfg->ops->lib->temp_ops.temperature && change)
-		priv->cfg->ops->lib->temp_ops.temperature(priv);
+	if (priv->cfg->lib->temperature && change)
+		priv->cfg->lib->temperature(priv);
 }
 
 static void iwl_rx_reply_statistics(struct iwl_priv *priv,
@@ -708,18 +499,12 @@ static void iwl_rx_reply_statistics(struct iwl_priv *priv,
 
 	if (le32_to_cpu(pkt->u.stats.flag) & UCODE_STATISTICS_CLEAR_MSK) {
 #ifdef CONFIG_IWLWIFI_DEBUGFS
-		memset(&priv->_agn.accum_statistics, 0,
-			sizeof(struct iwl_notif_statistics));
-		memset(&priv->_agn.delta_statistics, 0,
-			sizeof(struct iwl_notif_statistics));
-		memset(&priv->_agn.max_delta, 0,
-			sizeof(struct iwl_notif_statistics));
-		memset(&priv->_agn.accum_statistics_bt, 0,
-			sizeof(struct iwl_bt_notif_statistics));
-		memset(&priv->_agn.delta_statistics_bt, 0,
-			sizeof(struct iwl_bt_notif_statistics));
-		memset(&priv->_agn.max_delta_bt, 0,
-			sizeof(struct iwl_bt_notif_statistics));
+		memset(&priv->accum_stats, 0,
+			sizeof(priv->accum_stats));
+		memset(&priv->delta_stats, 0,
+			sizeof(priv->delta_stats));
+		memset(&priv->max_delta_stats, 0,
+			sizeof(priv->max_delta_stats));
 #endif
 		IWL_DEBUG_RX(priv, "Statistics have been cleared\n");
 	}
@@ -776,7 +561,7 @@ static void iwl_rx_card_state_notif(struct iwl_priv *priv,
 		wiphy_rfkill_set_hw_state(priv->hw->wiphy,
 			test_bit(STATUS_RF_KILL_HW, &priv->status));
 	else
-		wake_up_interruptible(&priv->wait_command_queue);
+		wake_up(&priv->wait_command_queue);
 }
 
 static void iwl_rx_missed_beacon_notif(struct iwl_priv *priv,
@@ -807,8 +592,8 @@ static void iwl_rx_reply_rx_phy(struct iwl_priv *priv,
 {
 	struct iwl_rx_packet *pkt = rxb_addr(rxb);
 
-	priv->_agn.last_phy_res_valid = true;
-	memcpy(&priv->_agn.last_phy_res, pkt->u.raw,
+	priv->last_phy_res_valid = true;
+	memcpy(&priv->last_phy_res, pkt->u.raw,
 	       sizeof(struct iwl_rx_phy_res));
 }
 
@@ -873,6 +658,7 @@ static void iwl_pass_packet_to_mac80211(struct iwl_priv *priv,
 {
 	struct sk_buff *skb;
 	__le16 fc = hdr->frame_control;
+	struct iwl_rxon_context *ctx;
 
 	/* We only process data packets if the interface is open */
 	if (unlikely(!priv->is_open)) {
@@ -882,7 +668,7 @@ static void iwl_pass_packet_to_mac80211(struct iwl_priv *priv,
 	}
 
 	/* In case of HW accelerated crypto and bad decryption, drop */
-	if (!priv->cfg->mod_params->sw_crypto &&
+	if (!iwlagn_mod_params.sw_crypto &&
 	    iwl_set_decrypted_flag(priv, hdr, ampdu_status, stats))
 		return;
 
@@ -895,10 +681,29 @@ static void iwl_pass_packet_to_mac80211(struct iwl_priv *priv,
 	skb_add_rx_frag(skb, 0, rxb->page, (void *)hdr - rxb_addr(rxb), len);
 
 	iwl_update_stats(priv, false, fc, len);
+
+	/*
+	* Wake any queues that were stopped due to a passive channel tx
+	* failure. This can happen because the regulatory enforcement in
+	* the device waits for a beacon before allowing transmission,
+	* sometimes even after already having transmitted frames for the
+	* association because the new RXON may reset the information.
+	*/
+	if (unlikely(ieee80211_is_beacon(fc))) {
+		for_each_context(priv, ctx) {
+			if (!ctx->last_tx_rejected)
+				continue;
+			if (compare_ether_addr(hdr->addr3,
+					       ctx->active.bssid_addr))
+				continue;
+			ctx->last_tx_rejected = false;
+			iwl_wake_any_queue(priv, ctx);
+		}
+	}
+
 	memcpy(IEEE80211_SKB_RXCB(skb), stats, sizeof(*stats));
 
 	ieee80211_rx(priv->hw, skb);
-	priv->alloc_rxb_page--;
 	rxb->page = NULL;
 }
 
@@ -961,6 +766,47 @@ static u32 iwl_translate_rx_status(struct iwl_priv *priv, u32 decrypt_in)
 	return decrypt_out;
 }
 
+/* Calc max signal level (dBm) among 3 possible receivers */
+static int iwlagn_calc_rssi(struct iwl_priv *priv,
+			     struct iwl_rx_phy_res *rx_resp)
+{
+	/* data from PHY/DSP regarding signal strength, etc.,
+	 *   contents are always there, not configurable by host
+	 */
+	struct iwlagn_non_cfg_phy *ncphy =
+		(struct iwlagn_non_cfg_phy *)rx_resp->non_cfg_phy_buf;
+	u32 val, rssi_a, rssi_b, rssi_c, max_rssi;
+	u8 agc;
+
+	val  = le32_to_cpu(ncphy->non_cfg_phy[IWLAGN_RX_RES_AGC_IDX]);
+	agc = (val & IWLAGN_OFDM_AGC_MSK) >> IWLAGN_OFDM_AGC_BIT_POS;
+
+	/* Find max rssi among 3 possible receivers.
+	 * These values are measured by the digital signal processor (DSP).
+	 * They should stay fairly constant even as the signal strength varies,
+	 *   if the radio's automatic gain control (AGC) is working right.
+	 * AGC value (see below) will provide the "interesting" info.
+	 */
+	val = le32_to_cpu(ncphy->non_cfg_phy[IWLAGN_RX_RES_RSSI_AB_IDX]);
+	rssi_a = (val & IWLAGN_OFDM_RSSI_INBAND_A_BITMSK) >>
+		IWLAGN_OFDM_RSSI_A_BIT_POS;
+	rssi_b = (val & IWLAGN_OFDM_RSSI_INBAND_B_BITMSK) >>
+		IWLAGN_OFDM_RSSI_B_BIT_POS;
+	val = le32_to_cpu(ncphy->non_cfg_phy[IWLAGN_RX_RES_RSSI_C_IDX]);
+	rssi_c = (val & IWLAGN_OFDM_RSSI_INBAND_C_BITMSK) >>
+		IWLAGN_OFDM_RSSI_C_BIT_POS;
+
+	max_rssi = max_t(u32, rssi_a, rssi_b);
+	max_rssi = max_t(u32, max_rssi, rssi_c);
+
+	IWL_DEBUG_STATS(priv, "Rssi In A %d B %d C %d Max %d AGC dB %d\n",
+		rssi_a, rssi_b, rssi_c, max_rssi, agc);
+
+	/* dBm = max_rssi dB - agc dB - constant.
+	 * Higher AGC (higher radio gain) means lower signal. */
+	return max_rssi - agc - IWLAGN_RSSI_OFFSET;
+}
+
 /* Called for REPLY_RX (legacy ABG frames), or
  * REPLY_RX_MPDU_CMD (HT high-throughput N frames). */
 static void iwl_rx_reply_rx(struct iwl_priv *priv,
@@ -995,11 +841,11 @@ static void iwl_rx_reply_rx(struct iwl_priv *priv,
 				phy_res->cfg_phy_cnt + len);
 		ampdu_status = le32_to_cpu(rx_pkt_status);
 	} else {
-		if (!priv->_agn.last_phy_res_valid) {
+		if (!priv->last_phy_res_valid) {
 			IWL_ERR(priv, "MPDU frame without cached PHY data\n");
 			return;
 		}
-		phy_res = &priv->_agn.last_phy_res;
+		phy_res = &priv->last_phy_res;
 		amsdu = (struct iwl_rx_mpdu_res_start *)pkt->u.raw;
 		header = (struct ieee80211_hdr *)(pkt->u.raw + sizeof(*amsdu));
 		len = le16_to_cpu(amsdu->byte_count);
@@ -1042,7 +888,7 @@ static void iwl_rx_reply_rx(struct iwl_priv *priv,
 	priv->ucode_beacon_time = le32_to_cpu(phy_res->beacon_time_stamp);
 
 	/* Find max signal strength (dBm) among 3 antenna/receiver chains */
-	rx_status.signal = priv->cfg->ops->utils->calc_rssi(priv, phy_res);
+	rx_status.signal = iwlagn_calc_rssi(priv, phy_res);
 
 	iwl_dbg_log_rx_data_frame(priv, len, header);
 	IWL_DEBUG_STATS_LIMIT(priv, "Rssi %d, TSF %llu\n",
@@ -1093,7 +939,6 @@ void iwl_setup_rx_handlers(struct iwl_priv *priv)
 
 	handlers = priv->rx_handlers;
 
-	handlers[REPLY_ALIVE]			= iwl_rx_reply_alive;
 	handlers[REPLY_ERROR]			= iwl_rx_reply_error;
 	handlers[CHANNEL_SWITCH_NOTIFICATION]	= iwl_rx_csa;
 	handlers[SPECTRUM_MEASURE_NOTIFICATION]	= iwl_rx_spectrum_measure_notif;
@@ -1121,6 +966,64 @@ void iwl_setup_rx_handlers(struct iwl_priv *priv)
 	/* block ack */
 	handlers[REPLY_COMPRESSED_BA]		= iwlagn_rx_reply_compressed_ba;
 
-	/* Set up hardware specific Rx handlers */
-	priv->cfg->ops->lib->rx_handler_setup(priv);
+	/* init calibration handlers */
+	priv->rx_handlers[CALIBRATION_RES_NOTIFICATION] =
+					iwlagn_rx_calib_result;
+	priv->rx_handlers[REPLY_TX] = iwlagn_rx_reply_tx;
+
+	/* set up notification wait support */
+	spin_lock_init(&priv->notif_wait_lock);
+	INIT_LIST_HEAD(&priv->notif_waits);
+	init_waitqueue_head(&priv->notif_waitq);
+
+	/* Set up BT Rx handlers */
+	if (priv->cfg->lib->bt_rx_handler_setup)
+		priv->cfg->lib->bt_rx_handler_setup(priv);
+
+}
+
+void iwl_rx_dispatch(struct iwl_priv *priv, struct iwl_rx_mem_buffer *rxb)
+{
+	struct iwl_rx_packet *pkt = rxb_addr(rxb);
+
+	/*
+	 * Do the notification wait before RX handlers so
+	 * even if the RX handler consumes the RXB we have
+	 * access to it in the notification wait entry.
+	 */
+	if (!list_empty(&priv->notif_waits)) {
+		struct iwl_notification_wait *w;
+
+		spin_lock(&priv->notif_wait_lock);
+		list_for_each_entry(w, &priv->notif_waits, list) {
+			if (w->cmd != pkt->hdr.cmd)
+				continue;
+			IWL_DEBUG_RX(priv,
+				"Notif: %s, 0x%02x - wake the callers up\n",
+				get_cmd_string(pkt->hdr.cmd),
+				pkt->hdr.cmd);
+			w->triggered = true;
+			if (w->fn)
+				w->fn(priv, pkt, w->fn_data);
+		}
+		spin_unlock(&priv->notif_wait_lock);
+
+		wake_up_all(&priv->notif_waitq);
+	}
+
+	if (priv->pre_rx_handler)
+		priv->pre_rx_handler(priv, rxb);
+
+	/* Based on type of command response or notification,
+	 *   handle those that need handling via function in
+	 *   rx_handlers table.  See iwl_setup_rx_handlers() */
+	if (priv->rx_handlers[pkt->hdr.cmd]) {
+		priv->isr_stats.rx_handlers[pkt->hdr.cmd]++;
+		priv->rx_handlers[pkt->hdr.cmd] (priv, rxb);
+	} else {
+		/* No handling needed */
+		IWL_DEBUG_RX(priv,
+			"No handler needed for %s, 0x%02x\n",
+			get_cmd_string(pkt->hdr.cmd), pkt->hdr.cmd);
+	}
 }

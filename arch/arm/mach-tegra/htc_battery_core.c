@@ -26,6 +26,7 @@
 #include <linux/workqueue.h>
 #include <mach/htc_battery_core.h>
 #include <linux/android_alarm.h>
+#include <linux/tps80032_charger.h>
 
 static ssize_t htc_battery_show_property(struct device *dev,
 					struct device_attribute *attr,
@@ -84,7 +85,9 @@ struct htc_battery_core_info {
 
 static struct htc_battery_core_info battery_core_info;
 static int battery_register = 1;
+#if 0	/* note: old mechanism */
 static int battery_over_loading;
+#endif
 
 static struct alarm batt_charger_ctrl_alarm;
 static struct work_struct batt_charger_ctrl_work;
@@ -206,6 +209,13 @@ static ssize_t htc_battery_show_batt_attr(struct device *dev,
 					char *buf)
 {
 	return battery_core_info.func.func_show_batt_attr(attr, buf);
+}
+
+static ssize_t htc_battery_show_batt_power_meter(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	return battery_core_info.func.func_show_batt_power_meter(attr, buf);
 }
 
 static ssize_t htc_battery_set_delta(struct device *dev,
@@ -360,6 +370,13 @@ static ssize_t htc_battery_charger_switch(struct device *dev,
 			return rc;
 		}
 		charger_ctrl_stat = DISABLE_LIMIT_CHARGER;
+	} else if (enable == ENABLE_HIZ) {
+		rc = battery_core_info.func.func_charger_control(
+							    ENABLE_HIZ);
+		if (rc) {
+			BATT_LOG("enable hiz fail!");
+			return rc;
+		}
 	}
 
 	alarm_cancel(&batt_charger_ctrl_alarm);
@@ -384,10 +401,57 @@ static ssize_t htc_battery_phone_call_switch(struct device *dev,
 	}
 
 	battery_core_info.func.func_phone_call_notification(phone_call);
-	phone_call_stat = phone_call;
 
+	if (!battery_core_info.func.func_limit_charging_notification) {
+		BATT_ERR("No limit charging notification function!");
+		goto no_limit_charging;
+	}
+	battery_core_info.func.func_limit_charging_notification(LIMIT_CHARGING_PHONE_CALL, phone_call);
+
+no_limit_charging:
+	phone_call_stat = phone_call;
 	return count;
 }
+
+#define LIMIT_CHARGING_FILENODE_FUNC(_name, _limit_type)					\
+	static unsigned int _name##_stat;							\
+	static ssize_t htc_battery_##_name##_stat(struct device *dev,				\
+				struct device_attribute *attr,					\
+				char *buf)							\
+	{											\
+		int i = 0;									\
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n", _name##_stat);			\
+		return i;									\
+	}											\
+												\
+	static ssize_t htc_battery_##_name##_switch(struct device *dev,				\
+					struct device_attribute *attr,				\
+					const char *buf, size_t count)				\
+	{											\
+		unsigned long value = 0;							\
+		int rc = 0;									\
+		rc = strict_strtoul(buf, 10, &value);						\
+		if (rc)										\
+			return rc;								\
+		if (!battery_core_info.func.func_limit_charging_notification) {			\
+			BATT_ERR("No limit charging notification function!");			\
+			return -ENOENT;								\
+		}										\
+		battery_core_info.func.func_limit_charging_notification(_limit_type, value);	\
+		_name##_stat = value;								\
+		return count;									\
+	}
+
+#define LIMIT_CHARGING_FILENODE_ATTR(_name)			\
+{								\
+	.attr = { .name = #_name, .mode = S_IWUSR | S_IWGRP },	\
+	.show = htc_battery_##_name##_stat,			\
+	.store = htc_battery_##_name##_switch,			\
+}
+
+LIMIT_CHARGING_FILENODE_FUNC(navigation, LIMIT_CHARGING_NAVIGATION)
+LIMIT_CHARGING_FILENODE_FUNC(medialink, LIMIT_CHARGING_MEDIALINK)
+LIMIT_CHARGING_FILENODE_FUNC(data_encryption, LIMIT_CHARGING_DATA_ENCRYPTION)
 
 static struct device_attribute htc_battery_attrs[] = {
 	HTC_BATTERY_ATTR(batt_id),
@@ -401,6 +465,7 @@ static struct device_attribute htc_battery_attrs[] = {
 	HTC_BATTERY_ATTR(batt_state),
 
 	__ATTR(batt_attr_text, S_IRUGO, htc_battery_show_batt_attr, NULL),
+	__ATTR(batt_power_meter, S_IRUGO, htc_battery_show_batt_power_meter, NULL),
 };
 
 static struct device_attribute htc_set_delta_attrs[] = {
@@ -415,6 +480,9 @@ static struct device_attribute htc_set_delta_attrs[] = {
 		htc_battery_charger_ctrl_timer),
 	__ATTR(phone_call, S_IWUSR | S_IWGRP, htc_battery_phone_call_stat,
 		htc_battery_phone_call_switch),
+	LIMIT_CHARGING_FILENODE_ATTR(navigation),
+	LIMIT_CHARGING_FILENODE_ATTR(medialink),
+	LIMIT_CHARGING_FILENODE_ATTR(data_encryption),
 };
 
 static int htc_battery_create_attrs(struct device *dev)
@@ -440,7 +508,7 @@ htc_attrs_failed:
 		device_remove_file(dev, &htc_battery_attrs[i]);
 htc_delta_attrs_failed:
 	while (j--)
-		device_remove_file(dev, &htc_set_delta_attrs[i]);
+		device_remove_file(dev, &htc_set_delta_attrs[j]);
 succeed:
 	return rc;
 }
@@ -586,6 +654,19 @@ static ssize_t htc_battery_show_property(struct device *dev,
 	return i;
 }
 
+int htc_battery_charger_hiz(void)
+{
+	int rc = 0;
+
+	rc = battery_core_info.func.func_charger_control(
+			ENABLE_HIZ);
+	if (rc) {
+		BATT_LOG("enable hiz fail!");
+	}
+
+	return rc;
+}
+
 static ssize_t htc_battery_charger_ctrl_timer(struct device *dev,
 					struct device_attribute *attr,
 					const char *buf, size_t count)
@@ -689,6 +770,7 @@ int htc_battery_core_update(void)
 		is_send_batt_uevent = 1;
 	}
 
+#if 0	/* note: old mechanism */
 	/* To make sure that device is under over loading scenario, accumulate
 	   variable battery_over_loading only when device has been under charging
 	   and level is decreased. */
@@ -699,6 +781,7 @@ int htc_battery_core_update(void)
 		else
 			battery_over_loading = 0;
 	}
+#endif
 
 	memcpy(&battery_core_info.rep, &new_batt_info_rep, sizeof(struct battery_info_reply));
 #if 0
@@ -720,20 +803,26 @@ int htc_battery_core_update(void)
 		battery_core_info.htc_charge_full = 0;
 	else {
 		if (battery_core_info.htc_charge_full &&
-			(battery_core_info.rep.full_level == 100))
-			battery_core_info.htc_charge_full = 1;
-		else {
+			(battery_core_info.rep.full_level == 100)) {
+			if (battery_core_info.rep.level > 98) {
+				battery_core_info.htc_charge_full = 1;
+				battery_core_info.rep.level = 100;
+			} else
+				battery_core_info.htc_charge_full = 0;
+		} else {
 			if (battery_core_info.rep.level == 100)
 				battery_core_info.htc_charge_full = 1;
 			else
 				battery_core_info.htc_charge_full = 0;
 		}
 
+#if 0	/* note: old mechanism */
 		/* Clear htc_charge_full while over loading is happened. */
 		if (battery_over_loading >= 2) {
 			battery_core_info.htc_charge_full = 0;
 			battery_over_loading = 0;
 		}
+#endif
 	}
 
 	battery_core_info.update_time = jiffies;
@@ -771,6 +860,12 @@ int htc_battery_core_update(void)
 }
 EXPORT_SYMBOL_GPL(htc_battery_core_update);
 
+int htc_battery_is_charging_full(void)
+{
+	return battery_core_info.htc_charge_full;
+}
+EXPORT_SYMBOL_GPL(htc_battery_is_charging_full);
+
 int htc_battery_core_register(struct device *dev,
 				struct htc_battery_core *htc_battery)
 {
@@ -787,6 +882,9 @@ int htc_battery_core_register(struct device *dev,
 	if (htc_battery->func_show_batt_attr)
 		battery_core_info.func.func_show_batt_attr =
 					htc_battery->func_show_batt_attr;
+	if (htc_battery->func_show_batt_power_meter)
+		battery_core_info.func.func_show_batt_power_meter =
+					htc_battery->func_show_batt_power_meter;
 	if (htc_battery->func_get_battery_info)
 		battery_core_info.func.func_get_battery_info =
 					htc_battery->func_get_battery_info;
@@ -801,6 +899,10 @@ int htc_battery_core_register(struct device *dev,
 	if (htc_battery->func_phone_call_notification)
 		battery_core_info.func.func_phone_call_notification =
 					htc_battery->func_phone_call_notification;
+
+	if (htc_battery->func_limit_charging_notification)
+		battery_core_info.func.func_limit_charging_notification =
+					htc_battery->func_limit_charging_notification;
 
 	/* init power supplier framework */
 	for (i = 0; i < ARRAY_SIZE(htc_power_supplies); i++) {
@@ -839,7 +941,9 @@ int htc_battery_core_register(struct device *dev,
 	/* zero means battey info is not ready */
 	battery_core_info.rep.batt_state = 0;
 
+#if 0	/* note: old mechanism */
 	battery_over_loading = 0;
+#endif
 
 	return 0;
 }

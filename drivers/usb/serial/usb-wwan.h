@@ -31,10 +31,10 @@ extern int usb_wwan_resume(struct usb_serial *serial);
 
 /* per port private data */
 
-#define N_IN_URB 4
-#define N_OUT_URB 4
-#define IN_BUFLEN 4096
-#define OUT_BUFLEN 4096
+#define N_IN_URB 5
+#define N_OUT_URB 5
+#define IN_BUFLEN 65536
+#define OUT_BUFLEN 65536
 
 struct usb_wwan_intf_private {
 	spinlock_t susp_lock;
@@ -53,6 +53,7 @@ struct usb_wwan_port_private {
 	u8 *out_buffer[N_OUT_URB];
 	unsigned long out_busy;	/* Bit vector of URBs in use */
 	int opened;
+	struct usb_anchor submitted;
 	struct usb_anchor delayed;
 
 	/* Settings for the port */

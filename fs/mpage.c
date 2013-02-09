@@ -27,6 +27,7 @@
 #include <linux/writeback.h>
 #include <linux/backing-dev.h>
 #include <linux/pagevec.h>
+#include <linux/cleancache.h>
 
 /*
  * I/O completion handler for multipage BIOs.
@@ -271,6 +272,12 @@ do_mpage_readpage(struct bio *bio, struct page *page, unsigned nr_pages,
 		SetPageMappedToDisk(page);
 	}
 
+	if (fully_mapped && blocks_per_page == 1 && !PageUptodate(page) &&
+	    cleancache_get_page(page) == 0) {
+		SetPageUptodate(page);
+		goto confused;
+	}
+
 	/*
 	 * This page will go to BIO.  Do we need to send this BIO off first?
 	 */
@@ -382,12 +389,6 @@ mpage_readpages(struct address_space *mapping, struct list_head *pages,
 					&last_block_in_bio, &map_bh,
 					&first_logical_block,
 					get_block);
-/* Software, Studio Engineering added. */
-#if defined(CONFIG_ZIMMER)
-			if(bio) {
-				bio->bi_rw |= (1 << REQ_SWAPIN_DMPG);
-			}
-#endif
 		}
 		page_cache_release(page);
 	}

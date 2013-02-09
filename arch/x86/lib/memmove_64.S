@@ -8,6 +8,8 @@
 #define _STRING_C
 #include <linux/linkage.h>
 #include <asm/dwarf2.h>
+#include <asm/cpufeature.h>
+#include <asm/alternative-asm.h>
 
 #undef memmove
 
@@ -24,6 +26,7 @@
  */
 ENTRY(memmove)
 	CFI_STARTPROC
+
 	/* Handle more 32bytes in loop */
 	mov %rdi, %rax
 	cmp $0x20, %rdx
@@ -31,8 +34,13 @@ ENTRY(memmove)
 
 	/* Decide forward/backward copy mode */
 	cmp %rdi, %rsi
-	jb	2f
+	jge .Lmemmove_begin_forward
+	mov %rsi, %r8
+	add %rdx, %r8
+	cmp %rdi, %r8
+	jg 2f
 
+.Lmemmove_begin_forward:
 	/*
 	 * movsq instruction have many startup latency
 	 * so we handle small size by general register.
@@ -78,6 +86,8 @@ ENTRY(memmove)
 	rep movsq
 	movq %r11, (%r10)
 	jmp 13f
+.Lmemmove_end_forward:
+
 	/*
 	 * Handle data backward by movsq.
 	 */
@@ -194,4 +204,20 @@ ENTRY(memmove)
 13:
 	retq
 	CFI_ENDPROC
+
+	.section .altinstr_replacement,"ax"
+.Lmemmove_begin_forward_efs:
+	/* Forward moving data. */
+	movq %rdx, %rcx
+	rep movsb
+	retq
+.Lmemmove_end_forward_efs:
+	.previous
+
+	.section .altinstructions,"a"
+	altinstruction_entry .Lmemmove_begin_forward,		\
+		.Lmemmove_begin_forward_efs,X86_FEATURE_ERMS,	\
+		.Lmemmove_end_forward-.Lmemmove_begin_forward,	\
+		.Lmemmove_end_forward_efs-.Lmemmove_begin_forward_efs
+	.previous
 ENDPROC(memmove)

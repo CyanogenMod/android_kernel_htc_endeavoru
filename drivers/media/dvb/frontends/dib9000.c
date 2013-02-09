@@ -27,6 +27,8 @@ MODULE_PARM_DESC(debug, "turn on debugging (default: 0)");
 struct i2c_device {
 	struct i2c_adapter *i2c_adap;
 	u8 i2c_addr;
+	u8 *i2c_read_buffer;
+	u8 *i2c_write_buffer;
 };
 
 /* lock */
@@ -35,6 +37,15 @@ struct i2c_device {
 #define DibReleaseLock(lock) mutex_unlock(lock)
 #define DibInitLock(lock) mutex_init(lock)
 #define DibFreeLock(lock)
+
+struct dib9000_pid_ctrl {
+#define DIB9000_PID_FILTER_CTRL 0
+#define DIB9000_PID_FILTER      1
+	u8 cmd;
+	u8 id;
+	u16 pid;
+	u8 onoff;
+};
 
 struct dib9000_state {
 	struct i2c_device i2c;
@@ -92,11 +103,20 @@ struct dib9000_state {
 
 	struct dvb_frontend *fe[MAX_NUMBER_OF_FRONTENDS];
 	u16 component_bus_speed;
+
+	/* for the I2C transfer */
+	struct i2c_msg msg[2];
+	u8 i2c_write_buffer[255];
+	u8 i2c_read_buffer[255];
+	DIB_LOCK demod_lock;
+	u8 get_frontend_internal;
+	struct dib9000_pid_ctrl pid_ctrl[10];
+	s8 pid_ctrl_index; /* -1: empty list; -2: do not use the list */
 };
 
-u32 fe_info[44] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+static const u32 fe_info[44] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0
+	0, 0, 0, 0, 0, 0, 0, 0
 };
 
 enum dib9000_power_mode {
@@ -217,25 +237,33 @@ static u16 dib9000_read16_attr(struct dib9000_state *state, u16 reg, u8 * b, u32
 	u32 chunk_size = 126;
 	u32 l;
 	int ret;
-	u8 wb[2] = { reg >> 8, reg & 0xff };
-	struct i2c_msg msg[2] = {
-		{.addr = state->i2c.i2c_addr >> 1, .flags = 0, .buf = wb, .len = 2},
-		{.addr = state->i2c.i2c_addr >> 1, .flags = I2C_M_RD, .buf = b, .len = len},
-	};
 
 	if (state->platform.risc.fw_is_running && (reg < 1024))
 		return dib9000_risc_apb_access_read(state, reg, attribute, NULL, 0, b, len);
 
+	memset(state->msg, 0, 2 * sizeof(struct i2c_msg));
+	state->msg[0].addr = state->i2c.i2c_addr >> 1;
+	state->msg[0].flags = 0;
+	state->msg[0].buf = state->i2c_write_buffer;
+	state->msg[0].len = 2;
+	state->msg[1].addr = state->i2c.i2c_addr >> 1;
+	state->msg[1].flags = I2C_M_RD;
+	state->msg[1].buf = b;
+	state->msg[1].len = len;
+
+	state->i2c_write_buffer[0] = reg >> 8;
+	state->i2c_write_buffer[1] = reg & 0xff;
+
 	if (attribute & DATA_BUS_ACCESS_MODE_8BIT)
-		wb[0] |= (1 << 5);
+		state->i2c_write_buffer[0] |= (1 << 5);
 	if (attribute & DATA_BUS_ACCESS_MODE_NO_ADDRESS_INCREMENT)
-		wb[0] |= (1 << 4);
+		state->i2c_write_buffer[0] |= (1 << 4);
 
 	do {
 		l = len < chunk_size ? len : chunk_size;
-		msg[1].len = l;
-		msg[1].buf = b;
-		ret = i2c_transfer(state->i2c.i2c_adap, msg, 2) != 2 ? -EREMOTEIO : 0;
+		state->msg[1].len = l;
+		state->msg[1].buf = b;
+		ret = i2c_transfer(state->i2c.i2c_adap, state->msg, 2) != 2 ? -EREMOTEIO : 0;
 		if (ret != 0) {
 			dprintk("i2c read error on %d", reg);
 			return -EREMOTEIO;
@@ -253,49 +281,46 @@ static u16 dib9000_read16_attr(struct dib9000_state *state, u16 reg, u8 * b, u32
 
 static u16 dib9000_i2c_read16(struct i2c_device *i2c, u16 reg)
 {
-	u8 b[2];
-	u8 wb[2] = { reg >> 8, reg & 0xff };
 	struct i2c_msg msg[2] = {
-		{.addr = i2c->i2c_addr >> 1, .flags = 0, .buf = wb, .len = 2},
-		{.addr = i2c->i2c_addr >> 1, .flags = I2C_M_RD, .buf = b, .len = 2},
+		{.addr = i2c->i2c_addr >> 1, .flags = 0,
+			.buf = i2c->i2c_write_buffer, .len = 2},
+		{.addr = i2c->i2c_addr >> 1, .flags = I2C_M_RD,
+			.buf = i2c->i2c_read_buffer, .len = 2},
 	};
+
+	i2c->i2c_write_buffer[0] = reg >> 8;
+	i2c->i2c_write_buffer[1] = reg & 0xff;
 
 	if (i2c_transfer(i2c->i2c_adap, msg, 2) != 2) {
 		dprintk("read register %x error", reg);
 		return 0;
 	}
 
-	return (b[0] << 8) | b[1];
+	return (i2c->i2c_read_buffer[0] << 8) | i2c->i2c_read_buffer[1];
 }
 
 static inline u16 dib9000_read_word(struct dib9000_state *state, u16 reg)
 {
-	u8 b[2];
-	if (dib9000_read16_attr(state, reg, b, 2, 0) != 0)
+	if (dib9000_read16_attr(state, reg, state->i2c_read_buffer, 2, 0) != 0)
 		return 0;
-	return (b[0] << 8 | b[1]);
+	return (state->i2c_read_buffer[0] << 8) | state->i2c_read_buffer[1];
 }
 
 static inline u16 dib9000_read_word_attr(struct dib9000_state *state, u16 reg, u16 attribute)
 {
-	u8 b[2];
-	if (dib9000_read16_attr(state, reg, b, 2, attribute) != 0)
+	if (dib9000_read16_attr(state, reg, state->i2c_read_buffer, 2,
+				attribute) != 0)
 		return 0;
-	return (b[0] << 8 | b[1]);
+	return (state->i2c_read_buffer[0] << 8) | state->i2c_read_buffer[1];
 }
 
 #define dib9000_read16_noinc_attr(state, reg, b, len, attribute) dib9000_read16_attr(state, reg, b, len, (attribute) | DATA_BUS_ACCESS_MODE_NO_ADDRESS_INCREMENT)
 
 static u16 dib9000_write16_attr(struct dib9000_state *state, u16 reg, const u8 * buf, u32 len, u16 attribute)
 {
-	u8 b[255];
 	u32 chunk_size = 126;
 	u32 l;
 	int ret;
-
-	struct i2c_msg msg = {
-		.addr = state->i2c.i2c_addr >> 1, .flags = 0, .buf = b, .len = len + 2
-	};
 
 	if (state->platform.risc.fw_is_running && (reg < 1024)) {
 		if (dib9000_risc_apb_access_write
@@ -304,20 +329,26 @@ static u16 dib9000_write16_attr(struct dib9000_state *state, u16 reg, const u8 *
 		return 0;
 	}
 
-	b[0] = (reg >> 8) & 0xff;
-	b[1] = (reg) & 0xff;
+	memset(&state->msg[0], 0, sizeof(struct i2c_msg));
+	state->msg[0].addr = state->i2c.i2c_addr >> 1;
+	state->msg[0].flags = 0;
+	state->msg[0].buf = state->i2c_write_buffer;
+	state->msg[0].len = len + 2;
+
+	state->i2c_write_buffer[0] = (reg >> 8) & 0xff;
+	state->i2c_write_buffer[1] = (reg) & 0xff;
 
 	if (attribute & DATA_BUS_ACCESS_MODE_8BIT)
-		b[0] |= (1 << 5);
+		state->i2c_write_buffer[0] |= (1 << 5);
 	if (attribute & DATA_BUS_ACCESS_MODE_NO_ADDRESS_INCREMENT)
-		b[0] |= (1 << 4);
+		state->i2c_write_buffer[0] |= (1 << 4);
 
 	do {
 		l = len < chunk_size ? len : chunk_size;
-		msg.len = l + 2;
-		memcpy(&b[2], buf, l);
+		state->msg[0].len = l + 2;
+		memcpy(&state->i2c_write_buffer[2], buf, l);
 
-		ret = i2c_transfer(state->i2c.i2c_adap, &msg, 1) != 1 ? -EREMOTEIO : 0;
+		ret = i2c_transfer(state->i2c.i2c_adap, state->msg, 1) != 1 ? -EREMOTEIO : 0;
 
 		buf += l;
 		len -= l;
@@ -331,10 +362,15 @@ static u16 dib9000_write16_attr(struct dib9000_state *state, u16 reg, const u8 *
 
 static int dib9000_i2c_write16(struct i2c_device *i2c, u16 reg, u16 val)
 {
-	u8 b[4] = { (reg >> 8) & 0xff, reg & 0xff, (val >> 8) & 0xff, val & 0xff };
 	struct i2c_msg msg = {
-		.addr = i2c->i2c_addr >> 1, .flags = 0, .buf = b, .len = 4
+		.addr = i2c->i2c_addr >> 1, .flags = 0,
+		.buf = i2c->i2c_write_buffer, .len = 4
 	};
+
+	i2c->i2c_write_buffer[0] = (reg >> 8) & 0xff;
+	i2c->i2c_write_buffer[1] = reg & 0xff;
+	i2c->i2c_write_buffer[2] = (val >> 8) & 0xff;
+	i2c->i2c_write_buffer[3] = val & 0xff;
 
 	return i2c_transfer(i2c->i2c_adap, &msg, 1) != 1 ? -EREMOTEIO : 0;
 }
@@ -1015,8 +1051,8 @@ static int dib9000_fw_memmbx_sync(struct dib9000_state *state, u8 i)
 		return 0;
 	dib9000_risc_mem_write(state, FE_MM_RW_SYNC, &i);
 	do {
-		dib9000_risc_mem_read(state, FE_MM_RW_SYNC, &i, 1);
-	} while (i && index_loop--);
+		dib9000_risc_mem_read(state, FE_MM_RW_SYNC, state->i2c_read_buffer, 1);
+	} while (state->i2c_read_buffer[0] && index_loop--);
 
 	if (index_loop > 0)
 		return 0;
@@ -1139,7 +1175,7 @@ static int dib9000_fw_get_channel(struct dvb_frontend *fe, struct dvb_frontend_p
 
 		s8 intlv_native;
 	};
-	struct dibDVBTChannel ch;
+	struct dibDVBTChannel *ch;
 	int ret = 0;
 
 	DibAcquireLock(&state->platform.risc.mem_mbx_lock);
@@ -1148,9 +1184,12 @@ static int dib9000_fw_get_channel(struct dvb_frontend *fe, struct dvb_frontend_p
 		ret = -EIO;
 	}
 
-	dib9000_risc_mem_read(state, FE_MM_R_CHANNEL_UNION, (u8 *) &ch, sizeof(struct dibDVBTChannel));
+	dib9000_risc_mem_read(state, FE_MM_R_CHANNEL_UNION,
+			state->i2c_read_buffer, sizeof(struct dibDVBTChannel));
+	ch = (struct dibDVBTChannel *)state->i2c_read_buffer;
 
-	switch (ch.spectrum_inversion & 0x7) {
+
+	switch (ch->spectrum_inversion & 0x7) {
 	case 1:
 		state->fe[0]->dtv_property_cache.inversion = INVERSION_ON;
 		break;
@@ -1162,7 +1201,7 @@ static int dib9000_fw_get_channel(struct dvb_frontend *fe, struct dvb_frontend_p
 		state->fe[0]->dtv_property_cache.inversion = INVERSION_AUTO;
 		break;
 	}
-	switch (ch.nfft) {
+	switch (ch->nfft) {
 	case 0:
 		state->fe[0]->dtv_property_cache.transmission_mode = TRANSMISSION_MODE_2K;
 		break;
@@ -1177,7 +1216,7 @@ static int dib9000_fw_get_channel(struct dvb_frontend *fe, struct dvb_frontend_p
 		state->fe[0]->dtv_property_cache.transmission_mode = TRANSMISSION_MODE_AUTO;
 		break;
 	}
-	switch (ch.guard) {
+	switch (ch->guard) {
 	case 0:
 		state->fe[0]->dtv_property_cache.guard_interval = GUARD_INTERVAL_1_32;
 		break;
@@ -1195,7 +1234,7 @@ static int dib9000_fw_get_channel(struct dvb_frontend *fe, struct dvb_frontend_p
 		state->fe[0]->dtv_property_cache.guard_interval = GUARD_INTERVAL_AUTO;
 		break;
 	}
-	switch (ch.constellation) {
+	switch (ch->constellation) {
 	case 2:
 		state->fe[0]->dtv_property_cache.modulation = QAM_64;
 		break;
@@ -1210,7 +1249,7 @@ static int dib9000_fw_get_channel(struct dvb_frontend *fe, struct dvb_frontend_p
 		state->fe[0]->dtv_property_cache.modulation = QAM_AUTO;
 		break;
 	}
-	switch (ch.hrch) {
+	switch (ch->hrch) {
 	case 0:
 		state->fe[0]->dtv_property_cache.hierarchy = HIERARCHY_NONE;
 		break;
@@ -1222,7 +1261,7 @@ static int dib9000_fw_get_channel(struct dvb_frontend *fe, struct dvb_frontend_p
 		state->fe[0]->dtv_property_cache.hierarchy = HIERARCHY_AUTO;
 		break;
 	}
-	switch (ch.code_rate_hp) {
+	switch (ch->code_rate_hp) {
 	case 1:
 		state->fe[0]->dtv_property_cache.code_rate_HP = FEC_1_2;
 		break;
@@ -1243,7 +1282,7 @@ static int dib9000_fw_get_channel(struct dvb_frontend *fe, struct dvb_frontend_p
 		state->fe[0]->dtv_property_cache.code_rate_HP = FEC_AUTO;
 		break;
 	}
-	switch (ch.code_rate_lp) {
+	switch (ch->code_rate_lp) {
 	case 1:
 		state->fe[0]->dtv_property_cache.code_rate_LP = FEC_1_2;
 		break;
@@ -1439,9 +1478,10 @@ static int dib9000_fw_tune(struct dvb_frontend *fe, struct dvb_frontend_paramete
 		break;
 	case CT_DEMOD_STEP_1:
 		if (search)
-			dib9000_risc_mem_read(state, FE_MM_R_CHANNEL_SEARCH_STATE, (u8 *) &i, 1);
+			dib9000_risc_mem_read(state, FE_MM_R_CHANNEL_SEARCH_STATE, state->i2c_read_buffer, 1);
 		else
-			dib9000_risc_mem_read(state, FE_MM_R_CHANNEL_TUNE_STATE, (u8 *) &i, 1);
+			dib9000_risc_mem_read(state, FE_MM_R_CHANNEL_TUNE_STATE, state->i2c_read_buffer, 1);
+		i = (s8)state->i2c_read_buffer[0];
 		switch (i) {	/* something happened */
 		case 0:
 			break;
@@ -1716,19 +1756,56 @@ EXPORT_SYMBOL(dib9000_set_gpio);
 int dib9000_fw_pid_filter_ctrl(struct dvb_frontend *fe, u8 onoff)
 {
 	struct dib9000_state *state = fe->demodulator_priv;
-	u16 val = dib9000_read_word(state, 294 + 1) & 0xffef;
+	u16 val;
+	int ret;
+
+	if ((state->pid_ctrl_index != -2) && (state->pid_ctrl_index < 9)) {
+		/* postpone the pid filtering cmd */
+		dprintk("pid filter cmd postpone");
+		state->pid_ctrl_index++;
+		state->pid_ctrl[state->pid_ctrl_index].cmd = DIB9000_PID_FILTER_CTRL;
+		state->pid_ctrl[state->pid_ctrl_index].onoff = onoff;
+		return 0;
+	}
+
+	DibAcquireLock(&state->demod_lock);
+
+	val = dib9000_read_word(state, 294 + 1) & 0xffef;
 	val |= (onoff & 0x1) << 4;
 
 	dprintk("PID filter enabled %d", onoff);
-	return dib9000_write_word(state, 294 + 1, val);
+	ret = dib9000_write_word(state, 294 + 1, val);
+	DibReleaseLock(&state->demod_lock);
+	return ret;
+
 }
 EXPORT_SYMBOL(dib9000_fw_pid_filter_ctrl);
 
 int dib9000_fw_pid_filter(struct dvb_frontend *fe, u8 id, u16 pid, u8 onoff)
 {
 	struct dib9000_state *state = fe->demodulator_priv;
+	int ret;
+
+	if (state->pid_ctrl_index != -2) {
+		/* postpone the pid filtering cmd */
+		dprintk("pid filter postpone");
+		if (state->pid_ctrl_index < 9) {
+			state->pid_ctrl_index++;
+			state->pid_ctrl[state->pid_ctrl_index].cmd = DIB9000_PID_FILTER;
+			state->pid_ctrl[state->pid_ctrl_index].id = id;
+			state->pid_ctrl[state->pid_ctrl_index].pid = pid;
+			state->pid_ctrl[state->pid_ctrl_index].onoff = onoff;
+		} else
+			dprintk("can not add any more pid ctrl cmd");
+		return 0;
+	}
+
+	DibAcquireLock(&state->demod_lock);
 	dprintk("Index %x, PID %d, OnOff %d", id, pid, onoff);
-	return dib9000_write_word(state, 300 + 1 + id, onoff ? (1 << 13) | pid : 0);
+	ret = dib9000_write_word(state, 300 + 1 + id,
+			onoff ? (1 << 13) | pid : 0);
+	DibReleaseLock(&state->demod_lock);
+	return ret;
 }
 EXPORT_SYMBOL(dib9000_fw_pid_filter);
 
@@ -1751,6 +1828,7 @@ static void dib9000_release(struct dvb_frontend *demod)
 	DibFreeLock(&state->platform.risc.mbx_lock);
 	DibFreeLock(&state->platform.risc.mem_lock);
 	DibFreeLock(&state->platform.risc.mem_mbx_lock);
+	DibFreeLock(&state->demod_lock);
 	dibx000_exit_i2c_master(&st->i2c_master);
 
 	i2c_del_adapter(&st->tuner_adap);
@@ -1768,14 +1846,19 @@ static int dib9000_sleep(struct dvb_frontend *fe)
 {
 	struct dib9000_state *state = fe->demodulator_priv;
 	u8 index_frontend;
-	int ret;
+	int ret = 0;
 
+	DibAcquireLock(&state->demod_lock);
 	for (index_frontend = 1; (index_frontend < MAX_NUMBER_OF_FRONTENDS) && (state->fe[index_frontend] != NULL); index_frontend++) {
 		ret = state->fe[index_frontend]->ops.sleep(state->fe[index_frontend]);
 		if (ret < 0)
-			return ret;
+			goto error;
 	}
-	return dib9000_mbx_send(state, OUT_MSG_FE_SLEEP, NULL, 0);
+	ret = dib9000_mbx_send(state, OUT_MSG_FE_SLEEP, NULL, 0);
+
+error:
+	DibReleaseLock(&state->demod_lock);
+	return ret;
 }
 
 static int dib9000_fe_get_tune_settings(struct dvb_frontend *fe, struct dvb_frontend_tune_settings *tune)
@@ -1789,7 +1872,10 @@ static int dib9000_get_frontend(struct dvb_frontend *fe, struct dvb_frontend_par
 	struct dib9000_state *state = fe->demodulator_priv;
 	u8 index_frontend, sub_index_frontend;
 	fe_status_t stat;
-	int ret;
+	int ret = 0;
+
+	if (state->get_frontend_internal == 0)
+		DibAcquireLock(&state->demod_lock);
 
 	for (index_frontend = 1; (index_frontend < MAX_NUMBER_OF_FRONTENDS) && (state->fe[index_frontend] != NULL); index_frontend++) {
 		state->fe[index_frontend]->ops.read_status(state->fe[index_frontend], &stat);
@@ -1819,14 +1905,15 @@ static int dib9000_get_frontend(struct dvb_frontend *fe, struct dvb_frontend_par
 					    state->fe[index_frontend]->dtv_property_cache.rolloff;
 				}
 			}
-			return 0;
+			ret = 0;
+			goto return_value;
 		}
 	}
 
 	/* get the channel from master chip */
 	ret = dib9000_fw_get_channel(fe, fep);
 	if (ret != 0)
-		return ret;
+		goto return_value;
 
 	/* synchronize the cache with the other frontends */
 	for (index_frontend = 1; (index_frontend < MAX_NUMBER_OF_FRONTENDS) && (state->fe[index_frontend] != NULL); index_frontend++) {
@@ -1839,8 +1926,12 @@ static int dib9000_get_frontend(struct dvb_frontend *fe, struct dvb_frontend_par
 		state->fe[index_frontend]->dtv_property_cache.code_rate_LP = fe->dtv_property_cache.code_rate_LP;
 		state->fe[index_frontend]->dtv_property_cache.rolloff = fe->dtv_property_cache.rolloff;
 	}
+	ret = 0;
 
-	return 0;
+return_value:
+	if (state->get_frontend_internal == 0)
+		DibReleaseLock(&state->demod_lock);
+	return ret;
 }
 
 static int dib9000_set_tune_state(struct dvb_frontend *fe, enum frontend_tune_state tune_state)
@@ -1885,6 +1976,10 @@ static int dib9000_set_frontend(struct dvb_frontend *fe, struct dvb_frontend_par
 		dprintk("dib9000: must specify bandwidth ");
 		return 0;
 	}
+
+	state->pid_ctrl_index = -1; /* postpone the pid filtering cmd */
+	DibAcquireLock(&state->demod_lock);
+
 	fe->dtv_property_cache.delivery_system = SYS_DVBT;
 
 	/* set the master status */
@@ -1947,13 +2042,18 @@ static int dib9000_set_frontend(struct dvb_frontend *fe, struct dvb_frontend_par
 	/* check the tune result */
 	if (exit_condition == 1) {	/* tune failed */
 		dprintk("tune failed");
+		DibReleaseLock(&state->demod_lock);
+		/* tune failed; put all the pid filtering cmd to junk */
+		state->pid_ctrl_index = -1;
 		return 0;
 	}
 
 	dprintk("tune success on frontend%i", index_frontend_success);
 
 	/* synchronize all the channel cache */
+	state->get_frontend_internal = 1;
 	dib9000_get_frontend(state->fe[0], fep);
+	state->get_frontend_internal = 0;
 
 	/* retune the other frontends with the found channel */
 	channel_status.status = CHANNEL_STATUS_PARAMETERS_SET;
@@ -1998,6 +2098,28 @@ static int dib9000_set_frontend(struct dvb_frontend *fe, struct dvb_frontend_par
 	/* turn off the diversity for the last frontend */
 	dib9000_fw_set_diversity_in(state->fe[index_frontend - 1], 0);
 
+	DibReleaseLock(&state->demod_lock);
+	if (state->pid_ctrl_index >= 0) {
+		u8 index_pid_filter_cmd;
+		u8 pid_ctrl_index = state->pid_ctrl_index;
+
+		state->pid_ctrl_index = -2;
+		for (index_pid_filter_cmd = 0;
+				index_pid_filter_cmd <= pid_ctrl_index;
+				index_pid_filter_cmd++) {
+			if (state->pid_ctrl[index_pid_filter_cmd].cmd == DIB9000_PID_FILTER_CTRL)
+				dib9000_fw_pid_filter_ctrl(state->fe[0],
+						state->pid_ctrl[index_pid_filter_cmd].onoff);
+			else if (state->pid_ctrl[index_pid_filter_cmd].cmd == DIB9000_PID_FILTER)
+				dib9000_fw_pid_filter(state->fe[0],
+						state->pid_ctrl[index_pid_filter_cmd].id,
+						state->pid_ctrl[index_pid_filter_cmd].pid,
+						state->pid_ctrl[index_pid_filter_cmd].onoff);
+		}
+	}
+	/* do not postpone any more the pid filtering */
+	state->pid_ctrl_index = -2;
+
 	return 0;
 }
 
@@ -2014,6 +2136,7 @@ static int dib9000_read_status(struct dvb_frontend *fe, fe_status_t * stat)
 	u8 index_frontend;
 	u16 lock = 0, lock_slave = 0;
 
+	DibAcquireLock(&state->demod_lock);
 	for (index_frontend = 1; (index_frontend < MAX_NUMBER_OF_FRONTENDS) && (state->fe[index_frontend] != NULL); index_frontend++)
 		lock_slave |= dib9000_read_lock(state->fe[index_frontend]);
 
@@ -2032,31 +2155,45 @@ static int dib9000_read_status(struct dvb_frontend *fe, fe_status_t * stat)
 	if ((lock & 0x0008) || (lock_slave & 0x0008))
 		*stat |= FE_HAS_LOCK;
 
+	DibReleaseLock(&state->demod_lock);
+
 	return 0;
 }
 
 static int dib9000_read_ber(struct dvb_frontend *fe, u32 * ber)
 {
 	struct dib9000_state *state = fe->demodulator_priv;
-	u16 c[16];
+	u16 *c;
+	int ret = 0;
 
+	DibAcquireLock(&state->demod_lock);
 	DibAcquireLock(&state->platform.risc.mem_mbx_lock);
-	if (dib9000_fw_memmbx_sync(state, FE_SYNC_CHANNEL) < 0)
-		return -EIO;
-	dib9000_risc_mem_read(state, FE_MM_R_FE_MONITOR, (u8 *) c, sizeof(c));
+	if (dib9000_fw_memmbx_sync(state, FE_SYNC_CHANNEL) < 0) {
+		ret = -EIO;
+		goto error;
+	}
+	dib9000_risc_mem_read(state, FE_MM_R_FE_MONITOR,
+			state->i2c_read_buffer, 16 * 2);
 	DibReleaseLock(&state->platform.risc.mem_mbx_lock);
 
+	c = (u16 *)state->i2c_read_buffer;
+
 	*ber = c[10] << 16 | c[11];
-	return 0;
+
+error:
+	DibReleaseLock(&state->demod_lock);
+	return ret;
 }
 
 static int dib9000_read_signal_strength(struct dvb_frontend *fe, u16 * strength)
 {
 	struct dib9000_state *state = fe->demodulator_priv;
 	u8 index_frontend;
-	u16 c[16];
+	u16 *c = (u16 *)state->i2c_read_buffer;
 	u16 val;
+	int ret = 0;
 
+	DibAcquireLock(&state->demod_lock);
 	*strength = 0;
 	for (index_frontend = 1; (index_frontend < MAX_NUMBER_OF_FRONTENDS) && (state->fe[index_frontend] != NULL); index_frontend++) {
 		state->fe[index_frontend]->ops.read_signal_strength(state->fe[index_frontend], &val);
@@ -2067,9 +2204,11 @@ static int dib9000_read_signal_strength(struct dvb_frontend *fe, u16 * strength)
 	}
 
 	DibAcquireLock(&state->platform.risc.mem_mbx_lock);
-	if (dib9000_fw_memmbx_sync(state, FE_SYNC_CHANNEL) < 0)
-		return -EIO;
-	dib9000_risc_mem_read(state, FE_MM_R_FE_MONITOR, (u8 *) c, sizeof(c));
+	if (dib9000_fw_memmbx_sync(state, FE_SYNC_CHANNEL) < 0) {
+		ret = -EIO;
+		goto error;
+	}
+	dib9000_risc_mem_read(state, FE_MM_R_FE_MONITOR, (u8 *) c, 16 * 2);
 	DibReleaseLock(&state->platform.risc.mem_mbx_lock);
 
 	val = 65535 - c[4];
@@ -2077,20 +2216,23 @@ static int dib9000_read_signal_strength(struct dvb_frontend *fe, u16 * strength)
 		*strength = 65535;
 	else
 		*strength += val;
-	return 0;
+
+error:
+	DibReleaseLock(&state->demod_lock);
+	return ret;
 }
 
 static u32 dib9000_get_snr(struct dvb_frontend *fe)
 {
 	struct dib9000_state *state = fe->demodulator_priv;
-	u16 c[16];
+	u16 *c = (u16 *)state->i2c_read_buffer;
 	u32 n, s, exp;
 	u16 val;
 
 	DibAcquireLock(&state->platform.risc.mem_mbx_lock);
 	if (dib9000_fw_memmbx_sync(state, FE_SYNC_CHANNEL) < 0)
 		return -EIO;
-	dib9000_risc_mem_read(state, FE_MM_R_FE_MONITOR, (u8 *) c, sizeof(c));
+	dib9000_risc_mem_read(state, FE_MM_R_FE_MONITOR, (u8 *) c, 16 * 2);
 	DibReleaseLock(&state->platform.risc.mem_mbx_lock);
 
 	val = c[7];
@@ -2121,6 +2263,7 @@ static int dib9000_read_snr(struct dvb_frontend *fe, u16 * snr)
 	u8 index_frontend;
 	u32 snr_master;
 
+	DibAcquireLock(&state->demod_lock);
 	snr_master = dib9000_get_snr(fe);
 	for (index_frontend = 1; (index_frontend < MAX_NUMBER_OF_FRONTENDS) && (state->fe[index_frontend] != NULL); index_frontend++)
 		snr_master += dib9000_get_snr(state->fe[index_frontend]);
@@ -2131,29 +2274,50 @@ static int dib9000_read_snr(struct dvb_frontend *fe, u16 * snr)
 	} else
 		*snr = 0;
 
+	DibReleaseLock(&state->demod_lock);
+
 	return 0;
 }
 
 static int dib9000_read_unc_blocks(struct dvb_frontend *fe, u32 * unc)
 {
 	struct dib9000_state *state = fe->demodulator_priv;
-	u16 c[16];
+	u16 *c = (u16 *)state->i2c_read_buffer;
+	int ret = 0;
 
+	DibAcquireLock(&state->demod_lock);
 	DibAcquireLock(&state->platform.risc.mem_mbx_lock);
-	if (dib9000_fw_memmbx_sync(state, FE_SYNC_CHANNEL) < 0)
-		return -EIO;
-	dib9000_risc_mem_read(state, FE_MM_R_FE_MONITOR, (u8 *) c, sizeof(c));
+	if (dib9000_fw_memmbx_sync(state, FE_SYNC_CHANNEL) < 0) {
+		ret = -EIO;
+		goto error;
+	}
+	dib9000_risc_mem_read(state, FE_MM_R_FE_MONITOR, (u8 *) c, 16 * 2);
 	DibReleaseLock(&state->platform.risc.mem_mbx_lock);
 
 	*unc = c[12];
-	return 0;
+
+error:
+	DibReleaseLock(&state->demod_lock);
+	return ret;
 }
 
 int dib9000_i2c_enumeration(struct i2c_adapter *i2c, int no_of_demods, u8 default_addr, u8 first_addr)
 {
-	int k = 0;
+	int k = 0, ret = 0;
 	u8 new_addr = 0;
 	struct i2c_device client = {.i2c_adap = i2c };
+
+	client.i2c_write_buffer = kzalloc(4 * sizeof(u8), GFP_KERNEL);
+	if (!client.i2c_write_buffer) {
+		dprintk("%s: not enough memory", __func__);
+		return -ENOMEM;
+	}
+	client.i2c_read_buffer = kzalloc(4 * sizeof(u8), GFP_KERNEL);
+	if (!client.i2c_read_buffer) {
+		dprintk("%s: not enough memory", __func__);
+		ret = -ENOMEM;
+		goto error_memory;
+	}
 
 	client.i2c_addr = default_addr + 16;
 	dib9000_i2c_write16(&client, 1796, 0x0);
@@ -2178,7 +2342,8 @@ int dib9000_i2c_enumeration(struct i2c_adapter *i2c, int no_of_demods, u8 defaul
 			client.i2c_addr = default_addr;
 			if (dib9000_identify(&client) == 0) {
 				dprintk("DiB9000 #%d: not identified", k);
-				return -EIO;
+				ret = -EIO;
+				goto error;
 			}
 		}
 
@@ -2196,7 +2361,12 @@ int dib9000_i2c_enumeration(struct i2c_adapter *i2c, int no_of_demods, u8 defaul
 		dib9000_i2c_write16(&client, 1795, 0);
 	}
 
-	return 0;
+error:
+	kfree(client.i2c_read_buffer);
+error_memory:
+	kfree(client.i2c_write_buffer);
+
+	return ret;
 }
 EXPORT_SYMBOL(dib9000_i2c_enumeration);
 
@@ -2255,12 +2425,16 @@ struct dvb_frontend *dib9000_attach(struct i2c_adapter *i2c_adap, u8 i2c_addr, c
 	if (st == NULL)
 		return NULL;
 	fe = kzalloc(sizeof(struct dvb_frontend), GFP_KERNEL);
-	if (fe == NULL)
+	if (fe == NULL) {
+		kfree(st);
 		return NULL;
+	}
 
 	memcpy(&st->chip.d9.cfg, cfg, sizeof(struct dib9000_config));
 	st->i2c.i2c_adap = i2c_adap;
 	st->i2c.i2c_addr = i2c_addr;
+	st->i2c.i2c_write_buffer = st->i2c_write_buffer;
+	st->i2c.i2c_read_buffer = st->i2c_read_buffer;
 
 	st->gpio_dir = DIB9000_GPIO_DEFAULT_DIRECTIONS;
 	st->gpio_val = DIB9000_GPIO_DEFAULT_VALUES;
@@ -2270,6 +2444,10 @@ struct dvb_frontend *dib9000_attach(struct i2c_adapter *i2c_adap, u8 i2c_addr, c
 	DibInitLock(&st->platform.risc.mbx_lock);
 	DibInitLock(&st->platform.risc.mem_lock);
 	DibInitLock(&st->platform.risc.mem_mbx_lock);
+	DibInitLock(&st->demod_lock);
+	st->get_frontend_internal = 0;
+
+	st->pid_ctrl_index = -2;
 
 	st->fe[0] = fe;
 	fe->demodulator_priv = st;

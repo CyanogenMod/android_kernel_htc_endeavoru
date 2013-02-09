@@ -697,6 +697,8 @@ static int fs_enet_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		sc |= BD_ENET_TX_PAD;
 	CBDS_SC(bdp, sc);
 
+	skb_tx_timestamp(skb);
+
 	(*fep->ops->tx_kickstart)(dev);
 
 	spin_unlock_irqrestore(&fep->tx_lock, flags);
@@ -956,8 +958,6 @@ static const struct ethtool_ops fs_ethtool_ops = {
 	.get_link = ethtool_op_get_link,
 	.get_msglevel = fs_get_msglevel,
 	.set_msglevel = fs_set_msglevel,
-	.set_tx_csum = ethtool_op_set_tx_csum,	/* local! */
-	.set_sg = ethtool_op_set_sg,
 	.get_regs = fs_get_regs,
 };
 

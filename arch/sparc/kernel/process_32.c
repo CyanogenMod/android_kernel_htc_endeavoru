@@ -128,8 +128,16 @@ void cpu_idle(void)
         set_thread_flag(TIF_POLLING_NRFLAG);
 	/* endless idle loop with no priority at all */
 	while(1) {
-		while (!need_resched())
-			cpu_relax();
+#ifdef CONFIG_SPARC_LEON
+		if (pm_idle) {
+			while (!need_resched())
+				(*pm_idle)();
+		} else
+#endif
+		{
+			while (!need_resched())
+				cpu_relax();
+		}
 		preempt_enable_no_resched();
 		schedule();
 		preempt_disable();
@@ -372,8 +380,7 @@ void flush_thread(void)
 #endif
 	}
 
-	/* Now, this task is no longer a kernel thread. */
-	current->thread.current_ds = USER_DS;
+	/* This task is no longer a kernel thread. */
 	if (current->thread.flags & SPARC_FLAG_KTHREAD) {
 		current->thread.flags &= ~SPARC_FLAG_KTHREAD;
 

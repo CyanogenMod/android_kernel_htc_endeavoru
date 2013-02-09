@@ -20,14 +20,26 @@ static CODEC_SPI_CMD DAC_UNMUTE[] =
 
 static CODEC_SPI_CMD ADC_MUTE[] =
 {
-	{'w', 0x00, 0x00},
-	{'w', 0x52, 0x88},
+	{'w', 0x00, 0x04},
+	{'w', 0x4B, 0x00},
 };
 
 static CODEC_SPI_CMD ADC_UNMUTE[] =
 {
-	{'w', 0x00, 0x00},
-	{'w', 0x52, 0x00},
+	{'w', 0x00, 0x04},
+	{'w', 0x4B, 0x02},
+};
+
+static CODEC_SPI_CMD ADC_MUTE_VOIP[] =
+{
+	{'w', 0x00, 0x04},
+	{'w', 0x43, 0x00},
+};
+
+static CODEC_SPI_CMD ADC_UNMUTE_VOIP[] =
+{
+	{'w', 0x00, 0x04},
+	{'w', 0x43, 0x02},
 };
 
 static CODEC_SPI_CMD BT_MIC_MUTE[] =
@@ -2757,7 +2769,7 @@ static CODEC_SPI_CMD DISABLE_AUD_HPMIC_EXT_ONLY[] = {
 	{'w', 0x7F, 0x00},
 	{'w', 0x00, 0x01},
 	{'w', 0x32, 0x00},
-	{'w', 0x33, 0x36}
+	{'w', 0x33, 0x66}
 };
 
 

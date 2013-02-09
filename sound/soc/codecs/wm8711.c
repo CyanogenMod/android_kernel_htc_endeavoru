@@ -77,7 +77,7 @@ SND_SOC_DAPM_OUTPUT("ROUT"),
 SND_SOC_DAPM_OUTPUT("RHPOUT"),
 };
 
-static const struct snd_soc_dapm_route intercon[] = {
+static const struct snd_soc_dapm_route wm8711_intercon[] = {
 	/* output mixer */
 	{"Output Mixer", "Line Bypass Switch", "Line Input"},
 	{"Output Mixer", "HiFi Playback Switch", "DAC"},
@@ -88,17 +88,6 @@ static const struct snd_soc_dapm_route intercon[] = {
 	{"LHPOUT", NULL, "Output Mixer"},
 	{"LOUT", NULL, "Output Mixer"},
 };
-
-static int wm8711_add_widgets(struct snd_soc_codec *codec)
-{
-	struct snd_soc_dapm_context *dapm = &codec->dapm;
-
-	snd_soc_dapm_new_controls(dapm, wm8711_dapm_widgets,
-				  ARRAY_SIZE(wm8711_dapm_widgets));
-	snd_soc_dapm_add_routes(dapm, intercon, ARRAY_SIZE(intercon));
-
-	return 0;
-}
 
 struct _coeff_div {
 	u32 mclk;
@@ -161,7 +150,7 @@ static int wm8711_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_codec *codec = dai->codec;
 	struct wm8711_priv *wm8711 =  snd_soc_codec_get_drvdata(codec);
-	u16 iface = snd_soc_read(codec, WM8711_IFACE) & 0xfffc;
+	u16 iface = snd_soc_read(codec, WM8711_IFACE) & 0xfff3;
 	int i = get_coeff(wm8711->sysclk, params_rate(params));
 	u16 srate = (coeff_div[i].sr << 2) |
 		(coeff_div[i].bosr << 1) | coeff_div[i].usb;
@@ -242,7 +231,7 @@ static int wm8711_set_dai_fmt(struct snd_soc_dai *codec_dai,
 		unsigned int fmt)
 {
 	struct snd_soc_codec *codec = codec_dai->codec;
-	u16 iface = 0;
+	u16 iface = snd_soc_read(codec, WM8711_IFACE) & 0x000c;
 
 	/* set master/slave audio interface */
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
@@ -398,7 +387,6 @@ static int wm8711_probe(struct snd_soc_codec *codec)
 
 	snd_soc_add_controls(codec, wm8711_snd_controls,
 			     ARRAY_SIZE(wm8711_snd_controls));
-	wm8711_add_widgets(codec);
 
 	return ret;
 
@@ -420,6 +408,10 @@ static struct snd_soc_codec_driver soc_codec_dev_wm8711 = {
 	.reg_cache_size = ARRAY_SIZE(wm8711_reg),
 	.reg_word_size = sizeof(u16),
 	.reg_cache_default = wm8711_reg,
+	.dapm_widgets = wm8711_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(wm8711_dapm_widgets),
+	.dapm_routes = wm8711_intercon,
+	.num_dapm_routes = ARRAY_SIZE(wm8711_intercon),
 };
 
 #if defined(CONFIG_SPI_MASTER)

@@ -2,6 +2,7 @@
  * drivers/media/video/tegra/tegra_camera.c
  *
  * Copyright (C) 2010 Google, Inc.
+ * Copyright (C) 2012 Nvidia Corp
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -27,6 +28,7 @@
 #include <mach/iomap.h>
 #include <mach/clk.h>
 #include <mach/powergate.h>
+#include <mach/csi.h>
 
 #include <media/tegra_camera.h>
 
@@ -44,11 +46,12 @@ struct tegra_camera_dev {
 	struct clk *csus_clk;
 	struct clk *csi_clk;
 	struct clk *emc_clk;
-	struct clk *avp_clk;
+	struct clk *sbus_clk;
 	struct regulator *reg;
 	struct tegra_camera_clk_info info;
 	struct mutex tegra_camera_lock;
-	int power_refcnt;
+	atomic_t in_use;
+	int power_on;
 };
 
 struct tegra_camera_block {
@@ -57,127 +60,97 @@ struct tegra_camera_block {
 	bool is_enabled;
 };
 
-static int tegra_camera_enable_isp(struct tegra_camera_dev *dev)
+static int tegra_camera_on = 0;
+
+int is_tegra_camera_on(void)
 {
-	return clk_enable(dev->isp_clk);
+   return tegra_camera_on;
 }
 
-static int tegra_camera_disable_isp(struct tegra_camera_dev *dev)
+static int tegra_camera_enable_clk(struct tegra_camera_dev *dev)
 {
-	clk_disable(dev->isp_clk);
+	clk_enable(dev->vi_clk);
+	clk_enable(dev->vi_sensor_clk);
+	clk_enable(dev->csus_clk);
+
+	tegra_periph_reset_assert(dev->vi_clk);
+	udelay(2);
+	tegra_periph_reset_deassert(dev->vi_clk);
+
+	clk_enable(dev->isp_clk);
+	tegra_periph_reset_assert(dev->isp_clk);
+	udelay(2);
+	tegra_periph_reset_deassert(dev->isp_clk);
+
+	clk_enable(dev->csi_clk);
+	tegra_periph_reset_assert(dev->csi_clk);
+	udelay(2);
+	tegra_periph_reset_deassert(dev->csi_clk);
 	return 0;
 }
 
-static int tegra_camera_enable_vi(struct tegra_camera_dev *dev)
-{
-	int ret = 0;
-
-	ret |= clk_enable(dev->vi_clk);
-	ret |= clk_enable(dev->vi_sensor_clk);
-	ret |= clk_enable(dev->csus_clk);
-	return ret;
-}
-
-static int tegra_camera_disable_vi(struct tegra_camera_dev *dev)
-{
-	clk_disable(dev->vi_clk);
-	clk_disable(dev->vi_sensor_clk);
-	clk_disable(dev->csus_clk);
-	return 0;
-}
-
-static int tegra_camera_enable_csi(struct tegra_camera_dev *dev)
-{
-	return clk_enable(dev->csi_clk);
-}
-
-static int tegra_camera_disable_csi(struct tegra_camera_dev *dev)
+static int tegra_camera_disable_clk(struct tegra_camera_dev *dev)
 {
 	clk_disable(dev->csi_clk);
+	tegra_periph_reset_assert(dev->csi_clk);
+	clk_disable(dev->isp_clk);
+	tegra_periph_reset_assert(dev->isp_clk);
+	clk_disable(dev->csus_clk);
+	clk_disable(dev->vi_sensor_clk);
+	clk_disable(dev->vi_clk);
+	tegra_periph_reset_assert(dev->vi_clk);
+
 	return 0;
 }
 
 static int tegra_camera_enable_emc(struct tegra_camera_dev *dev)
 {
-#ifndef CONFIG_ARCH_TEGRA_2x_SOC
-	/* tegra_camera wasn't added as a user of emc_clk until 3x.
-	   set to 150 MHz, will likely need to be increased as we support
-	   sensors with higher framerates and resolutions. */
+	int ret = tegra_emc_disable_eack();
 	clk_enable(dev->emc_clk);
-	clk_set_rate(dev->emc_clk, 150000000);
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	clk_set_rate(dev->emc_clk, 300000000);
 #endif
-	return 0;
+	return ret;
 }
 
 static int tegra_camera_disable_emc(struct tegra_camera_dev *dev)
 {
-#ifndef CONFIG_ARCH_TEGRA_2x_SOC
 	clk_disable(dev->emc_clk);
-#endif
-	return 0;
+	return tegra_emc_enable_eack();
 }
 
 static int tegra_camera_enable_avp(struct tegra_camera_dev *dev)
 {
 #ifndef CONFIG_ARCH_TEGRA_2x_SOC
-	/* tegra_camera wasn't added as a user of emc_clk until 3x.
-		set to 150 MHz, will likely need to be increased as we support
-		sensors with higher framerates and resolutions. */
-	clk_enable(dev->avp_clk);
-	clk_set_rate(dev->avp_clk, 81600000);
+       clk_enable(dev->sbus_clk);
+       clk_set_rate(dev->sbus_clk, 218500000);
 #endif
-	return 0;
+       return 0;
 }
 
 static int tegra_camera_disable_avp(struct tegra_camera_dev *dev)
 {
 #ifndef CONFIG_ARCH_TEGRA_2x_SOC
-	clk_disable(dev->avp_clk);
+       clk_disable(dev->sbus_clk);
 #endif
-	return 0;
-}
-
-struct tegra_camera_block tegra_camera_block[] = {
-	[TEGRA_CAMERA_MODULE_ISP] = {tegra_camera_enable_isp,
-		tegra_camera_disable_isp, false},
-	[TEGRA_CAMERA_MODULE_VI] = {tegra_camera_enable_vi,
-		tegra_camera_disable_vi, false},
-	[TEGRA_CAMERA_MODULE_CSI] = {tegra_camera_enable_csi,
-		tegra_camera_disable_csi, false},
-};
-
-#define TEGRA_CAMERA_VI_CLK_SEL_INTERNAL 0
-#define TEGRA_CAMERA_VI_CLK_SEL_EXTERNAL (1<<24)
-#define TEGRA_CAMERA_PD2VI_CLK_SEL_VI_SENSOR_CLK (1<<25)
-#define TEGRA_CAMERA_PD2VI_CLK_SEL_PD2VI_CLK 0
-
-static bool tegra_camera_enabled(struct tegra_camera_dev *dev)
-{
-	bool ret = false;
-
-	mutex_lock(&dev->tegra_camera_lock);
-	ret = tegra_camera_block[TEGRA_CAMERA_MODULE_ISP].is_enabled == true ||
-			tegra_camera_block[TEGRA_CAMERA_MODULE_VI].is_enabled == true ||
-			tegra_camera_block[TEGRA_CAMERA_MODULE_CSI].is_enabled == true;
-	mutex_unlock(&dev->tegra_camera_lock);
-	return ret;
+        return 0;
 }
 
 static int tegra_camera_clk_set_rate(struct tegra_camera_dev *dev)
 {
 	struct clk *clk, *clk_parent;
 	struct tegra_camera_clk_info *info = &dev->info;
-	unsigned long parent_rate, clk_parent_div_rate, clk_parent_div_rate_pre;
-	int i;
+	unsigned long parent_rate, parent_div_rate, parent_div_rate_pre;
 
 	if (!info) {
 		dev_err(dev->dev,
-				"%s: no clock info %d\n",
-				__func__, info->id);
+				"%s: no clock info\n",
+				__func__);
 		return -EINVAL;
 	}
 
-	if (info->id != TEGRA_CAMERA_MODULE_VI) {
+	if (info->id != TEGRA_CAMERA_MODULE_VI &&
+		info->id != TEGRA_CAMERA_MODULE_EMC) {
 		dev_err(dev->dev,
 				"%s: set rate only aplies to vi module %d\n",
 				__func__, info->id);
@@ -191,6 +164,14 @@ static int tegra_camera_clk_set_rate(struct tegra_camera_dev *dev)
 	case TEGRA_CAMERA_VI_SENSOR_CLK:
 		clk = dev->vi_sensor_clk;
 		break;
+	case TEGRA_CAMERA_EMC_CLK:
+		clk = dev->emc_clk;
+#ifndef CONFIG_ARCH_TEGRA_2x_SOC
+		dev_dbg(dev->dev, "%s: emc_clk rate=%lu\n",
+			__func__, info->rate);
+		clk_set_rate(dev->emc_clk, info->rate);
+#endif
+		goto set_rate_end;
 	default:
 		dev_err(dev->dev,
 				"%s: invalid clk id for set rate %d\n",
@@ -202,121 +183,95 @@ static int tegra_camera_clk_set_rate(struct tegra_camera_dev *dev)
 	parent_rate = clk_get_rate(clk_parent);
 	dev_dbg(dev->dev, "%s: clk_id=%d, parent_rate=%lu, clk_rate=%lu\n",
 			__func__, info->clk_id, parent_rate, info->rate);
-	clk_parent_div_rate = parent_rate;
-	clk_parent_div_rate_pre = parent_rate;
+	parent_div_rate = parent_rate;
+	parent_div_rate_pre = parent_rate;
 
 	/*
 	 * The requested clock rate from user space should be respected.
 	 * This loop is to search the clock rate that is higher than requested
 	 * clock.
 	 */
-	for (i = 2; clk_parent_div_rate > info->rate; i++) {
-		clk_parent_div_rate = parent_rate/i+1;
-		if (clk_parent_div_rate <= info->rate)
-			break;
-		clk_parent_div_rate_pre = clk_parent_div_rate;
+	while (parent_div_rate >= info->rate) {
+		parent_div_rate_pre = parent_div_rate;
+		parent_div_rate = clk_round_rate(clk, parent_div_rate-1);
 	}
 
 	dev_dbg(dev->dev, "%s: set_rate=%lu",
-			__func__, clk_parent_div_rate_pre);
+			__func__, parent_div_rate_pre);
 
-	clk_set_rate(clk, clk_parent_div_rate_pre);
+	clk_set_rate(clk, parent_div_rate_pre);
 
 	if (info->clk_id == TEGRA_CAMERA_VI_CLK) {
 		/*
 		 * bit 25: 0 = pd2vi_Clk, 1 = vi_sensor_clk
 		 * bit 24: 0 = internal clock, 1 = external clock(pd2vi_clk)
 		 */
-
 		if (info->flag == TEGRA_CAMERA_ENABLE_PD2VI_CLK)
 			tegra_clk_cfg_ex(clk, TEGRA_CLK_VI_INP_SEL, 2);
+
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+		{
+			u32 val;
+			void __iomem *apb_misc =
+				IO_ADDRESS(TEGRA_APB_MISC_BASE);
+			val = readl(apb_misc + 0x42c);
+			writel(val | 0x1, apb_misc + 0x42c);
+		}
+#endif
 	}
 
+set_rate_end:
 	info->rate = clk_get_rate(clk);
-
+	dev_dbg(dev->dev, "%s: get_rate=%lu",
+			__func__, info->rate);
 	return 0;
 
-}
-static int tegra_camera_reset(struct tegra_camera_dev *dev, uint id)
-{
-	struct clk *clk;
-	int mc_client = -1;
-
-	switch (id) {
-	case TEGRA_CAMERA_MODULE_VI:
-		clk = dev->vi_clk;
-        mc_client = TEGRA_POWERGATE_VENC;
-		break;
-	case TEGRA_CAMERA_MODULE_ISP:
-		clk = dev->isp_clk;
-        mc_client = TEGRA_POWERGATE_VENC;
-		break;
-	case TEGRA_CAMERA_MODULE_CSI:
-		clk = dev->csi_clk;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	if (mc_client != -1) {
-		tegra_powergate_mc_disable(mc_client);
-	}
-	tegra_periph_reset_assert(clk);
-	if (mc_client != -1) {
-		tegra_powergate_mc_flush(mc_client);
-	}
-
-	udelay(10);
-
-	if (mc_client != -1) {
-		tegra_powergate_mc_flush_done(mc_client);
-	}
-	tegra_periph_reset_deassert(clk);
-	if (mc_client != -1) {
-		tegra_powergate_mc_enable(mc_client);
-	}
-
-	return 0;
 }
 
 static int tegra_camera_power_on(struct tegra_camera_dev *dev)
 {
 	int ret = 0;
 
-	dev_dbg(dev->dev, "%s  %d\n", __func__, dev->power_refcnt);
-	if (dev->power_refcnt++ == 0) {
-		/* Enable external power */
-		if (dev->reg) {
-			ret = regulator_enable(dev->reg);
-			if (ret) {
-				dev_err(dev->dev,
-					"%s: enable csi regulator failed.\n",
-					__func__);
-				return ret;
-			}
+	dev_dbg(dev->dev, "%s++\n", __func__);
+
+	/* Enable external power */
+	if (dev->reg) {
+		ret = regulator_enable(dev->reg);
+		if (ret) {
+			dev_err(dev->dev,
+				"%s: enable csi regulator failed.\n",
+				__func__);
+			return ret;
 		}
 	}
 
+	dev->power_on = 1;
+	tegra_camera_on = dev->power_on;
 	return ret;
 }
 
 static int tegra_camera_power_off(struct tegra_camera_dev *dev)
 {
 	int ret = 0;
+	int val = 0;
 
-	dev_dbg(dev->dev, "%s  %d\n", __func__, dev->power_refcnt);
-	if (--dev->power_refcnt == 0) {
-		/* Disable external power */
-		if (dev->reg) {
-			ret = regulator_disable(dev->reg);
-			if (ret) {
-				dev_err(dev->dev,
-					"%s: disable csi regulator failed.\n",
-					__func__);
-				return ret;
-			}
+	dev_dbg(dev->dev, "%s++\n", __func__);
+
+	/* Disable external power */
+	if (dev->reg) {
+		ret = regulator_disable(dev->reg);
+		if (ret) {
+			dev_err(dev->dev,
+				"%s: disable csi regulator failed.\n",
+				__func__);
+			return ret;
 		}
 	}
+	dev->power_on = 0;
+	tegra_camera_on = dev->power_on;
+
+	val = PAD_CIL_PDVREG(0x0);
+	tegra_vi_csi_writel(val, CSI_CIL_PAD_CONFIG);
 	return ret;
 }
 
@@ -334,7 +289,7 @@ static long tegra_camera_ioctl(struct file *file,
 		return -EFAULT;
 	}
 
-	if (id >= ARRAY_SIZE(tegra_camera_block)) {
+	if (id >= TEGRA_CAMERA_MODULE_MAX) {
 		dev_err(dev->dev,
 				"%s: Invalid id to tegra isp ioctl%d\n",
 				__func__, id);
@@ -342,31 +297,19 @@ static long tegra_camera_ioctl(struct file *file,
 	}
 
 	switch (cmd) {
+	/*
+	 * Clock enable/disable and reset should be handled in kernel.
+	 * In order to support legacy code in user space, we don't remove
+	 * these IOCTL.
+	 */
 	case TEGRA_CAMERA_IOCTL_ENABLE:
-	{
-		int ret = 0;
-		mutex_lock(&dev->tegra_camera_lock);
-		if (!tegra_camera_block[id].is_enabled) {
-			ret = tegra_camera_block[id].enable(dev);
-			tegra_camera_block[id].is_enabled = true;
-		}
-		mutex_unlock(&dev->tegra_camera_lock);
-		return ret;
-	}
 	case TEGRA_CAMERA_IOCTL_DISABLE:
-	{
-		int ret = 0;
-		mutex_lock(&dev->tegra_camera_lock);
-		if (tegra_camera_block[id].is_enabled) {
-			ret = tegra_camera_block[id].disable(dev);
-			tegra_camera_block[id].is_enabled = false;
-		}
-		mutex_unlock(&dev->tegra_camera_lock);
-		return ret;
-	}
+	case TEGRA_CAMERA_IOCTL_RESET:
+		return 0;
 	case TEGRA_CAMERA_IOCTL_CLK_SET_RATE:
 	{
 		int ret;
+
 		if (copy_from_user(&dev->info, (const void __user *)arg,
 				   sizeof(struct tegra_camera_clk_info))) {
 			dev_err(dev->dev,
@@ -384,8 +327,6 @@ static long tegra_camera_ioctl(struct file *file,
 		}
 		return 0;
 	}
-	case TEGRA_CAMERA_IOCTL_RESET:
-		return tegra_camera_reset(dev, id);
 	default:
 		dev_err(dev->dev,
 				"%s: Unknown tegra_camera ioctl.\n", __func__);
@@ -400,35 +341,60 @@ static int tegra_camera_open(struct inode *inode, struct file *file)
 	struct tegra_camera_dev *dev = container_of(miscdev,
 						struct tegra_camera_dev,
 						misc_dev);
+	int ret = 0;
+
 	dev_info(dev->dev, "%s\n", __func__);
+
+	if (atomic_xchg(&dev->in_use, 1))
+		return -EBUSY;
+
 	file->private_data = dev;
+
+	mutex_lock(&dev->tegra_camera_lock);
 	tegra_camera_enable_avp(dev);
-	tegra_camera_enable_emc(dev);
-	tegra_camera_power_on(dev);
-	return 0;
+	/* turn on CSI regulator */
+	ret = tegra_camera_power_on(dev);
+	if (ret)
+		goto open_exit;
+	/* set EMC request */
+	ret = tegra_camera_enable_emc(dev);
+	if (ret)
+		goto open_exit;
+	/* enable camera HW clock */
+	ret = tegra_camera_enable_clk(dev);
+	if (ret)
+		goto open_exit;
+open_exit:
+	mutex_unlock(&dev->tegra_camera_lock);
+	return ret;
 }
 
 static int tegra_camera_release(struct inode *inode, struct file *file)
 {
-	int i;
+	int ret = 0;
 	struct tegra_camera_dev *dev = file->private_data;
 
 	dev_info(dev->dev, "%s\n", __func__);
-	for (i = 0; i < ARRAY_SIZE(tegra_camera_block); i++)
-		if (tegra_camera_block[i].is_enabled) {
-			tegra_camera_block[i].disable(dev);
-			tegra_camera_block[i].is_enabled = false;
-		}
 
-	/* If camera blocks are not powergated yet, do it now */
-	if (dev->power_refcnt > 0) {
-		mutex_lock(&dev->tegra_camera_lock);
-		dev->power_refcnt = 1;
-		tegra_camera_power_off(dev);
-		mutex_unlock(&dev->tegra_camera_lock);
-	}
+
+	mutex_lock(&dev->tegra_camera_lock);
 	tegra_camera_disable_avp(dev);
-	tegra_camera_disable_emc(dev);
+	/* disable HW clock */
+	ret = tegra_camera_disable_clk(dev);
+	if (ret)
+		goto release_exit;
+	/* nullify EMC request */
+	ret = tegra_camera_disable_emc(dev);
+	if (ret)
+		goto release_exit;
+	/* turn off CSI regulator */
+	tegra_camera_power_off(dev);
+	if (ret)
+		goto release_exit;
+
+release_exit:
+	mutex_unlock(&dev->tegra_camera_lock);
+	WARN_ON(!atomic_xchg(&dev->in_use, 0));
 	return 0;
 }
 
@@ -469,17 +435,6 @@ static int tegra_camera_probe(struct platform_device *pdev)
 
 	mutex_init(&dev->tegra_camera_lock);
 
-	/* Powergate VE when boot */
-	mutex_lock(&dev->tegra_camera_lock);
-	dev->power_refcnt = 0;
-//#ifndef CONFIG_ARCH_TEGRA_2x_SOC
-#if 0
-	err = tegra_powergate_partition(TEGRA_POWERGATE_VENC);
-	if (err)
-		dev_err(&pdev->dev, "%s: powergate failed.\n", __func__);
-#endif
-	mutex_unlock(&dev->tegra_camera_lock);
-
 	dev->dev = &pdev->dev;
 
 	/* Get regulator pointer */
@@ -489,8 +444,15 @@ static int tegra_camera_probe(struct platform_device *pdev)
 	dev->reg = regulator_get(&pdev->dev, "avdd_dsi_csi");
 #endif
 	if (IS_ERR_OR_NULL(dev->reg)) {
-		dev_err(&pdev->dev, "%s: couldn't get regulator\n", __func__);
-		return PTR_ERR(dev->reg);
+		if (dev->reg == ERR_PTR(-ENODEV)) {
+			dev->reg = NULL;
+			dev_info(&pdev->dev, "%s: no regulator device, overriding\n",
+							__func__);
+		} else {
+			dev_err(&pdev->dev, "%s: couldn't get regulator\n",
+							__func__);
+			return PTR_ERR(dev->reg);
+		}
 	}
 
 	dev->misc_dev.minor = MISC_DYNAMIC_MINOR;
@@ -520,22 +482,20 @@ static int tegra_camera_probe(struct platform_device *pdev)
 	err = tegra_camera_clk_get(pdev, "csi", &dev->csi_clk);
 	if (err)
 		goto csi_clk_get_err;
-
-#ifndef CONFIG_ARCH_TEGRA_2x_SOC
 	err = tegra_camera_clk_get(pdev, "emc", &dev->emc_clk);
 	if (err)
 		goto emc_clk_get_err;
-	err = tegra_camera_clk_get(pdev, "sclk", &dev->avp_clk);
+	err = tegra_camera_clk_get(pdev, "sclk", &dev->sbus_clk);
 	if (err)
-		goto avp_clk_get_err;
-#endif
+		goto sbus_clk_get_err;
+
 	/* dev is set in order to restore in _remove */
 	platform_set_drvdata(pdev, dev);
 
 	return 0;
 
-avp_clk_get_err:
-	clk_put(dev->avp_clk);
+sbus_clk_get_err:
+	clk_put(dev->sbus_clk);
 emc_clk_get_err:
 	clk_put(dev->emc_clk);
 csi_clk_get_err:
@@ -574,13 +534,14 @@ static int tegra_camera_suspend(struct platform_device *pdev, pm_message_t state
 	struct tegra_camera_dev *dev = platform_get_drvdata(pdev);
 	int ret = 0;
 
-	dev_dbg(&pdev->dev, "%s\n", __func__);
-	if (tegra_camera_enabled(dev)) {
+	mutex_lock(&dev->tegra_camera_lock);
+	if (dev->power_on) {
 		ret = -EBUSY;
 		dev_err(&pdev->dev,
 		"tegra_camera cannot suspend, "
 		"application is holding on to camera. \n");
 	}
+	mutex_unlock(&dev->tegra_camera_lock);
 
 	return ret;
 }

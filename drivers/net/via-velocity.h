@@ -1096,7 +1096,7 @@ struct mac_regs {
 
 	volatile __le16 PatternCRC[8];	/* 0xB0 */
 	volatile __le32 ByteMask[4][4];	/* 0xC0 */
-} __packed;
+};
 
 
 enum hw_mib {
@@ -1437,7 +1437,7 @@ struct velocity_info {
 	struct pci_dev *pdev;
 	struct net_device *dev;
 
-	struct vlan_group    *vlgrp;
+	unsigned long active_vlans[BITS_TO_LONGS(VLAN_N_VID)];
 	u8 ip_addr[4];
 	enum chip_type chip_id;
 

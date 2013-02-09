@@ -145,6 +145,8 @@ int iwl_legacy_send_cmd_sync(struct iwl_priv *priv, struct iwl_host_cmd *cmd)
 	int cmd_idx;
 	int ret;
 
+	lockdep_assert_held(&priv->mutex);
+
 	BUG_ON(cmd->flags & CMD_ASYNC);
 
 	 /* A synchronous command can not have a callback set. */
@@ -152,7 +154,6 @@ int iwl_legacy_send_cmd_sync(struct iwl_priv *priv, struct iwl_host_cmd *cmd)
 
 	IWL_DEBUG_INFO(priv, "Attempting to send sync command %s\n",
 			iwl_legacy_get_cmd_string(cmd->id));
-	mutex_lock(&priv->sync_cmd_mutex);
 
 	set_bit(STATUS_HCMD_ACTIVE, &priv->status);
 	IWL_DEBUG_INFO(priv, "Setting HCMD_ACTIVE for command %s\n",
@@ -166,7 +167,7 @@ int iwl_legacy_send_cmd_sync(struct iwl_priv *priv, struct iwl_host_cmd *cmd)
 		goto out;
 	}
 
-	ret = wait_event_interruptible_timeout(priv->wait_command_queue,
+	ret = wait_event_timeout(priv->wait_command_queue,
 			!test_bit(STATUS_HCMD_ACTIVE, &priv->status),
 			HOST_COMPLETE_TIMEOUT);
 	if (!ret) {
@@ -224,7 +225,6 @@ fail:
 		cmd->reply_page = 0;
 	}
 out:
-	mutex_unlock(&priv->sync_cmd_mutex);
 	return ret;
 }
 EXPORT_SYMBOL(iwl_legacy_send_cmd_sync);

@@ -33,8 +33,6 @@
 #include <plat/omap_device.h>
 #include "mux.h"
 
-#if defined(CONFIG_USB_MUSB_OMAP2PLUS) || defined (CONFIG_USB_MUSB_AM35X)
-
 static struct musb_hdrc_config musb_config = {
 	.multipoint	= 1,
 	.dyn_fifo	= 1,
@@ -108,7 +106,13 @@ static void usb_musb_mux_init(struct omap_musb_board_data *board_data)
 	}
 }
 
-void __init usb_musb_init(struct omap_musb_board_data *board_data)
+static struct omap_musb_board_data musb_default_board_data = {
+	.interface_type		= MUSB_INTERFACE_ULPI,
+	.mode			= MUSB_OTG,
+	.power			= 100,
+};
+
+void __init usb_musb_init(struct omap_musb_board_data *musb_board_data)
 {
 	struct omap_hwmod		*oh;
 	struct omap_device		*od;
@@ -116,11 +120,12 @@ void __init usb_musb_init(struct omap_musb_board_data *board_data)
 	struct device			*dev;
 	int				bus_id = -1;
 	const char			*oh_name, *name;
+	struct omap_musb_board_data	*board_data;
 
-	if (cpu_is_omap3517() || cpu_is_omap3505()) {
-	} else if (cpu_is_omap44xx()) {
-		usb_musb_mux_init(board_data);
-	}
+	if (musb_board_data)
+		board_data = musb_board_data;
+	else
+		board_data = &musb_default_board_data;
 
 	/*
 	 * REVISIT: This line can be removed once all the platforms using
@@ -131,9 +136,6 @@ void __init usb_musb_init(struct omap_musb_board_data *board_data)
 	musb_plat.power = board_data->power >> 1;
 	musb_plat.mode = board_data->mode;
 	musb_plat.extvbus = board_data->extvbus;
-
-	if (cpu_is_omap44xx())
-		omap4430_phy_init(dev);
 
 	if (cpu_is_omap3517() || cpu_is_omap3505()) {
 		oh_name = "am35x_otg_hs";
@@ -164,10 +166,7 @@ void __init usb_musb_init(struct omap_musb_board_data *board_data)
 	dev->dma_mask = &musb_dmamask;
 	dev->coherent_dma_mask = musb_dmamask;
 	put_device(dev);
-}
 
-#else
-void __init usb_musb_init(struct omap_musb_board_data *board_data)
-{
+	if (cpu_is_omap44xx())
+		omap4430_phy_init(dev);
 }
-#endif /* CONFIG_USB_MUSB_SOC */

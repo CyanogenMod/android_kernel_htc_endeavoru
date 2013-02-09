@@ -1,4 +1,4 @@
-/* Task credentials management - see Documentation/credentials.txt
+/* Task credentials management - see Documentation/security/credentials.txt
  *
  * Copyright (C) 2008 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
@@ -49,10 +49,10 @@ struct cred init_cred = {
 	.magic			= CRED_MAGIC,
 #endif
 	.securebits		= SECUREBITS_DEFAULT,
-	.cap_inheritable	= CAP_INIT_INH_SET,
+	.cap_inheritable	= CAP_EMPTY_SET,
 	.cap_permitted		= CAP_FULL_SET,
-	.cap_effective		= CAP_INIT_EFF_SET,
-	.cap_bset		= CAP_INIT_BSET,
+	.cap_effective		= CAP_FULL_SET,
+	.cap_bset		= CAP_FULL_SET,
 	.user			= INIT_USER,
 	.user_ns		= &init_user_ns,
 	.group_info		= &init_groups,
@@ -508,10 +508,8 @@ int commit_creds(struct cred *new)
 		key_fsgid_changed(task);
 
 	/* do it
-	 * - What if a process setreuid()'s and this brings the
-	 *   new uid over his NPROC rlimit?  We can check this now
-	 *   cheaply with the new uid cache, so if it matters
-	 *   we should be checking for it.  -DaveM
+	 * RLIMIT_NPROC limits on user->processes have already been checked
+	 * in set_user().
 	 */
 	alter_cred_subscribers(new, 2);
 	if (new->user != old->user)

@@ -61,24 +61,8 @@ void tipc_msg_init(struct tipc_msg *m, u32 user, u32 type,
 	msg_set_size(m, hsize);
 	msg_set_prevnode(m, tipc_own_addr);
 	msg_set_type(m, type);
-	if (!msg_short(m)) {
-		msg_set_orignode(m, tipc_own_addr);
-		msg_set_destnode(m, destnode);
-	}
-}
-
-/**
- * tipc_msg_calc_data_size - determine total data size for message
- */
-
-int tipc_msg_calc_data_size(struct iovec const *msg_sect, u32 num_sect)
-{
-	int dsz = 0;
-	int i;
-
-	for (i = 0; i < num_sect; i++)
-		dsz += msg_sect[i].iov_len;
-	return dsz;
+	msg_set_orignode(m, tipc_own_addr);
+	msg_set_destnode(m, destnode);
 }
 
 /**
@@ -89,18 +73,13 @@ int tipc_msg_calc_data_size(struct iovec const *msg_sect, u32 num_sect)
  * Returns message data size or errno
  */
 
-int tipc_msg_build(struct tipc_msg *hdr,
-			    struct iovec const *msg_sect, u32 num_sect,
+int tipc_msg_build(struct tipc_msg *hdr, struct iovec const *msg_sect,
+		   u32 num_sect, unsigned int total_len,
 			    int max_size, int usrmem, struct sk_buff **buf)
 {
 	int dsz, sz, hsz, pos, res, cnt;
 
-	dsz = tipc_msg_calc_data_size(msg_sect, num_sect);
-	if (unlikely(dsz > TIPC_MAX_USER_MSG_SIZE)) {
-		*buf = NULL;
-		return -EINVAL;
-	}
-
+	dsz = total_len;
 	pos = hsz = msg_hdr_sz(hdr);
 	sz = hsz + dsz;
 	msg_set_size(hdr, sz);

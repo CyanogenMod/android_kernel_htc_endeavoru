@@ -24,6 +24,7 @@
 #include <linux/slab.h>
 #include <linux/stat.h>
 #include <linux/via-core.h>
+#include <asm/olpc.h>
 
 #define _MASTER_FILE
 #include "global.h"
@@ -37,6 +38,8 @@ static char *viafb_mode1;
 static int viafb_bpp = 32;
 static int viafb_bpp1 = 32;
 
+static unsigned int viafb_second_xres = 640;
+static unsigned int viafb_second_yres = 480;
 static unsigned int viafb_second_offset;
 static int viafb_second_size;
 
@@ -148,7 +151,8 @@ static void viafb_update_fix(struct fb_info *info)
 
 	info->fix.visual =
 		bpp == 8 ? FB_VISUAL_PSEUDOCOLOR : FB_VISUAL_TRUECOLOR;
-	info->fix.line_length = (info->var.xres_virtual * bpp / 8 + 7) & ~7;
+	info->fix.line_length = ALIGN(info->var.xres_virtual * bpp / 8,
+		VIA_PITCH_SIZE);
 }
 
 static void viafb_setup_fixinfo(struct fb_fix_screeninfo *fix,
@@ -235,8 +239,12 @@ static int viafb_check_var(struct fb_var_screeninfo *var,
 		depth = 24;
 
 	viafb_fill_var_color_info(var, depth);
-	line = (var->xres_virtual * var->bits_per_pixel / 8 + 7) & ~7;
-	if (line * var->yres_virtual > ppar->memsize)
+	if (var->xres_virtual < var->xres)
+		var->xres_virtual = var->xres;
+
+	line = ALIGN(var->xres_virtual * var->bits_per_pixel / 8,
+		VIA_PITCH_SIZE);
+	if (line > VIA_PITCH_MAX || line * var->yres_virtual > ppar->memsize)
 		return -EINVAL;
 
 	/* Based on var passed in to calculate the refresh,
@@ -345,8 +353,9 @@ static int viafb_pan_display(struct fb_var_screeninfo *var,
 	struct fb_info *info)
 {
 	struct viafb_par *viapar = info->par;
-	u32 vram_addr = (var->yoffset * var->xres_virtual + var->xoffset)
-		* (var->bits_per_pixel / 8) + viapar->vram_addr;
+	u32 vram_addr = viapar->vram_addr
+		+ var->yoffset * info->fix.line_length
+		+ var->xoffset * info->var.bits_per_pixel / 8;
 
 	DEBUG_MSG(KERN_DEBUG "viafb_pan_display, address = %d\n", vram_addr);
 	if (!viafb_dual_fb) {
@@ -440,8 +449,8 @@ static int viafb_ioctl(struct fb_info *info, u_int cmd, u_long arg)
 		if (viafb_SAMM_ON == 1) {
 			u.viamode.xres_sec = viafb_second_xres;
 			u.viamode.yres_sec = viafb_second_yres;
-			u.viamode.virtual_xres_sec = viafb_second_virtual_xres;
-			u.viamode.virtual_yres_sec = viafb_second_virtual_yres;
+			u.viamode.virtual_xres_sec = viafb_dual_fb ? viafbinfo1->var.xres_virtual : viafbinfo->var.xres_virtual;
+			u.viamode.virtual_yres_sec = viafb_dual_fb ? viafbinfo1->var.yres_virtual : viafbinfo->var.yres_virtual;
 			u.viamode.refresh_sec = viafb_refresh1;
 			u.viamode.bpp_sec = viafb_bpp1;
 		} else {
@@ -930,10 +939,8 @@ static int get_primary_device(void)
 	/* Rule: device on iga1 path are the primary device. */
 	if (viafb_SAMM_ON) {
 		if (viafb_CRT_ON) {
-			if (viaparinfo->crt_setting_info->iga_path == IGA1) {
-				DEBUG_MSG(KERN_INFO "CRT IGA Path:%d\n",
-					viaparinfo->
-					crt_setting_info->iga_path);
+			if (viaparinfo->shared->iga1_devices & VIA_CRT) {
+				DEBUG_MSG(KERN_INFO "CRT IGA Path:%d\n", IGA1);
 				primary_device = CRT_Device;
 			}
 		}
@@ -1011,8 +1018,13 @@ static int __init parse_active_dev(void)
 	/*    Note: The previous of active_dev is primary device,
 	   and the following is secondary device. */
 	if (!viafb_active_dev) {
-		viafb_CRT_ON = STATE_ON;
-		viafb_SAMM_ON = STATE_OFF;
+		if (machine_is_olpc()) { /* LCD only */
+			viafb_LCD_ON = STATE_ON;
+			viafb_SAMM_ON = STATE_OFF;
+		} else {
+			viafb_CRT_ON = STATE_ON;
+			viafb_SAMM_ON = STATE_OFF;
+		}
 	} else if (!strcmp(viafb_active_dev, "CRT+DVI")) {
 		/* CRT+DVI */
 		viafb_CRT_ON = STATE_ON;
@@ -1665,8 +1677,13 @@ static int parse_mode(const char *str, u32 *xres, u32 *yres)
 	char *ptr;
 
 	if (!str) {
-		*xres = 640;
-		*yres = 480;
+		if (machine_is_olpc()) {
+			*xres = 1200;
+			*yres = 900;
+		} else {
+			*xres = 640;
+			*yres = 480;
+		}
 		return 0;
 	}
 
@@ -1746,7 +1763,6 @@ int __devinit via_fb_pci_probe(struct viafb_dev *vdev)
 	viaparinfo->lvds_setting_info = &viaparinfo->shared->lvds_setting_info;
 	viaparinfo->lvds_setting_info2 =
 		&viaparinfo->shared->lvds_setting_info2;
-	viaparinfo->crt_setting_info = &viaparinfo->shared->crt_setting_info;
 	viaparinfo->chip_info = &viaparinfo->shared->chip_info;
 
 	if (viafb_dual_fb)
@@ -1793,13 +1809,9 @@ int __devinit via_fb_pci_probe(struct viafb_dev *vdev)
 
 	parse_mode(viafb_mode, &default_xres, &default_yres);
 	vmode_entry = viafb_get_mode(default_xres, default_yres);
-	if (viafb_SAMM_ON == 1) {
+	if (viafb_SAMM_ON == 1)
 		parse_mode(viafb_mode1, &viafb_second_xres,
 			&viafb_second_yres);
-
-		viafb_second_virtual_xres = viafb_second_xres;
-		viafb_second_virtual_yres = viafb_second_yres;
-	}
 
 	default_var.xres = default_xres;
 	default_var.yres = default_yres;
@@ -1844,8 +1856,8 @@ int __devinit via_fb_pci_probe(struct viafb_dev *vdev)
 
 		default_var.xres = viafb_second_xres;
 		default_var.yres = viafb_second_yres;
-		default_var.xres_virtual = viafb_second_virtual_xres;
-		default_var.yres_virtual = viafb_second_virtual_yres;
+		default_var.xres_virtual = viafb_second_xres;
+		default_var.yres_virtual = viafb_second_yres;
 		default_var.bits_per_pixel = viafb_bpp1;
 		viafb_fill_var_timing_info(&default_var, viafb_get_refresh(
 			default_var.xres, default_var.yres, viafb_refresh1),
@@ -1927,10 +1939,15 @@ void __devexit via_fb_pci_remove(struct pci_dev *pdev)
 }
 
 #ifndef MODULE
-static int __init viafb_setup(char *options)
+static int __init viafb_setup(void)
 {
 	char *this_opt;
+	char *options;
+
 	DEBUG_MSG(KERN_INFO "viafb_setup!\n");
+
+	if (fb_get_options("viafb", &options))
+		return -ENODEV;
 
 	if (!options || !*options)
 		return 0;
@@ -2005,11 +2022,16 @@ static int __init viafb_setup(char *options)
 int __init viafb_init(void)
 {
 	u32 dummy_x, dummy_y;
+	int r = 0;
+
+	if (machine_is_olpc())
+		/* Apply XO-1.5-specific configuration. */
+		viafb_lcd_panel_id = 23;
+
 #ifndef MODULE
-	char *option = NULL;
-	if (fb_get_options("viafb", &option))
-		return -ENODEV;
-	viafb_setup(option);
+	r = viafb_setup();
+	if (r < 0)
+		return r;
 #endif
 	if (parse_mode(viafb_mode, &dummy_x, &dummy_y)
 		|| !viafb_get_mode(dummy_x, dummy_y)
@@ -2023,7 +2045,7 @@ int __init viafb_init(void)
 	printk(KERN_INFO
        "VIA Graphics Integration Chipset framebuffer %d.%d initializing\n",
 	       VERSION_MAJOR, VERSION_MINOR);
-	return 0;
+	return r;
 }
 
 void __exit viafb_exit(void)

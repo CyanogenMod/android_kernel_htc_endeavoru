@@ -69,9 +69,10 @@ struct fuse_mount_data {
 	unsigned flags;
 	unsigned max_read;
 	unsigned blksize;
+	unsigned allow_utime;
 };
 
-struct fuse_forget_link *fuse_alloc_forget()
+struct fuse_forget_link *fuse_alloc_forget(void)
 {
 	return kzalloc(sizeof(struct fuse_forget_link), GFP_KERNEL);
 }
@@ -405,6 +406,7 @@ enum {
 	OPT_ALLOW_OTHER,
 	OPT_MAX_READ,
 	OPT_BLKSIZE,
+	OPT_ALLOW_UTIME,
 	OPT_ERR
 };
 
@@ -417,6 +419,7 @@ static const match_table_t tokens = {
 	{OPT_ALLOW_OTHER,		"allow_other"},
 	{OPT_MAX_READ,			"max_read=%u"},
 	{OPT_BLKSIZE,			"blksize=%u"},
+	{OPT_ALLOW_UTIME,		"allow_utime=%o"},
 	{OPT_ERR,			NULL}
 };
 
@@ -486,6 +489,12 @@ static int parse_fuse_opt(char *opt, struct fuse_mount_data *d, int is_bdev)
 			d->blksize = value;
 			break;
 
+		case OPT_ALLOW_UTIME:
+			if (match_octal(&args[0], &value))
+				return 0;
+			d->allow_utime = value & (S_IWGRP | S_IWOTH);
+			break;
+
 		default:
 			return 0;
 		}
@@ -513,6 +522,8 @@ static int fuse_show_options(struct seq_file *m, struct vfsmount *mnt)
 	if (mnt->mnt_sb->s_bdev &&
 	    mnt->mnt_sb->s_blocksize != FUSE_DEFAULT_BLKSIZE)
 		seq_printf(m, ",blksize=%lu", mnt->mnt_sb->s_blocksize);
+	if (fc->allow_utime)
+		seq_printf(m, ",allow_utime=%04o", fc->allow_utime);
 	return 0;
 }
 
@@ -809,6 +820,13 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 				fc->async_read = 1;
 			if (!(arg->flags & FUSE_POSIX_LOCKS))
 				fc->no_lock = 1;
+			if (arg->minor >= 17) {
+				if (!(arg->flags & FUSE_FLOCK_LOCKS))
+					fc->no_flock = 1;
+			} else {
+				if (!(arg->flags & FUSE_POSIX_LOCKS))
+					fc->no_flock = 1;
+			}
 			if (arg->flags & FUSE_ATOMIC_O_TRUNC)
 				fc->atomic_o_trunc = 1;
 			if (arg->minor >= 9) {
@@ -823,6 +841,7 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 		} else {
 			ra_pages = fc->max_read / PAGE_CACHE_SIZE;
 			fc->no_lock = 1;
+			fc->no_flock = 1;
 		}
 
 		fc->bdi.ra_pages = min(fc->bdi.ra_pages, ra_pages);
@@ -843,7 +862,8 @@ static void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
 	arg->minor = FUSE_KERNEL_MINOR_VERSION;
 	arg->max_readahead = fc->bdi.ra_pages * PAGE_CACHE_SIZE;
 	arg->flags |= FUSE_ASYNC_READ | FUSE_POSIX_LOCKS | FUSE_ATOMIC_O_TRUNC |
-		FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES | FUSE_DONT_MASK;
+		FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES | FUSE_DONT_MASK |
+		FUSE_FLOCK_LOCKS;
 	req->in.h.opcode = FUSE_INIT;
 	req->in.numargs = 1;
 	req->in.args[0].size = sizeof(*arg);
@@ -921,6 +941,8 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 	if (sb->s_flags & MS_MANDLOCK)
 		goto err;
 
+	sb->s_flags &= ~MS_NOSEC;
+
 	if (!parse_fuse_opt((char *) data, &d, is_bdev))
 		goto err;
 
@@ -972,6 +994,7 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 	fc->user_id = d.user_id;
 	fc->group_id = d.group_id;
 	fc->max_read = max_t(unsigned, 4096, d.max_read);
+	fc->allow_utime = d.allow_utime;
 
 	/* Used by get_root_inode() */
 	sb->s_fs_info = fc;

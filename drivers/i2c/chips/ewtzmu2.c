@@ -462,7 +462,7 @@ static int EWTZMU2_ReadSensorDataFIFO(unsigned char *buf, int bufsize)
 {
 	char cmd;
 	int mode = 0;
-	unsigned char databuf[200];
+	unsigned char databuf[200] = {0};
 	int res = EW_DRV_SUCCESS, databyte = 6;
 
 	if ((!buf) || (bufsize < 121))
@@ -2419,8 +2419,7 @@ static int ewtzmu2_input_init(struct ewtzmu_i2c_data *data)
     data->input_dev_gyroscope = input_allocate_device();
     if (!data->input_dev_gyroscope) {
 	err = -ENOMEM;
-	E("ewtzmu2_input_init: Failed to allocate input device: %s\n",
-	data->input_dev_gyroscope->name);
+	E("ewtzmu2_input_init: Failed to allocate input device\n");
 	goto exit_input_register_compass_device_failed;
     }
     set_bit(EV_REL, data->input_dev_gyroscope->evbit);

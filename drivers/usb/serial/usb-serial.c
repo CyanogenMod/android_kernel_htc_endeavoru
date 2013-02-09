@@ -36,6 +36,7 @@
 #include <linux/usb/serial.h>
 #include <linux/kfifo.h>
 #include "pl2303.h"
+#include <mach/board_htc.h>
 
 /*
  * Version Information
@@ -268,6 +269,7 @@ static int serial_open(struct tty_struct *tty, struct file *filp)
 	struct usb_serial_port *port = tty->driver_data;
 
 	dbg("%s - port %d", __func__, port->number);
+	pr_info("%s - port %d\n", __func__, port->number);
 	return tty_port_open(&port->port, tty, filp);
 }
 
@@ -299,6 +301,7 @@ static void serial_hangup(struct tty_struct *tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	dbg("%s - port %d", __func__, port->number);
+	pr_info("%s - port %d\n", __func__, port->number);
 	tty_port_hangup(&port->port);
 }
 
@@ -306,7 +309,9 @@ static void serial_close(struct tty_struct *tty, struct file *filp)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	dbg("%s - port %d", __func__, port->number);
+	pr_info("+%s - port %d\n", __func__, port->number);
 	tty_port_close(&port->port, tty, filp);
+	pr_info("-%s - port %d\n", __func__, port->number);
 }
 
 /**
@@ -332,6 +337,7 @@ static void serial_cleanup(struct tty_struct *tty)
 		return;
 
 	dbg("%s - port %d", __func__, port->number);
+	pr_info("%s - port %d\n", __func__, port->number);
 
 	tty->driver_data = NULL;
 
@@ -1156,6 +1162,9 @@ int usb_serial_suspend(struct usb_interface *intf, pm_message_t message)
 	struct usb_serial_port *port;
 	int i, r = 0;
 
+	//htc_dbg
+	if (get_radio_flag() & 0x0001)
+		pr_info("+%s entered\n", __func__);
 	serial->suspending = 1;
 
 	if (serial->type->suspend) {
@@ -1173,6 +1182,10 @@ int usb_serial_suspend(struct usb_interface *intf, pm_message_t message)
 	}
 
 err_out:
+
+	//htc_dbg
+	if (get_radio_flag() & 0x0001)
+		pr_info("-%s entered\n", __func__);
 	return r;
 }
 EXPORT_SYMBOL(usb_serial_suspend);
@@ -1182,12 +1195,19 @@ int usb_serial_resume(struct usb_interface *intf)
 	struct usb_serial *serial = usb_get_intfdata(intf);
 	int rv;
 
+	//htc_dbg
+	if (get_radio_flag() & 0x0001)
+	pr_info("+%s\n", __func__);
+
 	serial->suspending = 0;
 	if (serial->type->resume)
 		rv = serial->type->resume(serial);
 	else
 		rv = usb_serial_generic_resume(serial);
 
+	//htc_dbg
+	if (get_radio_flag() & 0x0001)
+	pr_info("-%s\n", __func__);
 	return rv;
 }
 EXPORT_SYMBOL(usb_serial_resume);

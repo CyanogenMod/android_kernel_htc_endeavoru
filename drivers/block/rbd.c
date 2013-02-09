@@ -630,6 +630,14 @@ static int rbd_get_num_segments(struct rbd_image_header *header,
 }
 
 /*
+ * returns the size of an object in the image
+ */
+static u64 rbd_obj_bytes(struct rbd_image_header *header)
+{
+	return 1 << header->obj_order;
+}
+
+/*
  * bio helpers
  */
 
@@ -1191,14 +1199,19 @@ static int rbd_req_sync_notify_ack(struct rbd_device *dev,
 static void rbd_watch_cb(u64 ver, u64 notify_id, u8 opcode, void *data)
 {
 	struct rbd_device *dev = (struct rbd_device *)data;
+	int rc;
+
 	if (!dev)
 		return;
 
 	dout("rbd_watch_cb %s notify_id=%lld opcode=%d\n", dev->obj_md_name,
 		notify_id, (int)opcode);
 	mutex_lock_nested(&ctl_mutex, SINGLE_DEPTH_NESTING);
-	__rbd_update_snaps(dev);
+	rc = __rbd_update_snaps(dev);
 	mutex_unlock(&ctl_mutex);
+	if (rc)
+		pr_warning(DRV_NAME "%d got notification but failed to update"
+			   " snaps: %d\n", dev->major, rc);
 
 	rbd_req_sync_notify_ack(dev, ver, notify_id, dev->obj_md_name);
 }
@@ -1245,6 +1258,35 @@ fail_event:
 	dev->watch_event = NULL;
 fail:
 	rbd_destroy_ops(ops);
+	return ret;
+}
+
+/*
+ * Request sync osd unwatch
+ */
+static int rbd_req_sync_unwatch(struct rbd_device *dev,
+				const char *obj)
+{
+	struct ceph_osd_req_op *ops;
+
+	int ret = rbd_create_rw_ops(&ops, 1, CEPH_OSD_OP_WATCH, 0);
+	if (ret < 0)
+		return ret;
+
+	ops[0].watch.ver = 0;
+	ops[0].watch.cookie = cpu_to_le64(dev->watch_event->cookie);
+	ops[0].watch.flag = 0;
+
+	ret = rbd_req_sync_op(dev, NULL,
+			      CEPH_NOSNAP,
+			      0,
+			      CEPH_OSD_FLAG_WRITE | CEPH_OSD_FLAG_ONDISK,
+			      ops,
+			      1, obj, 0, 0, NULL, NULL, NULL);
+
+	rbd_destroy_ops(ops);
+	ceph_osdc_cancel_event(dev->watch_event);
+	dev->watch_event = NULL;
 	return ret;
 }
 
@@ -1597,7 +1639,7 @@ static int rbd_header_add_snap(struct rbd_device *dev,
 	int name_len = strlen(snap_name);
 	u64 new_snapid;
 	int ret;
-	void *data, *data_start, *data_end;
+	void *data, *p, *e;
 	u64 ver;
 
 	/* we should create a snapshot only if we're pointing at the head */
@@ -1614,16 +1656,16 @@ static int rbd_header_add_snap(struct rbd_device *dev,
 	if (!data)
 		return -ENOMEM;
 
-	data_start = data;
-	data_end = data + name_len + 16;
+	p = data;
+	e = data + name_len + 16;
 
-	ceph_encode_string_safe(&data, data_end, snap_name, name_len, bad);
-	ceph_encode_64_safe(&data, data_end, new_snapid, bad);
+	ceph_encode_string_safe(&p, e, snap_name, name_len, bad);
+	ceph_encode_64_safe(&p, e, new_snapid, bad);
 
 	ret = rbd_req_sync_exec(dev, dev->obj_md_name, "rbd", "snap_add",
-				data_start, data - data_start, &ver);
+				data, p - data, &ver);
 
-	kfree(data_start);
+	kfree(data);
 
 	if (ret < 0)
 		return ret;
@@ -1658,6 +1700,9 @@ static int __rbd_update_snaps(struct rbd_device *rbd_dev)
 	ret = rbd_read_header(rbd_dev, &h);
 	if (ret < 0)
 		return ret;
+
+	/* resized? */
+	set_capacity(rbd_dev->disk, h.image_size / 512ULL);
 
 	down_write(&rbd_dev->header.snap_rwsem);
 
@@ -1716,7 +1761,8 @@ static int rbd_init_disk(struct rbd_device *rbd_dev)
 	if (!disk)
 		goto out;
 
-	sprintf(disk->disk_name, DRV_NAME "%d", rbd_dev->id);
+	snprintf(disk->disk_name, sizeof(disk->disk_name), DRV_NAME "%d",
+		 rbd_dev->id);
 	disk->major = rbd_dev->major;
 	disk->first_minor = 0;
 	disk->fops = &rbd_bd_ops;
@@ -1727,6 +1773,13 @@ static int rbd_init_disk(struct rbd_device *rbd_dev)
 	q = blk_init_queue(rbd_rq_fn, &rbd_dev->lock);
 	if (!q)
 		goto out_disk;
+
+	/* set io sizes to object size */
+	blk_queue_max_hw_sectors(q, rbd_obj_bytes(&rbd_dev->header) / 512ULL);
+	blk_queue_max_segment_size(q, rbd_obj_bytes(&rbd_dev->header));
+	blk_queue_io_min(q, rbd_obj_bytes(&rbd_dev->header));
+	blk_queue_io_opt(q, rbd_obj_bytes(&rbd_dev->header));
+
 	blk_queue_merge_bvec(q, rbd_merge_bvec);
 	disk->queue = q;
 
@@ -2281,7 +2334,7 @@ static void rbd_dev_release(struct device *dev)
 		ceph_osdc_unregister_linger_request(&rbd_dev->client->osdc,
 						    rbd_dev->watch_request);
 	if (rbd_dev->watch_event)
-		ceph_osdc_cancel_event(rbd_dev->watch_event);
+		rbd_req_sync_unwatch(rbd_dev, rbd_dev->obj_md_name);
 
 	rbd_put_client(rbd_dev);
 

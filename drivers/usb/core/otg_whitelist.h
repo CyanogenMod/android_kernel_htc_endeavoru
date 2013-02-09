@@ -42,7 +42,8 @@ static struct usb_device_id whitelist_table [] = {
 /* gadget zero, for testing */
 { USB_DEVICE(0x0525, 0xa4a0), },
 #endif
-
+/* C-Media usb audio class: (class, subclass, protocol) = (0, 0, 0)*/
+{ USB_DEVICE(0x0d8c, 0x0126), },
 { }	/* Terminating entry */
 };
 
@@ -58,6 +59,11 @@ static int is_targeted(struct usb_device *dev)
 	if ((le16_to_cpu(dev->descriptor.idVendor) == 0x1a0a &&
 	     le16_to_cpu(dev->descriptor.idProduct) == 0xbadd))
 		return 0;
+
+	dev_info(&dev->dev, "dev (class, subclass, protocol) = (%d, %d, %d)\n",
+			dev->descriptor.bDeviceClass,
+			dev->descriptor.bDeviceSubClass,
+			dev->descriptor.bDeviceProtocol);
 
 	/* NOTE: can't use usb_match_id() since interface caches
 	 * aren't set up yet. this is cut/paste from that code.

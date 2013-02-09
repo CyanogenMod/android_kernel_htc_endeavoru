@@ -3,219 +3,286 @@
  *
  * Tegra Graphics Init for T20 Architecture Chips
  *
- * Copyright (c) 2011, NVIDIA Corporation.
+ * Copyright (c) 2011-2012, NVIDIA Corporation.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT
+ * This program is distributed in the hope it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/slab.h>
+#include <linux/nvhost_ioctl.h>
 #include <mach/powergate.h>
-#include "dev.h"
+#include <mach/iomap.h>
 #include "t20.h"
-#include "host1x/host1x_channel.h"
-#include "host1x/host1x_syncpt.h"
-#include "host1x/host1x_hardware.h"
-#include "host1x/host1x_cdma.h"
-#include "gr3d/gr3d.h"
 #include "gr3d/gr3d_t20.h"
 #include "mpe/mpe.h"
+#include "host1x/host1x.h"
+#include "nvhost_channel.h"
+#include "nvhost_memmgr.h"
+#include "host1x/host1x01_hardware.h"
+#include "host1x/host1x_syncpt.h"
+#include "chip_support.h"
 
-#define NVMODMUTEX_2D_FULL   (1)
-#define NVMODMUTEX_2D_SIMPLE (2)
-#define NVMODMUTEX_2D_SB_A   (3)
-#define NVMODMUTEX_2D_SB_B   (4)
-#define NVMODMUTEX_3D        (5)
-#define NVMODMUTEX_DISPLAYA  (6)
-#define NVMODMUTEX_DISPLAYB  (7)
-#define NVMODMUTEX_VI        (8)
-#define NVMODMUTEX_DSI       (9)
+#define NVMODMUTEX_2D_FULL	(1)
+#define NVMODMUTEX_2D_SIMPLE	(2)
+#define NVMODMUTEX_2D_SB_A	(3)
+#define NVMODMUTEX_2D_SB_B	(4)
+#define NVMODMUTEX_3D		(5)
+#define NVMODMUTEX_DISPLAYA	(6)
+#define NVMODMUTEX_DISPLAYB	(7)
+#define NVMODMUTEX_VI		(8)
+#define NVMODMUTEX_DSI		(9)
 
-#define NVHOST_NUMCHANNELS (NV_HOST1X_CHANNELS - 1)
+static int t20_num_alloc_channels = 0;
 
-static struct nvhost_device devices[] = {
-	{.name   = "gr3d", .id = -1 },
-	{.name = "gr2d", .id = -1 },
-	{.name = "isp", .id = -1 },
-	{.name = "vi", .id = -1 },
-	{.name = "mpe", .id = -1 },
-	{.name = "dsi", .id = -1 }
+static struct resource tegra_host1x01_resources[] = {
+	{
+		.start = TEGRA_HOST1X_BASE,
+		.end = TEGRA_HOST1X_BASE + TEGRA_HOST1X_SIZE - 1,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = INT_SYNCPT_THRESH_BASE,
+		.end = INT_SYNCPT_THRESH_BASE + INT_SYNCPT_THRESH_NR - 1,
+		.flags = IORESOURCE_IRQ,
+	},
+	{
+		.start = INT_HOST1X_MPCORE_GENERAL,
+		.end = INT_HOST1X_MPCORE_GENERAL,
+		.flags = IORESOURCE_IRQ,
+	},
 };
 
-const struct nvhost_channeldesc nvhost_t20_channelmap[] = {
-{
-	/* channel 0 */
-	.name	       = "display",
-	.syncpts       = BIT(NVSYNCPT_DISP0_A) | BIT(NVSYNCPT_DISP1_A) |
-			 BIT(NVSYNCPT_DISP0_B) | BIT(NVSYNCPT_DISP1_B) |
-			 BIT(NVSYNCPT_DISP0_C) | BIT(NVSYNCPT_DISP1_C) |
-			 BIT(NVSYNCPT_VBLANK0) | BIT(NVSYNCPT_VBLANK1),
-	.modulemutexes = BIT(NVMODMUTEX_DISPLAYA) | BIT(NVMODMUTEX_DISPLAYB),
-	.module        = {
-			NVHOST_MODULE_NO_POWERGATE_IDS,
-			NVHOST_DEFAULT_CLOCKGATE_DELAY,
-			},
-},
-{
-	/* channel 1 */
-	.name	       = "gr3d",
-	.syncpts       = BIT(NVSYNCPT_3D),
-	.waitbases     = BIT(NVWAITBASE_3D),
-	.modulemutexes = BIT(NVMODMUTEX_3D),
-	.class	       = NV_GRAPHICS_3D_CLASS_ID,
-	.module        = {
-			.prepare_poweroff = nvhost_gr3d_prepare_power_off,
-			.clocks = {{"gr3d", UINT_MAX}, {"emc", UINT_MAX}, {} },
-			.powergate_ids = {TEGRA_POWERGATE_3D, -1},
-			NVHOST_DEFAULT_CLOCKGATE_DELAY,
-			},
-},
-{
-	/* channel 2 */
-	.name	       = "gr2d",
-	.syncpts       = BIT(NVSYNCPT_2D_0) | BIT(NVSYNCPT_2D_1),
-	.waitbases     = BIT(NVWAITBASE_2D_0) | BIT(NVWAITBASE_2D_1),
-	.modulemutexes = BIT(NVMODMUTEX_2D_FULL) | BIT(NVMODMUTEX_2D_SIMPLE) |
-			 BIT(NVMODMUTEX_2D_SB_A) | BIT(NVMODMUTEX_2D_SB_B),
-	.module        = {
-			.clocks = {{"gr2d", UINT_MAX} ,
-					{"epp", UINT_MAX} ,
-					{"emc", UINT_MAX} },
-			NVHOST_MODULE_NO_POWERGATE_IDS,
-			.clockgate_delay = 0,
-			}
-},
-{
-	/* channel 3 */
-	.name	 = "isp",
-	.syncpts = 0,
-	.module         = {
-			NVHOST_MODULE_NO_POWERGATE_IDS,
-			NVHOST_DEFAULT_CLOCKGATE_DELAY,
-			},
-},
-{
-	/* channel 4 */
-	.name	       = "vi",
-	.syncpts       = BIT(NVSYNCPT_CSI_VI_0) | BIT(NVSYNCPT_CSI_VI_1) |
-			 BIT(NVSYNCPT_VI_ISP_0) | BIT(NVSYNCPT_VI_ISP_1) |
-			 BIT(NVSYNCPT_VI_ISP_2) | BIT(NVSYNCPT_VI_ISP_3) |
-			 BIT(NVSYNCPT_VI_ISP_4),
-	.modulemutexes = BIT(NVMODMUTEX_VI),
-	.exclusive     = true,
-	.module        = {
-			NVHOST_MODULE_NO_POWERGATE_IDS,
-			NVHOST_DEFAULT_CLOCKGATE_DELAY,
-			}
-},
-{
-	/* channel 5 */
-	.name	       = "mpe",
-	.syncpts       = BIT(NVSYNCPT_MPE) | BIT(NVSYNCPT_MPE_EBM_EOF) |
-			 BIT(NVSYNCPT_MPE_WR_SAFE),
-	.waitbases     = BIT(NVWAITBASE_MPE),
-	.class	       = NV_VIDEO_ENCODE_MPEG_CLASS_ID,
-	.waitbasesync  = true,
-	.keepalive     = true,
-	.module        = {
-			.prepare_poweroff = nvhost_mpe_prepare_power_off,
-			.clocks = {{"mpe", UINT_MAX}, {"emc", UINT_MAX}, {} },
-			.powergate_ids = {TEGRA_POWERGATE_MPE, -1},
-			NVHOST_DEFAULT_CLOCKGATE_DELAY,
-			},
-},
-{
-	/* channel 6 */
-	.name	       = "dsi",
-	.syncpts       = BIT(NVSYNCPT_DSI),
-	.modulemutexes = BIT(NVMODMUTEX_DSI),
-	.module        = {
-			NVHOST_MODULE_NO_POWERGATE_IDS,
-			NVHOST_DEFAULT_CLOCKGATE_DELAY,
-			},
-} };
+static const char *s_syncpt_names[32] = {
+	"gfx_host",
+	"", "", "", "", "", "", "",
+	"disp0_a", "disp1_a", "avp_0",
+	"csi_vi_0", "csi_vi_1",
+	"vi_isp_0", "vi_isp_1", "vi_isp_2", "vi_isp_3", "vi_isp_4",
+	"2d_0", "2d_1",
+	"disp0_b", "disp1_b",
+	"3d",
+	"mpe",
+	"disp0_c", "disp1_c",
+	"vblank0", "vblank1",
+	"mpe_ebm_eof", "mpe_wr_safe",
+	"2d_tinyblt",
+	"dsi"
+};
 
-static inline void __iomem *t20_channel_aperture(void __iomem *p, int ndx)
+static struct host1x_device_info host1x01_info = {
+	.nb_channels	= 8,
+	.nb_pts		= 32,
+	.nb_mlocks	= 16,
+	.nb_bases	= 8,
+	.syncpt_names	= s_syncpt_names,
+	.client_managed	= NVSYNCPTS_CLIENT_MANAGED,
+};
+
+static struct nvhost_device tegra_host1x01_device = {
+	.dev		= {.platform_data = &host1x01_info},
+	.name		= "host1x",
+	.id		= -1,
+	.resource	= tegra_host1x01_resources,
+	.num_resources	= ARRAY_SIZE(tegra_host1x01_resources),
+	.clocks		= {{"host1x", UINT_MAX}, {} },
+	NVHOST_MODULE_NO_POWERGATE_IDS,
+};
+
+static struct nvhost_device tegra_display01_device = {
+	.name		= "display",
+	.id		= -1,
+	.index		= 0,
+	.syncpts	= BIT(NVSYNCPT_DISP0_A) | BIT(NVSYNCPT_DISP1_A) |
+			  BIT(NVSYNCPT_DISP0_B) | BIT(NVSYNCPT_DISP1_B) |
+			  BIT(NVSYNCPT_DISP0_C) | BIT(NVSYNCPT_DISP1_C) |
+			  BIT(NVSYNCPT_VBLANK0) | BIT(NVSYNCPT_VBLANK1),
+	.modulemutexes	= BIT(NVMODMUTEX_DISPLAYA) | BIT(NVMODMUTEX_DISPLAYB),
+	NVHOST_MODULE_NO_POWERGATE_IDS,
+	NVHOST_DEFAULT_CLOCKGATE_DELAY,
+	.moduleid	= NVHOST_MODULE_NONE,
+};
+
+static struct nvhost_device tegra_gr3d01_device = {
+	.name		= "gr3d",
+	.version	= 1,
+	.id		= -1,
+	.index		= 1,
+	.syncpts	= BIT(NVSYNCPT_3D),
+	.waitbases	= BIT(NVWAITBASE_3D),
+	.modulemutexes	= BIT(NVMODMUTEX_3D),
+	.class		= NV_GRAPHICS_3D_CLASS_ID,
+	.clocks		= {{"gr3d", UINT_MAX}, {"emc", UINT_MAX}, {} },
+	.powergate_ids	= {TEGRA_POWERGATE_3D, -1},
+	NVHOST_DEFAULT_CLOCKGATE_DELAY,
+	.moduleid	= NVHOST_MODULE_NONE,
+};
+
+static struct nvhost_device tegra_gr2d01_device = {
+	.name		= "gr2d",
+	.id		= -1,
+	.index		= 2,
+	.syncpts	= BIT(NVSYNCPT_2D_0) | BIT(NVSYNCPT_2D_1),
+	.waitbases	= BIT(NVWAITBASE_2D_0) | BIT(NVWAITBASE_2D_1),
+	.modulemutexes	= BIT(NVMODMUTEX_2D_FULL) | BIT(NVMODMUTEX_2D_SIMPLE) |
+			  BIT(NVMODMUTEX_2D_SB_A) | BIT(NVMODMUTEX_2D_SB_B),
+	.clocks 	= { {"gr2d", UINT_MAX},
+			    {"epp", UINT_MAX},
+			    {"emc", UINT_MAX} },
+	NVHOST_MODULE_NO_POWERGATE_IDS,
+	.clockgate_delay = 0,
+	.moduleid	= NVHOST_MODULE_NONE,
+	.serialize	= true,
+};
+
+static struct resource isp_resources_t20[] = {
+	{
+		.name = "regs",
+		.start = TEGRA_ISP_BASE,
+		.end = TEGRA_ISP_BASE + TEGRA_ISP_SIZE - 1,
+		.flags = IORESOURCE_MEM,
+	}
+};
+
+static struct nvhost_device tegra_isp01_device = {
+	.name		= "isp",
+	.resource = isp_resources_t20,
+	.num_resources = ARRAY_SIZE(isp_resources_t20),
+	.id		= -1,
+	.index		= 3,
+	.syncpts	= 0,
+	NVHOST_MODULE_NO_POWERGATE_IDS,
+	NVHOST_DEFAULT_CLOCKGATE_DELAY,
+	.moduleid	= NVHOST_MODULE_ISP,
+};
+
+static struct resource vi_resources[] = {
+	{
+		.name = "regs",
+		.start = TEGRA_VI_BASE,
+		.end = TEGRA_VI_BASE + TEGRA_VI_SIZE - 1,
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+static struct nvhost_device tegra_vi01_device = {
+	.name		= "vi",
+	.resource = vi_resources,
+	.num_resources = ARRAY_SIZE(vi_resources),
+	.id		= -1,
+	.index		= 4,
+	.syncpts	= BIT(NVSYNCPT_CSI_VI_0) | BIT(NVSYNCPT_CSI_VI_1) |
+			  BIT(NVSYNCPT_VI_ISP_0) | BIT(NVSYNCPT_VI_ISP_1) |
+			  BIT(NVSYNCPT_VI_ISP_2) | BIT(NVSYNCPT_VI_ISP_3) |
+			  BIT(NVSYNCPT_VI_ISP_4),
+	.modulemutexes	= BIT(NVMODMUTEX_VI),
+	.exclusive	= true,
+	NVHOST_MODULE_NO_POWERGATE_IDS,
+	NVHOST_DEFAULT_CLOCKGATE_DELAY,
+	.moduleid	= NVHOST_MODULE_VI,
+};
+
+static struct resource tegra_mpe01_resources[] = {
+	{
+		.name = "regs",
+		.start = TEGRA_MPE_BASE,
+		.end = TEGRA_MPE_BASE + TEGRA_MPE_SIZE - 1,
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+static struct nvhost_device tegra_mpe01_device = {
+	.name		= "mpe",
+	.version	= 1,
+	.id		= -1,
+	.resource	= tegra_mpe01_resources,
+	.num_resources	= ARRAY_SIZE(tegra_mpe01_resources),
+	.index		= 5,
+	.syncpts	= BIT(NVSYNCPT_MPE) | BIT(NVSYNCPT_MPE_EBM_EOF) |
+			  BIT(NVSYNCPT_MPE_WR_SAFE),
+	.waitbases	= BIT(NVWAITBASE_MPE),
+	.class		= NV_VIDEO_ENCODE_MPEG_CLASS_ID,
+	.waitbasesync	= true,
+	.keepalive	= true,
+	.clocks		= { {"mpe", UINT_MAX},
+			    {"emc", UINT_MAX} },
+	.powergate_ids	= {TEGRA_POWERGATE_MPE, -1},
+	NVHOST_DEFAULT_CLOCKGATE_DELAY,
+	.moduleid	= NVHOST_MODULE_MPE,
+};
+
+static struct nvhost_device tegra_dsi01_device = {
+	.name		= "dsi",
+	.id		= -1,
+	.index		= 6,
+	.syncpts	= BIT(NVSYNCPT_DSI),
+	.modulemutexes	= BIT(NVMODMUTEX_DSI),
+	NVHOST_MODULE_NO_POWERGATE_IDS,
+	NVHOST_DEFAULT_CLOCKGATE_DELAY,
+	.moduleid	= NVHOST_MODULE_NONE,
+};
+
+static struct nvhost_device *t20_devices[] = {
+	&tegra_host1x01_device,
+	&tegra_display01_device,
+	&tegra_gr3d01_device,
+	&tegra_gr2d01_device,
+	&tegra_isp01_device,
+	&tegra_vi01_device,
+	&tegra_mpe01_device,
+	&tegra_dsi01_device,
+};
+
+int tegra2_register_host1x_devices(void)
 {
-	p += NV_HOST1X_CHANNEL0_BASE;
-	p += ndx * NV_HOST1X_CHANNEL_MAP_SIZE_BYTES;
-	return p;
+	return nvhost_add_devices(t20_devices, ARRAY_SIZE(t20_devices));
 }
 
-static inline int t20_nvhost_hwctx_handler_init(
-	struct nvhost_hwctx_handler *h,
-	const char *module)
+static void t20_free_nvhost_channel(struct nvhost_channel *ch)
 {
-	if (strcmp(module, "gr3d") == 0)
-		return nvhost_gr3d_t20_ctxhandler_init(h);
-	else if (strcmp(module, "mpe") == 0)
-		return nvhost_mpe_ctxhandler_init(h);
-	return 0;
+	nvhost_free_channel_internal(ch, &t20_num_alloc_channels);
 }
 
-static int t20_channel_init(struct nvhost_channel *ch,
-			    struct nvhost_master *dev, int index)
+static struct nvhost_channel *t20_alloc_nvhost_channel(
+		struct nvhost_device *dev)
 {
-	ch->dev = dev;
-	ch->chid = index;
-	ch->desc = nvhost_t20_channelmap + index;
-	mutex_init(&ch->reflock);
-	mutex_init(&ch->submitlock);
-
-	ch->aperture = t20_channel_aperture(dev->aperture, index);
-
-	return t20_nvhost_hwctx_handler_init(&ch->ctxhandler, ch->desc->name);
+	return nvhost_alloc_channel_internal(dev->index,
+		nvhost_get_host(dev)->info.nb_channels,
+		&t20_num_alloc_channels);
 }
 
-int nvhost_init_t20_channel_support(struct nvhost_master *host)
-{
-	host->nb_mlocks =  NV_HOST1X_SYNC_MLOCK_NUM;
-	host->nb_channels =  NVHOST_NUMCHANNELS;
+#include "host1x/host1x_channel.c"
+#include "host1x/host1x_cdma.c"
+#include "host1x/host1x_debug.c"
+#include "host1x/host1x_syncpt.c"
+#include "host1x/host1x_intr.c"
 
-	host->op.channel.init = t20_channel_init;
-	host->op.channel.submit = host1x_channel_submit;
-	host->op.channel.read3dreg = host1x_channel_read_3d_reg;
-
-	return 0;
-}
-
-int nvhost_init_t20_support(struct nvhost_master *host)
+int nvhost_init_t20_support(struct nvhost_master *host,
+	struct nvhost_chip_support *op)
 {
 	int err;
-	int i;
 
-	for (i = 0; i < ARRAY_SIZE(devices); i++)
-		nvhost_device_register(&devices[i]);
+	op->channel = host1x_channel_ops;
+	op->cdma = host1x_cdma_ops;
+	op->push_buffer = host1x_pushbuffer_ops;
+	op->debug = host1x_debug_ops;
+	host->sync_aperture = host->aperture + HOST1X_CHANNEL_SYNC_REG_BASE;
+	op->syncpt = host1x_syncpt_ops;
+	op->intr = host1x_intr_ops;
+	err = nvhost_memmgr_init(op);
+	if (err)
+		return err;
 
-	/* don't worry about cleaning up on failure... "remove" does it. */
-	err = nvhost_init_t20_channel_support(host);
-	if (err)
-		return err;
-	err = host1x_init_cdma_support(host);
-	if (err)
-		return err;
-	err = nvhost_init_t20_debug_support(host);
-	if (err)
-		return err;
-	err = host1x_init_syncpt_support(host);
-	if (err)
-		return err;
-	err = nvhost_init_t20_intr_support(host);
-	if (err)
-		return err;
-	err = nvhost_init_t20_cpuaccess_support(host);
-	if (err)
-		return err;
+	op->nvhost_dev.alloc_nvhost_channel = t20_alloc_nvhost_channel;
+	op->nvhost_dev.free_nvhost_channel = t20_free_nvhost_channel;
+
 	return 0;
 }

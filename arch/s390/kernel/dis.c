@@ -27,12 +27,12 @@
 #include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/mathemu.h>
 #include <asm/cpcmd.h>
-#include <asm/s390_ext.h>
 #include <asm/lowcore.h>
 #include <asm/debug.h>
+#include <asm/irq.h>
 
 #ifndef CONFIG_64BIT
 #define ONELONG "%08lx: "

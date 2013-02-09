@@ -2,8 +2,8 @@
  * SDIO Classes, Interface Types, Manufacturer IDs, etc.
  */
 
-#ifndef MMC_SDIO_IDS_H
-#define MMC_SDIO_IDS_H
+#ifndef LINUX_MMC_SDIO_IDS_H
+#define LINUX_MMC_SDIO_IDS_H
 
 /*
  * Standard SDIO Function Interfaces
@@ -36,11 +36,6 @@
 #define SDIO_DEVICE_ID_MARVELL_8688WLAN		0x9104
 #define SDIO_DEVICE_ID_MARVELL_8688BT		0x9105
 
-#ifdef CONFIG_TIWLAN_SDIO
-#define SDIO_VENDOR_ID_TI              0x104c
-#define SDIO_DEVICE_ID_TI_WL12xx       0x9066
-#endif
-
 #define SDIO_VENDOR_ID_SIANO			0x039a
 #define SDIO_DEVICE_ID_SIANO_NOVA_B0		0x0201
 #define SDIO_DEVICE_ID_SIANO_NICE		0x0202
@@ -49,4 +44,4 @@
 #define SDIO_DEVICE_ID_SIANO_NOVA_A0		0x1100
 #define SDIO_DEVICE_ID_SIANO_STELLAR 		0x5347
 
-#endif
+#endif /* LINUX_MMC_SDIO_IDS_H */

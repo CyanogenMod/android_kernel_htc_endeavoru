@@ -31,7 +31,7 @@
 static int timerinfo_dev_mmap(struct file *file, struct vm_area_struct *vma);
 
 static const struct file_operations timerinfo_dev_fops = {
-        .owner = THIS_MODULE,
+	.owner = THIS_MODULE,
 	.open = nonseekable_open,
 	.mmap = timerinfo_dev_mmap,
 	.llseek = noop_llseek,
@@ -67,7 +67,7 @@ static int timerinfo_dev_mmap(struct file *file, struct vm_area_struct *vma)
 
 static int __init timerinfo_dev_init(void)
 {
-        return misc_register(&timerinfo_dev);
+	return misc_register(&timerinfo_dev);
 }
 
 module_init(timerinfo_dev_init);

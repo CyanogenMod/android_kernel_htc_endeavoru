@@ -229,11 +229,11 @@
 #include <linux/jiffies.h>
 #include <linux/acpi.h>
 #include <linux/syscore_ops.h>
+#include <linux/i8253.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/desc.h>
-#include <asm/i8253.h>
 #include <asm/olpc.h>
 #include <asm/paravirt.h>
 #include <asm/reboot.h>
@@ -361,6 +361,7 @@ struct apm_user {
  * idle percentage above which bios idle calls are done
  */
 #ifdef CONFIG_APM_CPU_IDLE
+#warning deprecated CONFIG_APM_CPU_IDLE will be deleted in 2012
 #define DEFAULT_IDLE_THRESHOLD	95
 #else
 #define DEFAULT_IDLE_THRESHOLD	100
@@ -904,6 +905,7 @@ static void apm_cpu_idle(void)
 	unsigned int jiffies_since_last_check = jiffies - last_jiffies;
 	unsigned int bucket;
 
+	WARN_ONCE(1, "deprecated apm_cpu_idle will be deleted in 2012");
 recalc:
 	if (jiffies_since_last_check > IDLE_CALC_LIMIT) {
 		use_apm_idle = 0;
@@ -1218,11 +1220,11 @@ static void reinit_timer(void)
 
 	raw_spin_lock_irqsave(&i8253_lock, flags);
 	/* set the clock to HZ */
-	outb_pit(0x34, PIT_MODE);		/* binary, mode 2, LSB/MSB, ch 0 */
+	outb_p(0x34, PIT_MODE);		/* binary, mode 2, LSB/MSB, ch 0 */
 	udelay(10);
-	outb_pit(LATCH & 0xff, PIT_CH0);	/* LSB */
+	outb_p(LATCH & 0xff, PIT_CH0);	/* LSB */
 	udelay(10);
-	outb_pit(LATCH >> 8, PIT_CH0);	/* MSB */
+	outb_p(LATCH >> 8, PIT_CH0);	/* MSB */
 	udelay(10);
 	raw_spin_unlock_irqrestore(&i8253_lock, flags);
 #endif
@@ -1238,7 +1240,6 @@ static int suspend(int vetoable)
 	dpm_suspend_noirq(PMSG_SUSPEND);
 
 	local_irq_disable();
-	sysdev_suspend(PMSG_SUSPEND);
 	syscore_suspend();
 
 	local_irq_enable();
@@ -1258,7 +1259,6 @@ static int suspend(int vetoable)
 	err = (err == APM_SUCCESS) ? 0 : -EIO;
 
 	syscore_resume();
-	sysdev_resume();
 	local_irq_enable();
 
 	dpm_resume_noirq(PMSG_RESUME);
@@ -1282,7 +1282,6 @@ static void standby(void)
 	dpm_suspend_noirq(PMSG_SUSPEND);
 
 	local_irq_disable();
-	sysdev_suspend(PMSG_SUSPEND);
 	syscore_suspend();
 	local_irq_enable();
 
@@ -1292,7 +1291,6 @@ static void standby(void)
 
 	local_irq_disable();
 	syscore_resume();
-	sysdev_resume();
 	local_irq_enable();
 
 	dpm_resume_noirq(PMSG_RESUME);

@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-tegra/tegra3_emc.h
  *
- * Copyright (C) 2011 NVIDIA Corporation
+ * Copyright (C) 2012 NVIDIA CORPORATION. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +27,9 @@
 #define TEGRA_EMC_BRIDGE_RATE_MIN	300000000
 #define TEGRA_EMC_BRIDGE_MVOLTS_MIN	1200
 
+extern u8 tegra_emc_bw_efficiency;
+extern u8 tegra_emc_bw_efficiency_boost;
+
 struct tegra_emc_table {
 	u8 rev;
 	unsigned long rate;
@@ -45,12 +48,20 @@ struct tegra_emc_table {
 	int emc_min_mv;
 };
 
+enum {
+	DRAM_OVER_TEMP_NONE = 0,
+	DRAM_OVER_TEMP_REFRESH,
+};
+
 struct clk;
 
 void tegra_init_emc(const struct tegra_emc_table *table, int table_size);
 
+void tegra_init_dram_bit_map(const u32 *bit_map, int map_size);
 void tegra_emc_dram_type_init(struct clk *c);
 int tegra_emc_get_dram_type(void);
+int tegra_emc_get_dram_temperature(void);
+int tegra_emc_set_over_temp_state(unsigned long state);
 
 #ifdef CONFIG_PM_SLEEP
 void tegra_mc_timing_restore(void);
@@ -131,6 +142,8 @@ static inline void tegra_mc_timing_restore(void)
 #define EMC_MODE_SET_DLL_RESET			(0x1 << 8)
 #define EMC_MODE_SET_LONG_CNT			(0x1 << 26)
 #define EMC_EMRS				0xd0
+#define EMC_REF					0xd4
+#define EMC_REF_FORCE_CMD			1
 
 #define EMC_SELF_REF				0xe0
 #define EMC_SELF_REF_CMD_ENABLED		(0x1 << 0)
@@ -146,6 +159,12 @@ enum {
 
 #define EMC_MRW					0xe8
 #define EMC_MRR					0xec
+#define EMC_MRR_MA_SHIFT			16
+#define EMC_MRR_MA_MASK				(0xFF << EMC_MRR_MA_SHIFT)
+#define EMC_MRR_DATA_MASK			((0x1 << EMC_MRR_MA_SHIFT) - 1)
+#define LPDDR2_MR4_TEMP_SHIFT			0
+#define LPDDR2_MR4_TEMP_MASK			(0x7 << LPDDR2_MR4_TEMP_SHIFT)
+
 #define EMC_XM2DQSPADCTRL3			0xf8
 #define EMC_XM2DQSPADCTRL3_VREF_ENABLE		(0x1 << 5)
 #define EMC_FBIO_SPARE				0x100
@@ -175,6 +194,7 @@ enum {
 #define EMC_AUTO_CAL_STATUS_ACTIVE		(0x1 << 31)
 #define EMC_STATUS				0x2b4
 #define EMC_STATUS_TIMING_UPDATE_STALLED	(0x1 << 23)
+#define EMC_STATUS_MRR_DIVLD			(0x1 << 20)
 
 #define EMC_CFG_2				0x2b8
 #define EMC_CFG_2_MODE_SHIFT			0
@@ -247,6 +267,10 @@ enum {
 
 #define MC_EMEM_ADR_CFG				0x54
 #define MC_EMEM_ARB_CFG				0x90
+#define MC_EMEM_ARB_CFG_CYCLE_MASK		0x1ff
+#define MC_EMEM_ARB_CFG_EXTRA_TICK_SHIFT	16
+#define MC_EMEM_ARB_CFG_EXTRA_TICK_MASK		\
+	(0x1f << MC_EMEM_ARB_CFG_EXTRA_TICK_SHIFT)
 #define MC_EMEM_ARB_OUTSTANDING_REQ		0x94
 #define MC_EMEM_ARB_OUTSTANDING_REQ_MAX_SHIFT	0
 #define MC_EMEM_ARB_OUTSTANDING_REQ_MAX_MASK	\
@@ -275,6 +299,43 @@ enum {
 #define MC_EMEM_ARB_OVERRIDE			0xe8
 #define MC_EMEM_ARB_OVERRIDE_EACK_MASK		(0x3 << 0)
 #define MC_TIMING_CONTROL			0xfc
+#define MC_LATENCY_ALLOWANCE_AFI		0x2e0
+#define MC_LATENCY_ALLOWANCE_AVPC		0x2e4
+#define MC_LATENCY_ALLOWANCE_DC_0		0x2e8
+#define MC_LATENCY_ALLOWANCE_DC_1		0x2ec
+#define MC_LATENCY_ALLOWANCE_DC_2		0x2f0
+#define MC_LATENCY_ALLOWANCE_DCB_0		0x2f4
+#define MC_LATENCY_ALLOWANCE_DCB_1		0x2f8
+#define MC_LATENCY_ALLOWANCE_DCB_2		0x2fc
+#define MC_LATENCY_ALLOWANCE_EPP_0		0x300
+#define MC_LATENCY_ALLOWANCE_EPP_1		0x304
+#define MC_LATENCY_ALLOWANCE_G2_0		0x308
+#define MC_LATENCY_ALLOWANCE_G2_1		0x30c
+#define MC_LATENCY_ALLOWANCE_HC_0		0x310
+#define MC_LATENCY_ALLOWANCE_HC_1		0x314
+#define MC_LATENCY_ALLOWANCE_HDA		0x318
+#define MC_LATENCY_ALLOWANCE_ISP		0x31c
+#define MC_LATENCY_ALLOWANCE_MPCORE		0x320
+#define MC_LATENCY_ALLOWANCE_MPCORELP		0x324
+#define MC_LATENCY_ALLOWANCE_MPE_0		0x328
+#define MC_LATENCY_ALLOWANCE_MPE_1		0x32c
+#define MC_LATENCY_ALLOWANCE_MPE_2		0x330
+#define MC_LATENCY_ALLOWANCE_NV_0		0x334
+#define MC_LATENCY_ALLOWANCE_NV_1		0x338
+#define MC_LATENCY_ALLOWANCE_NV2_0		0x33c
+#define MC_LATENCY_ALLOWANCE_NV2_1		0x340
+#define MC_LATENCY_ALLOWANCE_PPCS_0		0x344
+#define MC_LATENCY_ALLOWANCE_PPCS_1		0x348
+#define MC_LATENCY_ALLOWANCE_PTC		0x34c
+#define MC_LATENCY_ALLOWANCE_SATA		0x350
+#define MC_LATENCY_ALLOWANCE_VDE_0		0x354
+#define MC_LATENCY_ALLOWANCE_VDE_1		0x358
+#define MC_LATENCY_ALLOWANCE_VDE_2		0x35c
+#define MC_LATENCY_ALLOWANCE_VDE_3		0x360
+#define MC_LATENCY_ALLOWANCE_VI_0		0x364
+#define MC_LATENCY_ALLOWANCE_VI_1		0x368
+#define MC_LATENCY_ALLOWANCE_VI_2		0x36c
+
 #define MC_RESERVED_RSV				0x3fc
 
 #endif

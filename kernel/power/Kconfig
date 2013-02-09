@@ -58,6 +58,11 @@ config EARLYSUSPEND
 	---help---
 	  Call early suspend handlers when the user requested sleep state
 	  changes.
+config HTC_PNPMGR
+	bool "Htc Power and Performance Manager"
+	depends on PM
+	---help---
+	   Collect sysfs file nodes for pnpmgr usage.
 
 config HTC_ONMODE_CHARGING
 	bool "On Mode Charging Icon Support"
@@ -198,12 +203,6 @@ config PM_DEBUG
 	code. This is helpful when debugging and reporting PM bugs, like
 	suspend support.
 
-config PM_VERBOSE
-	bool "Verbose Power Management debugging"
-	depends on PM_DEBUG
-	---help---
-	This option enables verbose messages from the Power Management code.
-
 config PM_ADVANCED_DEBUG
 	bool "Extra PM attributes in sysfs for low-level debugging/testing"
 	depends on PM_DEBUG
@@ -272,8 +271,8 @@ config APM_EMULATION
 	  notification of APM "events" (e.g. battery status change).
 
 	  In order to use APM, you will need supporting software. For location
-	  and more information, read <file:Documentation/power/pm.txt> and the
-	  Battery Powered Linux mini-HOWTO, available from
+	  and more information, read <file:Documentation/power/apm-acpi.txt>
+	  and the Battery Powered Linux mini-HOWTO, available from
 	  <http://www.tldp.org/docs.html#howto>.
 
 	  This driver does not spin down disk drives (see the hdparm(8)
@@ -303,8 +302,17 @@ config PM_OPP
 	  implementations a ready to use framework to manage OPPs.
 	  For more information, read <file:Documentation/power/opp.txt>
 
-config POWER_KEY_WAKEUP_FAILED_PATCH
-	bool "POWER_KEY_WAKEUP_FAILED_PATCH"
+config PM_CLK
+	def_bool y
+	depends on PM && HAVE_CLK
+
+config PM_GENERIC_DOMAINS
+	bool
+	depends on PM
+
+config PM_GENERIC_DOMAINS_RUNTIME
+	def_bool y
+	depends on PM_RUNTIME && PM_GENERIC_DOMAINS
 
 config SUSPEND_TIME
 	bool "Log time spent in suspend"

@@ -73,7 +73,7 @@ int nouveau_ignorelid = 0;
 module_param_named(ignorelid, nouveau_ignorelid, int, 0400);
 
 MODULE_PARM_DESC(noaccel, "Disable all acceleration");
-int nouveau_noaccel = 0;
+int nouveau_noaccel = -1;
 module_param_named(noaccel, nouveau_noaccel, int, 0400);
 
 MODULE_PARM_DESC(nofbaccel, "Disable fbcon acceleration");
@@ -119,6 +119,10 @@ MODULE_PARM_DESC(msi, "Enable MSI (default: off)\n");
 int nouveau_msi;
 module_param_named(msi, nouveau_msi, int, 0400);
 
+MODULE_PARM_DESC(ctxfw, "Use external HUB/GPC ucode (fermi)\n");
+int nouveau_ctxfw;
+module_param_named(ctxfw, nouveau_ctxfw, int, 0400);
+
 int nouveau_fbpercrtc;
 #if 0
 module_param_named(fbpercrtc, nouveau_fbpercrtc, int, 0400);
@@ -162,11 +166,10 @@ nouveau_pci_suspend(struct pci_dev *pdev, pm_message_t pm_state)
 	struct drm_device *dev = pci_get_drvdata(pdev);
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nouveau_instmem_engine *pinstmem = &dev_priv->engine.instmem;
-	struct nouveau_pgraph_engine *pgraph = &dev_priv->engine.graph;
 	struct nouveau_fifo_engine *pfifo = &dev_priv->engine.fifo;
 	struct nouveau_channel *chan;
 	struct drm_crtc *crtc;
-	int ret, i;
+	int ret, i, e;
 
 	if (pm_state.event == PM_EVENT_PRETHAW)
 		return 0;
@@ -206,12 +209,20 @@ nouveau_pci_suspend(struct pci_dev *pdev, pm_message_t pm_state)
 			nouveau_channel_idle(chan);
 	}
 
-	pgraph->fifo_access(dev, false);
-	nouveau_wait_for_idle(dev);
 	pfifo->reassign(dev, false);
 	pfifo->disable(dev);
 	pfifo->unload_context(dev);
-	pgraph->unload_context(dev);
+
+	for (e = NVOBJ_ENGINE_NR - 1; e >= 0; e--) {
+		if (!dev_priv->eng[e])
+			continue;
+
+		ret = dev_priv->eng[e]->fini(dev, e, true);
+		if (ret) {
+			NV_ERROR(dev, "... engine %d failed: %d\n", i, ret);
+			goto out_abort;
+		}
+	}
 
 	ret = pinstmem->suspend(dev);
 	if (ret) {
@@ -242,9 +253,12 @@ nouveau_pci_suspend(struct pci_dev *pdev, pm_message_t pm_state)
 
 out_abort:
 	NV_INFO(dev, "Re-enabling acceleration..\n");
+	for (e = e + 1; e < NVOBJ_ENGINE_NR; e++) {
+		if (dev_priv->eng[e])
+			dev_priv->eng[e]->init(dev, e);
+	}
 	pfifo->enable(dev);
 	pfifo->reassign(dev, true);
-	pgraph->fifo_access(dev, true);
 	return ret;
 }
 
@@ -299,8 +313,10 @@ nouveau_pci_resume(struct pci_dev *pdev)
 	engine->mc.init(dev);
 	engine->timer.init(dev);
 	engine->fb.init(dev);
-	engine->graph.init(dev);
-	engine->crypt.init(dev);
+	for (i = 0; i < NVOBJ_ENGINE_NR; i++) {
+		if (dev_priv->eng[i])
+			dev_priv->eng[i]->init(dev, i);
+	}
 	engine->fifo.init(dev);
 
 	nouveau_irq_postinstall(dev);
@@ -345,7 +361,7 @@ nouveau_pci_resume(struct pci_dev *pdev)
 
 	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
 		struct nouveau_crtc *nv_crtc = nouveau_crtc(crtc);
-		u32 offset = nv_crtc->cursor.nvbo->bo.mem.start << PAGE_SHIFT;
+		u32 offset = nv_crtc->cursor.nvbo->bo.offset;
 
 		nv_crtc->cursor.set_offset(nv_crtc, offset);
 		nv_crtc->cursor.set_pos(nv_crtc, nv_crtc->cursor_saved_x,
@@ -380,7 +396,9 @@ static struct drm_driver driver = {
 	.firstopen = nouveau_firstopen,
 	.lastclose = nouveau_lastclose,
 	.unload = nouveau_unload,
+	.open = nouveau_open,
 	.preclose = nouveau_preclose,
+	.postclose = nouveau_postclose,
 #if defined(CONFIG_DRM_NOUVEAU_DEBUG)
 	.debugfs_init = nouveau_debugfs_init,
 	.debugfs_cleanup = nouveau_debugfs_takedown,
@@ -411,6 +429,8 @@ static struct drm_driver driver = {
 
 	.gem_init_object = nouveau_gem_object_new,
 	.gem_free_object = nouveau_gem_object_del,
+	.gem_open_object = nouveau_gem_object_open,
+	.gem_close_object = nouveau_gem_object_close,
 
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,

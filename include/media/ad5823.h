@@ -30,6 +30,7 @@
 #define AD5823_IOCTL_SET_GSENSOR_MODE _IOW('o', 3, u8)
 #define AD5823_IOCTL_GET_GSENSOR_DATA _IOW('o', 4, struct g_sensor_info)
 #define AD5823_IOCTL_GET_POWER_STATE _IOR('o', 5, u32)
+#define AD5823_IOCTL_SET_FLASHLIGHT _IOR('o', 6, u32)
 //HTC_end
 
 //HTC_start: for g-sensor
@@ -52,9 +53,16 @@ struct ad5823_config {
 
 #ifdef __KERNEL__
 struct ad5823_platform_data {
+	float focal_length;
+	float fnumber;
+	__u32 settle_time;
+	__u32 pos_low;
+	__u32 pos_high;
 	int (*get_power_state)(void);
+	int (*set_gsensor_mode)(unsigned char);
+	int (*get_gsensor_data)(short *);
+	int (*set_flashlight)(int);
 };
 #endif /* __KERNEL__ */
 
 #endif  /* __AD5823_H__ */
-

@@ -16,6 +16,7 @@
 #include <linux/kobject.h>
 #include <linux/moduleparam.h>
 #include <linux/tracepoint.h>
+#include <linux/export.h>
 
 #include <linux/percpu.h>
 #include <asm/module.h>
@@ -25,20 +26,7 @@
 /* Not Yet Implemented */
 #define MODULE_SUPPORTED_DEVICE(name)
 
-/* Some toolchains use a `_' prefix for all user symbols. */
-#ifdef CONFIG_SYMBOL_PREFIX
-#define MODULE_SYMBOL_PREFIX CONFIG_SYMBOL_PREFIX
-#else
-#define MODULE_SYMBOL_PREFIX ""
-#endif
-
 #define MODULE_NAME_LEN MAX_PARAM_PREFIX_LEN
-
-struct kernel_symbol
-{
-	unsigned long value;
-	const char *name;
-};
 
 struct modversion_info
 {
@@ -48,10 +36,18 @@ struct modversion_info
 
 struct module;
 
+struct module_kobject {
+	struct kobject kobj;
+	struct module *mod;
+	struct kobject *drivers_dir;
+	struct module_param_attrs *mp;
+};
+
 struct module_attribute {
-        struct attribute attr;
-        ssize_t (*show)(struct module_attribute *, struct module *, char *);
-        ssize_t (*store)(struct module_attribute *, struct module *,
+	struct attribute attr;
+	ssize_t (*show)(struct module_attribute *, struct module_kobject *,
+			char *);
+	ssize_t (*store)(struct module_attribute *, struct module_kobject *,
 			 const char *, size_t count);
 	void (*setup)(struct module *, const char *);
 	int (*test)(struct module *);
@@ -64,13 +60,10 @@ struct module_version_attribute {
 	const char *version;
 } __attribute__ ((__aligned__(sizeof(void *))));
 
-struct module_kobject
-{
-	struct kobject kobj;
-	struct module *mod;
-	struct kobject *drivers_dir;
-	struct module_param_attrs *mp;
-};
+extern ssize_t __modver_version_show(struct module_attribute *,
+				     struct module_kobject *, char *);
+
+extern struct module_attribute module_uevent;
 
 /* These are either module local, or the kernel's dummy ones. */
 extern int init_module(void);
@@ -93,11 +86,8 @@ void trim_init_extable(struct module *m);
 extern const struct gtype##_id __mod_##gtype##_table		\
   __attribute__ ((unused, alias(__stringify(name))))
 
-extern struct module __this_module;
-#define THIS_MODULE (&__this_module)
 #else  /* !MODULE */
 #define MODULE_GENERIC_TABLE(gtype,name)
-#define THIS_MODULE ((struct module *)0)
 #endif
 
 /* Generic info of form tag = "info" */
@@ -172,12 +162,7 @@ extern struct module __this_module;
 #define MODULE_VERSION(_version) MODULE_INFO(version, _version)
 #else
 #define MODULE_VERSION(_version)					\
-	extern ssize_t __modver_version_show(struct module_attribute *,	\
-					     struct module *, char *);	\
-	static struct module_version_attribute __modver_version_attr	\
-	__used								\
-    __attribute__ ((__section__ ("__modver"),aligned(sizeof(void *)))) \
-	= {								\
+	static struct module_version_attribute ___modver_attr = {	\
 		.mattr	= {						\
 			.attr	= {					\
 				.name	= "version",			\
@@ -187,7 +172,10 @@ extern struct module __this_module;
 		},							\
 		.module_name	= KBUILD_MODNAME,			\
 		.version	= _version,				\
-	}
+	};								\
+	static const struct module_version_attribute			\
+	__used __attribute__ ((__section__ ("__modver")))		\
+	* __moduleparam_const __modver_attr = &___modver_attr
 #endif
 
 /* Optional firmware file (or files) needed by the module
@@ -214,52 +202,6 @@ struct module_use {
 	struct list_head target_list;
 	struct module *source, *target;
 };
-
-#ifndef __GENKSYMS__
-#ifdef CONFIG_MODVERSIONS
-/* Mark the CRC weak since genksyms apparently decides not to
- * generate a checksums for some symbols */
-#define __CRC_SYMBOL(sym, sec)					\
-	extern void *__crc_##sym __attribute__((weak));		\
-	static const unsigned long __kcrctab_##sym		\
-	__used							\
-	__attribute__((section("__kcrctab" sec), unused))	\
-	= (unsigned long) &__crc_##sym;
-#else
-#define __CRC_SYMBOL(sym, sec)
-#endif
-
-/* For every exported symbol, place a struct in the __ksymtab section */
-#define __EXPORT_SYMBOL(sym, sec)				\
-	extern typeof(sym) sym;					\
-	__CRC_SYMBOL(sym, sec)					\
-	static const char __kstrtab_##sym[]			\
-	__attribute__((section("__ksymtab_strings"), aligned(1))) \
-	= MODULE_SYMBOL_PREFIX #sym;                    	\
-	static const struct kernel_symbol __ksymtab_##sym	\
-	__used							\
-	__attribute__((section("__ksymtab" sec), unused))	\
-	= { (unsigned long)&sym, __kstrtab_##sym }
-
-#define EXPORT_SYMBOL(sym)					\
-	__EXPORT_SYMBOL(sym, "")
-
-#define EXPORT_SYMBOL_GPL(sym)					\
-	__EXPORT_SYMBOL(sym, "_gpl")
-
-#define EXPORT_SYMBOL_GPL_FUTURE(sym)				\
-	__EXPORT_SYMBOL(sym, "_gpl_future")
-
-
-#ifdef CONFIG_UNUSED_SYMBOLS
-#define EXPORT_UNUSED_SYMBOL(sym) __EXPORT_SYMBOL(sym, "_unused")
-#define EXPORT_UNUSED_SYMBOL_GPL(sym) __EXPORT_SYMBOL(sym, "_unused_gpl")
-#else
-#define EXPORT_UNUSED_SYMBOL(sym)
-#define EXPORT_UNUSED_SYMBOL_GPL(sym)
-#endif
-
-#endif
 
 enum module_state
 {
@@ -367,34 +309,35 @@ struct module
 	struct module_notes_attrs *notes_attrs;
 #endif
 
+	/* The command line arguments (may be mangled).  People like
+	   keeping pointers to this stuff */
+	char *args;
+
 #ifdef CONFIG_SMP
 	/* Per-cpu data. */
 	void __percpu *percpu;
 	unsigned int percpu_size;
 #endif
 
-	/* The command line arguments (may be mangled).  People like
-	   keeping pointers to this stuff */
-	char *args;
 #ifdef CONFIG_TRACEPOINTS
-	struct tracepoint * const *tracepoints_ptrs;
 	unsigned int num_tracepoints;
+	struct tracepoint * const *tracepoints_ptrs;
 #endif
 #ifdef HAVE_JUMP_LABEL
 	struct jump_entry *jump_entries;
 	unsigned int num_jump_entries;
 #endif
 #ifdef CONFIG_TRACING
-	const char **trace_bprintk_fmt_start;
 	unsigned int num_trace_bprintk_fmt;
+	const char **trace_bprintk_fmt_start;
 #endif
 #ifdef CONFIG_EVENT_TRACING
 	struct ftrace_event_call **trace_events;
 	unsigned int num_trace_events;
 #endif
 #ifdef CONFIG_FTRACE_MCOUNT_RECORD
-	unsigned long *ftrace_callsites;
 	unsigned int num_ftrace_callsites;
+	unsigned long *ftrace_callsites;
 #endif
 
 #ifdef CONFIG_MODULE_UNLOAD
@@ -475,8 +418,9 @@ const struct kernel_symbol *find_symbol(const char *name,
 					bool warn);
 
 /* Walk the exported symbol table */
-bool each_symbol(bool (*fn)(const struct symsearch *arr, struct module *owner,
-			    unsigned int symnum, void *data), void *data);
+bool each_symbol_section(bool (*fn)(const struct symsearch *arr,
+				    struct module *owner,
+				    void *data), void *data);
 
 /* Returns 0 and fills in value, defined and namebuf, or -ERANGE if
    symnum out of range. */
@@ -579,11 +523,6 @@ extern void module_update_tracepoints(void);
 extern int module_get_iter_tracepoints(struct tracepoint_iter *iter);
 
 #else /* !CONFIG_MODULES... */
-#define EXPORT_SYMBOL(sym)
-#define EXPORT_SYMBOL_GPL(sym)
-#define EXPORT_SYMBOL_GPL_FUTURE(sym)
-#define EXPORT_UNUSED_SYMBOL(sym)
-#define EXPORT_UNUSED_SYMBOL_GPL(sym)
 
 /* Given an address, look for it in the exception tables. */
 static inline const struct exception_table_entry *

@@ -4,7 +4,7 @@
  *
  * Support for Tegra Security Engine hardware crypto algorithms.
  *
- * Copyright (c) 2011, NVIDIA Corporation.
+ * Copyright (c) 2011-2012, NVIDIA CORPORATION. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -622,9 +622,12 @@ static int tegra_se_count_sgs(struct scatterlist *sl, u32 total_bytes)
 		return 0;
 
 	do {
-		total_bytes -= min(sl[i].length, total_bytes);
+		if (!sl->length)
+			return 0;
+		total_bytes -= min(sl->length, total_bytes);
 		i++;
-	} while (total_bytes);
+		sl = sg_next(sl);
+	} while (total_bytes && sl);
 
 	return i;
 }
@@ -845,6 +848,9 @@ static int tegra_se_aes_queue_req(struct ablkcipher_request *req)
 	unsigned long flags;
 	bool idle = true;
 	int err = 0;
+
+	if (!tegra_se_count_sgs(req->src, req->nbytes))
+		return -EINVAL;
 
 	spin_lock_irqsave(&se_dev->lock, flags);
 	err = ablkcipher_enqueue_request(&se_dev->queue, req);
@@ -1202,6 +1208,9 @@ int tegra_se_sha_final(struct ahash_request *req)
 	struct tegra_se_ll *src_ll;
 	u32 total, num_sgs;
 	int err = 0;
+
+	if (!req->nbytes)
+		return -EINVAL;
 
 	if (crypto_ahash_digestsize(tfm) == SHA1_DIGEST_SIZE)
 		sha_ctx->op_mode = SE_AES_OP_MODE_SHA1;
@@ -1893,14 +1902,6 @@ static int tegra_se_probe(struct platform_device *pdev)
 		goto err_irq;
 	}
 
-	err = request_irq(se_dev->irq, tegra_se_irq, IRQF_DISABLED,
-			DRIVER_NAME, se_dev);
-	if (err) {
-		dev_err(se_dev->dev, "request_irq failed - irq[%d] err[%d]\n",
-			se_dev->irq, err);
-		goto err_irq;
-	}
-
 	/* Initialize the clock */
 	se_dev->pclk = clk_get(se_dev->dev, "se");
 	if (IS_ERR(se_dev->pclk)) {
@@ -1932,6 +1933,14 @@ static int tegra_se_probe(struct platform_device *pdev)
 	sg_tegra_se_dev = se_dev;
 	pm_runtime_enable(se_dev->dev);
 	tegra_se_key_read_disable_all();
+
+	err = request_irq(se_dev->irq, tegra_se_irq, IRQF_DISABLED,
+			DRIVER_NAME, se_dev);
+	if (err) {
+		dev_err(se_dev->dev, "request_irq failed - irq[%d] err[%d]\n",
+			se_dev->irq, err);
+		goto clean;
+	}
 
 	err = tegra_se_alloc_ll_buf(se_dev, SE_MAX_SRC_SG_COUNT,
 		SE_MAX_DST_SG_COUNT);

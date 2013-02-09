@@ -22,11 +22,11 @@
 #include <linux/workqueue.h>
 
 #include "power.h"
-#include <htc/log.h>
 
 enum {
 	DEBUG_USER_STATE = 1U << 0,
 	DEBUG_SUSPEND = 1U << 2,
+	DEBUG_VERBOSE = 1U << 3,
 };
 
 extern struct wake_lock power_key_wake_lock;
@@ -93,7 +93,6 @@ static void early_suspend(struct work_struct *work)
 	int abort = 0;
 
 	pr_info("[R] early_suspend start\n");
-
 	mutex_lock(&early_suspend_lock);
 	spin_lock_irqsave(&state_lock, irqflags);
 	if (state == SUSPEND_REQUESTED) {
@@ -115,12 +114,11 @@ static void early_suspend(struct work_struct *work)
 
 	if (debug_mask & DEBUG_SUSPEND)
 		pr_info("[R] early_suspend: call handlers\n");
-
 	list_for_each_entry(pos, &early_suspend_handlers, link) {
 		if (pos->suspend != NULL) {
-			pmr_pr_info("[R]+\n");
+			if (debug_mask & DEBUG_VERBOSE)
+				pr_info("early_suspend: calling %pf\n", pos->suspend);
 			pos->suspend(pos);
-			pmr_pr_info("[R]-\n");
 		}
 	}
 	mutex_unlock(&early_suspend_lock);
@@ -164,18 +162,18 @@ static void late_resume(struct work_struct *work)
 	}
 	if (debug_mask & DEBUG_SUSPEND)
 		pr_info("[R] late_resume: call handlers\n");
-	list_for_each_entry_reverse(pos, &early_suspend_handlers, link)
+	list_for_each_entry_reverse(pos, &early_suspend_handlers, link) {
 		if (pos->resume != NULL) {
-			pmr_pr_info("[R]+\n");
-			pos->resume(pos);
-			pmr_pr_info("[R]-\n");
-		}
+			if (debug_mask & DEBUG_VERBOSE)
+				pr_info("late_resume: calling %pf\n", pos->resume);
 
+			pos->resume(pos);
+		}
+	}
 	if (debug_mask & DEBUG_SUSPEND)
 		pr_info("late_resume: done\n");
 abort:
 	mutex_unlock(&early_suspend_lock);
-
 	pr_info("[R] late_resume: end\n");
 }
 
@@ -352,4 +350,3 @@ suspend_state_t get_suspend_state(void)
 {
 	return requested_suspend_state;
 }
-EXPORT_SYMBOL(get_suspend_state);

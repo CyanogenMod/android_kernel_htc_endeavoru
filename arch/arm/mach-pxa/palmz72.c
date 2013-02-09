@@ -19,7 +19,7 @@
  */
 
 #include <linux/platform_device.h>
-#include <linux/sysdev.h>
+#include <linux/syscore_ops.h>
 #include <linux/delay.h>
 #include <linux/irq.h>
 #include <linux/gpio_keys.h>
@@ -33,6 +33,7 @@
 #include <linux/i2c-gpio.h>
 
 #include <asm/mach-types.h>
+#include <asm/suspend.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 
@@ -233,9 +234,9 @@ static struct palmz72_resume_info palmz72_resume_info = {
 
 static unsigned long store_ptr;
 
-/* sys_device for Palm Zire 72 PM */
+/* syscore_ops for Palm Zire 72 PM */
 
-static int palmz72_pm_suspend(struct sys_device *dev, pm_message_t msg)
+static int palmz72_pm_suspend(void)
 {
 	/* setup the resume_info struct for the original bootloader */
 	palmz72_resume_info.resume_addr = (u32) cpu_resume;
@@ -249,31 +250,23 @@ static int palmz72_pm_suspend(struct sys_device *dev, pm_message_t msg)
 	return 0;
 }
 
-static int palmz72_pm_resume(struct sys_device *dev)
+static void palmz72_pm_resume(void)
 {
 	*PALMZ72_SAVE_DWORD = store_ptr;
-	return 0;
 }
 
-static struct sysdev_class palmz72_pm_sysclass = {
-	.name = "palmz72_pm",
+static struct syscore_ops palmz72_pm_syscore_ops = {
 	.suspend = palmz72_pm_suspend,
 	.resume = palmz72_pm_resume,
 };
 
-static struct sys_device palmz72_pm_device = {
-	.cls = &palmz72_pm_sysclass,
-};
-
 static int __init palmz72_pm_init(void)
 {
-	int ret = -ENODEV;
 	if (machine_is_palmz72()) {
-		ret = sysdev_class_register(&palmz72_pm_sysclass);
-		if (ret == 0)
-			ret = sysdev_register(&palmz72_pm_device);
+		register_syscore_ops(&palmz72_pm_syscore_ops);
+		return 0;
 	}
-	return ret;
+	return -ENODEV;
 }
 
 device_initcall(palmz72_pm_init);
@@ -409,6 +402,7 @@ MACHINE_START(PALMZ72, "Palm Zire72")
 	.boot_params	= 0xa0000100,
 	.map_io		= pxa27x_map_io,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.timer		= &pxa_timer,
 	.init_machine	= palmz72_init
 MACHINE_END

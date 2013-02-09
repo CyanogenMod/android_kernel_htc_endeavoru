@@ -75,6 +75,9 @@ ktime_t alarm_get_elapsed_realtime(void);
 /* set rtc while preserving elapsed realtime */
 int alarm_set_rtc(const struct timespec ts);
 
+/* check this in case alarm is not intialized */
+int alarm_init_ready(void);
+
 #endif
 
 enum android_alarm_return_flags {

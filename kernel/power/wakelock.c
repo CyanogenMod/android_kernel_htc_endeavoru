@@ -22,8 +22,6 @@
 #ifdef CONFIG_WAKELOCK_STAT
 #include <linux/proc_fs.h>
 #endif
-#include <htc/log.h>
-#include <mach/board_htc.h>
 #include "power.h"
 
 enum {
@@ -33,7 +31,6 @@ enum {
 	DEBUG_EXPIRE = 1U << 3,
 	DEBUG_WAKE_LOCK = 1U << 4,
 };
-
 static int debug_mask = DEBUG_EXIT_SUSPEND | DEBUG_WAKEUP | DEBUG_SUSPEND;
 module_param_named(debug_mask, debug_mask, int, S_IRUGO | S_IWUSR | S_IWGRP);
 
@@ -51,6 +48,12 @@ struct workqueue_struct *suspend_work_queue;
 struct wake_lock main_wake_lock;
 suspend_state_t requested_suspend_state = PM_SUSPEND_MEM;
 static struct wake_lock unknown_wakeup;
+static struct wake_lock suspend_backoff_lock;
+
+#define SUSPEND_BACKOFF_THRESHOLD	10
+#define SUSPEND_BACKOFF_INTERVAL	10000
+
+static unsigned suspend_short_count;
 
 #ifdef CONFIG_WAKELOCK_STAT
 static struct wake_lock deleted_wake_locks;
@@ -227,77 +230,6 @@ static void print_active_locks(int type)
 	}
 }
 
-void htc_print_active_wake_locks()
-{
-	static char idle_hdr[] = "idle lock: ";
-	static char suspend_hdr[] = "wakelock: ";
-	bool lock_exist[2] = {false, false}; // 0: idle; 1: suspend
-	
-	struct wake_lock *lock;
-	char buf[2][2048]; // maed of 4K page, [0][]: idle; [1][]: suspend
-	int idx = 0;
-	
-	unsigned long irqflags;	
-	spin_lock_irqsave(&list_lock, irqflags);	
-	
-	//
-	// IRQs off, Trap off
-	// finish the dump job ASAP
-	//
-	if((!list_empty(&active_wake_locks[WAKE_LOCK_IDLE]))){
-		/* idle lock is NOT empty */
-		lock_exist[0] = true;
-		idx = 0;
-		
-		list_for_each_entry(lock, &active_wake_locks[WAKE_LOCK_IDLE], link) {
-			if (lock->flags & WAKE_LOCK_AUTO_EXPIRE) {
-				long timeout = lock->expires - jiffies;
-				if (timeout > 0)
-					if (idx < sizeof(buf[0]))
-						idx += snprintf (buf[0]+idx, sizeof(buf[0])-idx, " '%s', time left %ld; ", lock->name, timeout);
-
-			} else {
-				if (idx < sizeof(buf[0]))
-					idx += snprintf (buf[0]+idx, sizeof(buf[0])-idx, " '%s' ", lock->name);
-			}
-		}
-	}
-	
-	if((!list_empty(&active_wake_locks[WAKE_LOCK_SUSPEND]))){
-		/* suspend lock is NOT empty */
-		lock_exist[1] = true;
-		idx = 0;
-		
-		list_for_each_entry(lock, &active_wake_locks[WAKE_LOCK_SUSPEND], link) {
-			if (lock->flags & WAKE_LOCK_AUTO_EXPIRE) {
-				long timeout = lock->expires - jiffies;
-				if (timeout > 0)
-					if (idx < sizeof(buf[1]))
-						idx += snprintf (buf[1]+idx, sizeof(buf[1])-idx, " '%s', time left %ld; ", lock->name, timeout);
-				
-			} else {
-				if (idx < sizeof(buf[1]))
-					idx += snprintf (buf[1]+idx, sizeof(buf[1])-idx, " '%s' ", lock->name);
-			}
-		}
-	}
-	
-	spin_unlock_irqrestore(&list_lock, irqflags);
-	
-	//
-	// IRQ state restored, Trap on
-	//
-	/* idle lockers */
-	if (lock_exist[0]) {
-		printk ("%s%s\n", idle_hdr, buf[0]);
-	}
-	
-	/* suspend lockers */
-	if (lock_exist[1]) {
-		printk ("%s%s\n", suspend_hdr, buf[1]);
-	}
-}
-
 static long has_wake_lock_locked(int type)
 {
 	struct wake_lock *lock, *n;
@@ -331,13 +263,20 @@ long has_wake_lock(int type)
 	return ret;
 }
 
+static void suspend_backoff(void)
+{
+	pr_info("suspend: too many immediate wakeups, back off\n");
+	wake_lock_timeout(&suspend_backoff_lock,
+			  msecs_to_jiffies(SUSPEND_BACKOFF_INTERVAL));
+}
+
 static void suspend(struct work_struct *work)
 {
 	int ret;
 	int entry_event_num;
-	struct timespec ts;
-	struct rtc_time tm;
-	pmr_pr_info("[R][wakelock] suspend start\n");
+	struct timespec ts_entry, ts_exit;
+
+	pr_info("[R] suspend start\n");
 	if (has_wake_lock(WAKE_LOCK_SUSPEND)) {
 		if (debug_mask & DEBUG_SUSPEND)
 			pr_info("suspend: abort suspend\n");
@@ -348,28 +287,36 @@ static void suspend(struct work_struct *work)
 	sys_sync();
 	if (debug_mask & DEBUG_SUSPEND)
 		pr_info("suspend: enter suspend\n");
+	getnstimeofday(&ts_entry);
 	ret = pm_suspend(requested_suspend_state);
+	getnstimeofday(&ts_exit);
+
 	if (debug_mask & DEBUG_EXIT_SUSPEND) {
-		getnstimeofday(&ts);
-		rtc_time_to_tm(ts.tv_sec, &tm);
+		struct rtc_time tm;
+		rtc_time_to_tm(ts_exit.tv_sec, &tm);
 		pr_info("suspend: exit suspend, ret = %d "
 			"(%d-%02d-%02d %02d:%02d:%02d.%09lu UTC)\n", ret,
 			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-			tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
+			tm.tm_hour, tm.tm_min, tm.tm_sec, ts_exit.tv_nsec);
 	}
+
+	if (ts_exit.tv_sec - ts_entry.tv_sec <= 1) {
+		++suspend_short_count;
+
+		if (suspend_short_count == SUSPEND_BACKOFF_THRESHOLD) {
+			suspend_backoff();
+			suspend_short_count = 0;
+		}
+	} else {
+		suspend_short_count = 0;
+	}
+
 	if (current_event_num == entry_event_num) {
 		if (debug_mask & DEBUG_SUSPEND)
 			pr_info("suspend: pm_suspend returned with no event\n");
 		wake_lock_timeout(&unknown_wakeup, HZ / 2);
 	}
-	getnstimeofday(&ts);
-	rtc_time_to_tm(ts.tv_sec, &tm);
-
-	pmr_pr_info("[R][wakelock] resume end "
-		"(%d-%02d-%02d %02d:%02d:%02d.%09lu UTC)\n",
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-		tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
-
+	pr_info("[R] resume end\n");
 }
 static DECLARE_WORK(suspend_work, suspend);
 
@@ -395,7 +342,7 @@ static int power_suspend_late(struct device *dev)
 {
 	int ret = has_wake_lock(WAKE_LOCK_SUSPEND) ? -EAGAIN : 0;
 #ifdef CONFIG_WAKELOCK_STAT
-	wait_for_wakeup = 1;
+	wait_for_wakeup = !ret;
 #endif
 	if (debug_mask & DEBUG_SUSPEND)
 		pr_info("power_suspend_late return %d\n", ret);
@@ -631,6 +578,8 @@ static int __init wakelocks_init(void)
 	wake_lock_init(&main_wake_lock, WAKE_LOCK_SUSPEND, "main");
 	wake_lock(&main_wake_lock);
 	wake_lock_init(&unknown_wakeup, WAKE_LOCK_SUSPEND, "unknown_wakeups");
+	wake_lock_init(&suspend_backoff_lock, WAKE_LOCK_SUSPEND,
+		       "suspend_backoff");
 
 	ret = platform_device_register(&power_device);
 	if (ret) {
@@ -660,6 +609,7 @@ err_suspend_work_queue:
 err_platform_driver_register:
 	platform_device_unregister(&power_device);
 err_platform_device_register:
+	wake_lock_destroy(&suspend_backoff_lock);
 	wake_lock_destroy(&unknown_wakeup);
 	wake_lock_destroy(&main_wake_lock);
 #ifdef CONFIG_WAKELOCK_STAT
@@ -676,6 +626,7 @@ static void  __exit wakelocks_exit(void)
 	destroy_workqueue(suspend_work_queue);
 	platform_driver_unregister(&power_driver);
 	platform_device_unregister(&power_device);
+	wake_lock_destroy(&suspend_backoff_lock);
 	wake_lock_destroy(&unknown_wakeup);
 	wake_lock_destroy(&main_wake_lock);
 #ifdef CONFIG_WAKELOCK_STAT

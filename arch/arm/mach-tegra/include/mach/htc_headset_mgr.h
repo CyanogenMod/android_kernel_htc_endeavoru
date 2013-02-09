@@ -29,6 +29,7 @@
 #include <linux/input.h>
 #include <linux/switch.h>
 #include <linux/wakelock.h>
+#include <mach/board_htc.h>
 
 #define HS_ERR(fmt, arg...) \
 	printk(KERN_INFO "[" DRIVER_NAME "_ERR] (%s) " fmt "\n", \
@@ -60,8 +61,12 @@
 	__ATTR(_name, _mode, _show, _store)
 
 #define DRIVER_HS_MGR_RPC_SERVER	(1 << 0)
+#define DRIVER_HS_MGR_FLOAT_DET		(1 << 1)
+#define DRIVER_HS_MGR_OLD_AJ		(1 << 2)
+
 #define UART_DEV_NAME_LEN 32
 #define CHECK_COUNT 5
+#define DET_CHECK_COUNT 10
 
 
 #define DEBUG_FLAG_LOG		(1 << 0)
@@ -74,7 +79,7 @@
 #define BIT_FM_SPEAKER		(1 << 4)
 #define BIT_TTY_VCO		(1 << 5)
 #define BIT_TTY_HCO		(1 << 6)
-#define BIT_35MM_HEADSET	0
+#define BIT_35MM_HEADSET	(1 << 7)
 #define BIT_TV_OUT		(1 << 8)
 #define BIT_USB_CRADLE		(1 << 9)
 #define BIT_TV_OUT_AUDIO	(1 << 10)
@@ -82,6 +87,7 @@
 #define BIT_HDMI_AUDIO		(1 << 12)
 #define BIT_USB_AUDIO_OUT	(1 << 13)
 #define BIT_UNDEFINED		(1 << 14)
+#define BIT_HEADSET_UART	(1 << 15)
 
 #define MASK_HEADSET		(BIT_HEADSET | BIT_HEADSET_NO_MIC)
 #define MASK_35MM_HEADSET	(BIT_HEADSET | BIT_HEADSET_NO_MIC | \
@@ -111,6 +117,9 @@
 #define HS_DELAY_INSERT			500
 #define HS_DELAY_REMOVE			200
 #define HS_DELAY_BUTTON			500
+#define HS_DELAY_1WIRE_BUTTON		800
+#define HS_DELAY_1WIRE_BUTTON_SHORT	20
+#define HS_DELAY_IRQ_INIT		(10 * HS_DELAY_SEC)
 
 #define HS_JIFFIES_ZERO			msecs_to_jiffies(HS_DELAY_ZERO)
 #define HS_JIFFIES_MIC_BIAS		msecs_to_jiffies(HS_DELAY_MIC_BIAS)
@@ -118,8 +127,11 @@
 #define HS_JIFFIES_INSERT		msecs_to_jiffies(HS_DELAY_INSERT)
 #define HS_JIFFIES_REMOVE		msecs_to_jiffies(HS_DELAY_REMOVE)
 #define HS_JIFFIES_BUTTON		msecs_to_jiffies(HS_DELAY_BUTTON)
+#define HS_JIFFIES_1WIRE_BUTTON		msecs_to_jiffies(HS_DELAY_1WIRE_BUTTON)
+#define HS_JIFFIES_1WIRE_BUTTON_SHORT	msecs_to_jiffies(HS_DELAY_1WIRE_BUTTON_SHORT)
+#define HS_JIFFIES_IRQ_INIT		msecs_to_jiffies(HS_DELAY_IRQ_INIT)
 
-#define HS_WAKE_LOCK_TIMEOUT		(2 * HZ)
+#define HS_WAKE_LOCK_TIMEOUT		(5 * HZ)
 #define HS_RPC_TIMEOUT			(5 * HZ)
 #define HS_MIC_DETECT_TIMEOUT		(HZ + HZ / 2)
 
@@ -144,6 +156,14 @@
 #define HS_MGR_KEYCODE_BACKWARD	KEY_PREVIOUSSONG	/* 165 */
 #define HS_MGR_KEYCODE_MEDIA	KEY_MEDIA		/* 226 */
 #define HS_MGR_KEYCODE_SEND	KEY_SEND		/* 231 */
+#define HS_MGR_KEYCODE_FF	KEY_FASTFORWARD
+#define HS_MGR_KEYCODE_RW	KEY_REWIND
+
+#define HS_MGR_2X_KEY_MEDIA		(1 << 4)
+#define HS_MGR_3X_KEY_MEDIA		(1 << 8)
+#define HS_MGR_KEY_HOLD(x)	x | (x << 4)
+#define HS_MGR_2X_HOLD_MEDIA	HS_MGR_KEY_HOLD(HS_MGR_2X_KEY_MEDIA)
+#define HS_MGR_3X_HOLD_MEDIA	HS_MGR_KEY_HOLD(HS_MGR_3X_KEY_MEDIA)
 
 #define HS_DEF				0
 #define HS_QUO_F			1
@@ -153,6 +173,8 @@
 #define HS_EDE_U			5
 #define HS_EDE_TD			6
 #define HS_EDE_U_TD			7
+#define HS_QUO_F_U_XB		8
+#define HS_ENRC2_U_XB		9
 
 enum {
 	HEADSET_UNPLUG		= 0,
@@ -165,6 +187,7 @@ enum {
 	HEADSET_INDICATOR	= 7,
 	HEADSET_BEATS		= 8,
 	HEADSET_BEATS_SOLO	= 9,
+	HEADSET_UART		= 10,
 };
 
 enum {
@@ -183,6 +206,12 @@ enum {
 	HEADSET_REG_KEY_INT_ENABLE,
 	HEADSET_REG_KEY_ENABLE,
 	HEADSET_REG_INDICATOR_ENABLE,
+	HEADSET_REG_UART_SET,
+	HEADSET_REG_1WIRE_INIT,
+	HEADSET_REG_1WIRE_QUERY,
+	HEADSET_REG_1WIRE_READ_KEY,
+	HEADSET_REG_1WIRE_DEINIT,
+	HEADSET_REG_1WIRE_REPORT_TYPE,
 };
 
 enum {
@@ -261,6 +290,12 @@ struct hs_notifier_func {
 	int (*key_int_enable)(int);
 	void (*key_enable)(int);
 	int (*indicator_enable)(int);
+	void (*uart_set)(int);
+	int (*hs_1wire_init)(void);
+	int (*hs_1wire_query)(int);
+	int (*hs_1wire_read_key)(void);
+	int (*hs_1wire_deinit)(void);
+	int (*hs_1wire_report_type)(char **);
 };
 
 struct htc_headset_mgr_platform_data {
@@ -276,6 +311,7 @@ struct htc_headset_mgr_platform_data {
 	unsigned int tx_1wire_gpio;
 	unsigned int rx_1wire_gpio;
 	unsigned int level_1wire_gpio;
+	unsigned int uart_1wire_gpio;
 	unsigned char dev_1wire[UART_DEV_NAME_LEN];
 
 	unsigned int hptv_det_hp_gpio;
@@ -284,6 +320,8 @@ struct htc_headset_mgr_platform_data {
 
 	void (*headset_init)(void);
 	void (*headset_power)(int);
+	void (*uart_lv_shift_en)(int);
+	void (*uart_tx_gpo)(int);
 };
 
 struct htc_headset_mgr_info {
@@ -325,6 +363,12 @@ struct htc_headset_mgr_info {
 	int metrico_status; /* For HW Metrico lab test */
 	int quick_boot_status;
 	int detect_type; /* For beats 1-wire solution*/
+	/*Variables for one wire driver*/
+	int driver_one_wire_exist;
+	int one_wire_mode;
+	int key_code_1wire[15];
+	int key_code_1wire_index;
+	unsigned int onewire_key_delay;
 };
 
 int headset_notifier_register(struct headset_notifier *notifier);

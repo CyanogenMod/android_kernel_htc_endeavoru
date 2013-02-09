@@ -4,7 +4,7 @@
  * Copyright (C) 2010 Google, Inc.
  * Author: Erik Gilling <konkers@android.com>
  *
- * Copyright (C) 2010-2011 NVIDIA Corporation
+ * Copyright (c) 2010-2012, NVIDIA CORPORATION, All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -23,18 +23,15 @@
 #include <linux/i2c.h>
 #include <linux/seq_file.h>
 #include <linux/vmalloc.h>
-#include <linux/disp_debug.h>
 
 #include "edid.h"
-#include "external_common.h"
-
-bool g_bDemoTvFound = false;
 
 struct tegra_edid_pvt {
 	struct kref			refcnt;
 	struct tegra_edid_hdmi_eld	eld;
 	bool				support_stereo;
 	bool				support_underscan;
+	bool				support_vcdb;
 	/* Note: dc_edid must remain the last member */
 	struct tegra_dc_edid		dc_edid;
 };
@@ -216,11 +213,12 @@ int tegra_edid_parse_ext_block(const u8 *raw, int idx,
 			basic_audio = true;
 		}
 	}
-
-	if (raw[3] & 0x80)
-		edid->support_underscan = 1;
-	else
-		edid->support_underscan = 0;
+	if(edid) {
+		if (raw[3] & 0x80)
+			edid->support_underscan = 1;
+		else
+			edid->support_underscan = 0;
+	}
 
 	ptr = &raw[4];
 
@@ -312,6 +310,14 @@ int tegra_edid_parse_ext_block(const u8 *raw, int idx,
 			ptr += len; /* adding the header */
 			break;
 		}
+		case 7:
+		{
+			if ((len == 2) && (ptr[1] == 0))
+				edid->support_vcdb = 1;
+			len++; /* len does not include header */
+			ptr += len;
+			break;
+		}
 		default:
 			len++; /* len does not include header */
 			ptr += len;
@@ -332,10 +338,8 @@ int tegra_edid_mode_support_stereo(struct fb_videomode *mode)
 		((mode->refresh == 60) || (mode->refresh == 50)))
 		return 1;
 
-	/* Disabling 1080p stereo mode due to bug 869099. */
-	/* Must re-enable this to 1 once it is fixed. */
 	if (mode->xres == 1920 && mode->yres == 1080 && mode->refresh == 24)
-		return 0;
+		return 1;
 
 	return 0;
 }
@@ -399,7 +403,11 @@ int tegra_edid_get_monspecs_test(struct tegra_edid *edid,
 					if (tegra_edid_mode_support_stereo(
 						&specs->modedb[j]))
 						specs->modedb[j].vmode |=
+#ifndef CONFIG_TEGRA_HDMI_74MHZ_LIMIT
 						FB_VMODE_STEREO_FRAME_PACK;
+#else
+						FB_VMODE_STEREO_LEFT_RIGHT;
+#endif
 				}
 			}
 		}
@@ -422,115 +430,6 @@ fail:
 	return ret;
 }
 
-#ifdef CONFIG_TEGRA_HDMI_MHL_SUPERDEMO
-static struct st_demotv_patterns demotv_list[] = {
-	{"OTS"}, /*{"VSC"},*/
-};
-
-static struct st_demotv_data_v0 demotv_data;
-/*static struct st_demotv_data_v1 demotv_data_sample =
-	{0x01, 0xFE, 0xABCD, 0x0010, 0x001F, 0x0002, 0x0000, 0xA8};*/
-
-static void hdmi_edid_monitor_desc(const uint8 *data_buf)
-{
-	int i;
-	uint8 data_type;
-	const uint8_t *desc_data;
-	uint8 monitor_name[14];
-	uint8 monitor_name_length;
-	uint8 checksum = 0;
-
-	data_type = data_buf[DEMOTV_DESC_CSTM];
-	desc_data = data_buf+DEMOTV_DESC_DATA;
-
-	switch (data_type) {
-		case 0xFC:/* monitor name */
-		case 0xFF:/* monitor S/N */
-			memset(monitor_name, 0, sizeof(monitor_name));
-			for (i = 12; i >= 0; i--)
-				if (desc_data[i] != 0x20 && desc_data[i] != 0x0A) {
-					monitor_name_length = i+1;
-					memcpy(monitor_name, desc_data, monitor_name_length);
-					DISP_INFO_LN("%s \"%s\"\n", data_type==0xFC?"monitor name":"monitor S/N", monitor_name);
-					/* DEV_INFO("%s: %s \"%s\"\n", __func__, */
-					/* 		data_type==0xFC?"monitor name":"monitor S/N", monitor_name); */
-					break;
-				}
-			if (i < 0) {
-				DISP_INFO_LN("monitor name descriptor is empty\n");
-				/* DEV_ERR("%s: monitor name descriptor is empty\n", __func__); */
-				monitor_name_length = 0;
-			}
-			break;
-		case 0x0C:/* hTC's own embedded data */
-			memcpy(&demotv_data, desc_data, sizeof(struct st_demotv_data_v0));
-			if (demotv_data.magic !=
-					0xFF - demotv_data.version) {
-				DISP_INFO_LN("wrong magic number!!\n");
-				/* DEV_ERR("%s: wrong magic number!!\n", __func__); */
-				break;
-			}
-
-			/* currently only version 1 */
-			if (demotv_data.version == 0x01) {
-				struct st_demotv_data_v1 data_v1;
-				memcpy(&data_v1, &demotv_data, sizeof(demotv_data));
-
-				//external_common_state->demotv_desc_found = true;
-				g_bDemoTvFound = true;
-
-				for (i=0; i<13; i++)
-					checksum += desc_data[i];
-
-				if (checksum != 0) {
-					DISP_INFO_LN("wrong checksum!! %02X != %02X\n", data_v1.checksum, checksum);
-					/* DEV_ERR("%s: wrong checksum!! %02X != %02X\n", */
-					/* 		__func__, data_v1.checksum, checksum); */
-					break;
-				}
-
-				DISP_INFO_LN("  DEMO TV EDID data:\n");
-				DISP_INFO_LN("	version: %d\n", data_v1.version);
-				DISP_INFO_LN("	ID: %04X\n", data_v1.tv_id);
-				DISP_INFO_LN("	1st preferred timing: %d\n", data_v1.timing_1st);
-				DISP_INFO_LN("	2nd preferred timing: %d\n", data_v1.timing_2nd);
-				if (data_v1.features & DEMOTV_BIT_OPTICAL)
-					DISP_INFO_LN("    support OPTICAL SENSOR\n");
-				if (data_v1.features & DEMOTV_BIT_PROXIMITY)
-					DISP_INFO_LN("    support PROXIMITY SENSOR\n");
-				if (data_v1.features & DEMOTV_BIT_SONAR)
-					DISP_INFO_LN("    support SONAR SENSOR \n");
-				if (data_v1.features & DEMOTV_BIT_RCP)
-					DISP_INFO_LN("    support RCP\n");
-			}
-
-			break;
-		default:
-			DISP_INFO_LN("data type %02X of detailed timing descriptor not supported.\n", data_type);
-			break;
-	}
-
-}
-
-static void hdmi_edid_detail_desc(const uint8 *data_buf)
-{
-#if 0 /* for debug */
-	const uint8 dd[] = {0x00, 0x00, 0x00, 0x0C, 0x00, 0x01, 0xFE, 0x44, 0x53,
-		0x10, 0x00, 0x1F, 0x00, 0x03, 0x00, 0x00, 0x00, 0x38};
-#endif
-
-	/* hTC: detailed timing descriptor could be other kinds of descriptors */
-	if (data_buf[DEMOTV_DESC_FLAG0] == 0 && data_buf[DEMOTV_DESC_FLAG0+1] == 0)
-		if (data_buf[DEMOTV_DESC_FLAG1] == 0)
-			hdmi_edid_monitor_desc(data_buf);
-
-#if 0 /* for debug */
-	hdmi_edid_monitor_desc(dd, disp_mode);
-#endif
-}
-
-#endif
-
 int tegra_edid_get_monspecs(struct tegra_edid *edid, struct fb_monspecs *specs)
 {
 	int i;
@@ -539,10 +438,6 @@ int tegra_edid_get_monspecs(struct tegra_edid *edid, struct fb_monspecs *specs)
 	int extension_blocks;
 	struct tegra_edid_pvt *new_data, *old_data;
 	u8 *data;
-#ifdef CONFIG_TEGRA_HDMI_MHL_SUPERDEMO
-	int idx;
-	uint32 desc_offset;
-#endif
 
 	new_data = vmalloc(SZ_32K + sizeof(struct tegra_edid_pvt));
 	if (!new_data)
@@ -551,21 +446,11 @@ int tegra_edid_get_monspecs(struct tegra_edid *edid, struct fb_monspecs *specs)
 	kref_init(&new_data->refcnt);
 
 	new_data->support_stereo = 0;
+	new_data->support_vcdb = 0;
 
 	data = new_data->dc_edid.buf;
 
 	ret = tegra_edid_read_block(edid, 0, data);
-
-#ifdef CONFIG_TEGRA_HDMI_MHL_SUPERDEMO
-	idx = 0;
-	desc_offset = 0;
-	while (idx < 4) {
-		hdmi_edid_detail_desc((data+0x36) + desc_offset);
-		desc_offset += 0x12;
-		++idx;
-	}
-#endif
-
 	if (ret)
 		goto fail;
 
@@ -587,17 +472,6 @@ int tegra_edid_get_monspecs(struct tegra_edid *edid, struct fb_monspecs *specs)
 
 	for (i = 1; i <= extension_blocks; i++) {
 		ret = tegra_edid_read_block(edid, i, data + i * 128);
-
-#ifdef CONFIG_TEGRA_HDMI_MHL_SUPERDEMO
-		idx = 0;
-		desc_offset = data[i*128 + 0x02];
-		while (idx < (data[i*128 + 0x03] & 0x0F)) { /* total number of DTDs */
-			hdmi_edid_detail_desc((data+i*128) + desc_offset);
-			desc_offset += 0x12;
-			++idx;
-		}
-#endif
-
 		if (ret < 0)
 			break;
 
@@ -612,7 +486,11 @@ int tegra_edid_get_monspecs(struct tegra_edid *edid, struct fb_monspecs *specs)
 					if (tegra_edid_mode_support_stereo(
 						&specs->modedb[j]))
 						specs->modedb[j].vmode |=
+#ifndef CONFIG_TEGRA_HDMI_74MHZ_LIMIT
 						FB_VMODE_STEREO_FRAME_PACK;
+#else
+						FB_VMODE_STEREO_LEFT_RIGHT;
+#endif
 				}
 			}
 		}
@@ -642,6 +520,14 @@ int tegra_edid_underscan_supported(struct tegra_edid *edid)
 		return 0;
 
 	return edid->data->support_underscan;
+}
+
+int tegra_edid_vcdb_supported(struct tegra_edid *edid)
+{
+	if ((!edid) || (!edid->data))
+		return 0;
+
+	return edid->data->support_vcdb;
 }
 
 int tegra_edid_get_eld(struct tegra_edid *edid, struct tegra_edid_hdmi_eld *elddata)

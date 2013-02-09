@@ -167,12 +167,6 @@ static int generic_probe(struct usb_device *udev)
 	else {
 		c = usb_choose_configuration(udev);
 		if (c >= 0) {
-#ifdef CONFIG_SHARK_TD_WORKSHOP
-			/* force to choose configuration #1 for STE6718 */
-			if((udev->descriptor.idProduct == 0x225c) &&
-				(udev->descriptor.idVendor == 0x04cc))
-				c = 1;
-#endif
 			err = usb_set_configuration(udev, c);
 			if (err) {
 				dev_err(&udev->dev, "can't set config #%d, error %d\n",

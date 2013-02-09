@@ -39,6 +39,7 @@ MODULE_AUTHOR("Jelle Foks <jelle@foks.us>");
 MODULE_AUTHOR("Chris Pascoe <c.pascoe@itee.uq.edu.au>");
 MODULE_AUTHOR("Gerd Knorr <kraxel@bytesex.org> [SuSE Labs]");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(CX88_VERSION);
 
 static unsigned int debug;
 module_param(debug,int,0644);
@@ -78,6 +79,7 @@ static void flush_request_modules(struct cx8802_dev *dev)
 
 
 static LIST_HEAD(cx8802_devlist);
+static DEFINE_MUTEX(cx8802_mutex);
 /* ------------------------------------------------------------------ */
 
 static int cx8802_start_dma(struct cx8802_dev    *dev,
@@ -474,7 +476,7 @@ static int cx8802_init_common(struct cx8802_dev *dev)
 		return -EIO;
 	}
 
-	pci_read_config_byte(dev->pci, PCI_CLASS_REVISION, &dev->pci_rev);
+	dev->pci_rev = dev->pci->revision;
 	pci_read_config_byte(dev->pci, PCI_LATENCY_TIMER,  &dev->pci_lat);
 	printk(KERN_INFO "%s/2: found at %s, rev: %d, irq: %d, "
 	       "latency: %d, mmio: 0x%llx\n", dev->core->name,
@@ -612,13 +614,17 @@ static int cx8802_request_acquire(struct cx8802_driver *drv)
 	    core->active_type_id != drv->type_id)
 		return -EBUSY;
 
-	core->input = 0;
-	for (i = 0;
-	     i < (sizeof(core->board.input) / sizeof(struct cx88_input));
-	     i++) {
-		if (core->board.input[i].type == CX88_VMUX_DVB) {
-			core->input = i;
-			break;
+	if (drv->type_id == CX88_MPEG_DVB) {
+		/* When switching to DVB, always set the input to the tuner */
+		core->last_analog_input = core->input;
+		core->input = 0;
+		for (i = 0;
+		     i < (sizeof(core->board.input) / sizeof(struct cx88_input));
+		     i++) {
+			if (core->board.input[i].type == CX88_VMUX_DVB) {
+				core->input = i;
+				break;
+			}
 		}
 	}
 
@@ -643,6 +649,12 @@ static int cx8802_request_release(struct cx8802_driver *drv)
 
 	if (drv->advise_release && --core->active_ref == 0)
 	{
+		if (drv->type_id == CX88_MPEG_DVB) {
+			/* If the DVB driver is releasing, reset the input
+			   state to the last configured analog input */
+			core->input = core->last_analog_input;
+		}
+
 		drv->advise_release(drv);
 		core->active_type_id = CX88_BOARD_NONE;
 		mpeg_dbg(1,"%s() Post release GPIO=%x\n", __func__, cx_read(MO_GP0_IO));
@@ -689,6 +701,8 @@ int cx8802_register_driver(struct cx8802_driver *drv)
 		return err;
 	}
 
+	mutex_lock(&cx8802_mutex);
+
 	list_for_each_entry(dev, &cx8802_devlist, devlist) {
 		printk(KERN_INFO
 		       "%s/2: subsystem: %04x:%04x, board: %s [card=%d]\n",
@@ -698,8 +712,10 @@ int cx8802_register_driver(struct cx8802_driver *drv)
 
 		/* Bring up a new struct for each driver instance */
 		driver = kzalloc(sizeof(*drv),GFP_KERNEL);
-		if (driver == NULL)
-			return -ENOMEM;
+		if (driver == NULL) {
+			err = -ENOMEM;
+			goto out;
+		}
 
 		/* Snapshot of the driver registration data */
 		drv->core = dev->core;
@@ -722,7 +738,10 @@ int cx8802_register_driver(struct cx8802_driver *drv)
 		mutex_unlock(&drv->core->lock);
 	}
 
-	return i ? 0 : -ENODEV;
+	err = i ? 0 : -ENODEV;
+out:
+	mutex_unlock(&cx8802_mutex);
+	return err;
 }
 
 int cx8802_unregister_driver(struct cx8802_driver *drv)
@@ -735,6 +754,8 @@ int cx8802_unregister_driver(struct cx8802_driver *drv)
 	       "cx88/2: unregistering cx8802 driver, type: %s access: %s\n",
 	       drv->type_id == CX88_MPEG_DVB ? "dvb" : "blackbird",
 	       drv->hw_access == CX8802_DRVCTL_SHARED ? "shared" : "exclusive");
+
+	mutex_lock(&cx8802_mutex);
 
 	list_for_each_entry(dev, &cx8802_devlist, devlist) {
 		printk(KERN_INFO
@@ -761,6 +782,8 @@ int cx8802_unregister_driver(struct cx8802_driver *drv)
 
 		mutex_unlock(&dev->core->lock);
 	}
+
+	mutex_unlock(&cx8802_mutex);
 
 	return err;
 }
@@ -799,7 +822,9 @@ static int __devinit cx8802_probe(struct pci_dev *pci_dev,
 		goto fail_free;
 
 	INIT_LIST_HEAD(&dev->drvlist);
+	mutex_lock(&cx8802_mutex);
 	list_add_tail(&dev->devlist,&cx8802_devlist);
+	mutex_unlock(&cx8802_mutex);
 
 	/* now autoload cx88-dvb or cx88-blackbird */
 	request_modules(dev);
@@ -876,14 +901,8 @@ static struct pci_driver cx8802_pci_driver = {
 
 static int __init cx8802_init(void)
 {
-	printk(KERN_INFO "cx88/2: cx2388x MPEG-TS Driver Manager version %d.%d.%d loaded\n",
-	       (CX88_VERSION_CODE >> 16) & 0xff,
-	       (CX88_VERSION_CODE >>  8) & 0xff,
-	       CX88_VERSION_CODE & 0xff);
-#ifdef SNAPSHOT
-	printk(KERN_INFO "cx2388x: snapshot date %04d-%02d-%02d\n",
-	       SNAPSHOT/10000, (SNAPSHOT/100)%100, SNAPSHOT%100);
-#endif
+	printk(KERN_INFO "cx88/2: cx2388x MPEG-TS Driver Manager version %s loaded\n",
+	       CX88_VERSION);
 	return pci_register_driver(&cx8802_pci_driver);
 }
 

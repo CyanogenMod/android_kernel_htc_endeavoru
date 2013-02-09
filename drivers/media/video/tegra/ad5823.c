@@ -22,32 +22,27 @@
 #include <linux/uaccess.h>
 #include <media/ad5823.h>
 
-#include <linux/bma250.h> //HTC_add: get g-sensor info
-
-//HTC_tune
-#define POS_LOW (96)
-#define POS_HIGH (496)
-#define SETTLETIME_MS 55
-
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD) || defined(CONFIG_MACH_BLUE) || defined(CONFIG_MACH_TEGRA_ENTERPRISE)
-#define FOCAL_LENGTH (3.03f)
-#define FNUMBER (2.0f)
-#endif
-
-#if defined(CONFIG_MACH_VERTEXF) || defined(CONFIG_MACH_QUATTRO_U)
-#define FOCAL_LENGTH (2.95f)
-#define FNUMBER (2.4f)
-#endif
-
 //#define FPOS_COUNT 1024
 
 #define AD5823_MAX_RETRIES (3)
 
-#define VCM_MODE     0x02
-#define VCM_CODE_MSB 0x04
-#define VCM_CODE_LSB 0x05
-#define RING_CTRL    0x1  //enable ringing
-#define RING_MODE    0x00 //ARC RES1
+#define VCM_MODE			0x02
+#define VCM_MOVE_TIME		0x03
+#define VCM_CODE_MSB		0x04
+#define VCM_CODE_LSB		0x05
+#define VCM_THRESHOLD_MSB	0x06
+#define VCM_THRESHOLD_LSB	0x07
+
+#define RING_CTRL			0x1  //enable ringing
+//#define RING_MODE			0x00 //ARC RES1
+#define RING_MODE			0x15 //ARC MODE = 0x15 STEP_RATIO = '101', ARC_RES05.
+#define VCM_FREQ			0xA4 //67Hz Resonant freq.
+#define VCM_CDOE_MValue		0x04 //ARC enable
+#define VCM_CDOE_LValue		0x00 //ARC enable
+#define VCM_TRSH_MValue		0x00 //Threshold MSB
+#define VCM_TRSH_LValue		0xC8 //Threshold LSB
+
+static bool first = 0; // set registers when first write position
 
 struct ad5823_info {
 	struct i2c_client *i2c_client;
@@ -71,7 +66,6 @@ static int ad5823_write(struct i2c_client *client, u8 addr, u32 value)
 		data[2] =(u8)(value & 0xFF);
 	}
 
-
 	msg[0].addr = client->addr;
 	msg[0].flags = 0;
 	msg[0].len = addr == VCM_CODE_MSB ? 3 : 2;
@@ -91,21 +85,31 @@ static int ad5823_write(struct i2c_client *client, u8 addr, u32 value)
 
 static int ad5823_set_position(struct ad5823_info *info, u32 position)
 {
-	u8 msb = 0;
+//	u8 msb = 0;
 
 	if (position < info->config.pos_low ||
-	    position > info->config.pos_high)
+		position > info->config.pos_high)
 		return -EINVAL;
 
-	//pr_info("[CAM] ad5823 position: %x\n", position);
-	return ad5823_write(info->i2c_client, VCM_CODE_MSB, position); 
+	if(first)
+	{
+		//owen@Optical open Arc function
+		pr_info("[CAM] ad5823 writes initial values\n");
+		first = 0;
+		ad5823_write(info->i2c_client, VCM_MODE, RING_MODE);
+		ad5823_write(info->i2c_client, VCM_MOVE_TIME, VCM_FREQ);
+		//ad5823_write(info->i2c_client, VCM_THRESHOLD_MSB,  VCM_TRSH_MValue);
+		ad5823_write(info->i2c_client, VCM_THRESHOLD_LSB,  VCM_TRSH_LValue);
+	}
 
+	//pr_info("[CAM] ad5823 position: %x\n", position);
+	return ad5823_write(info->i2c_client, VCM_CODE_MSB, position);
 
 //	msb = (u8)(((position >> 8) & 0x3) | RING_CTRL << 2);
 //	if (ad5823_write(info->i2c_client, VCM_CODE_MSB, msb) == 0){
-//  	return ad5823_write(info->i2c_client, VCM_CODE_LSB, (u8)(position & 0xFF));	
+//  	return ad5823_write(info->i2c_client, VCM_CODE_LSB, (u8)(position & 0xFF));
 //	}
-  
+
 //	return -EIO;
 }
 
@@ -113,6 +117,7 @@ static long ad5823_ioctl(struct file *file,
 			unsigned int cmd, unsigned long arg)
 {
 	struct ad5823_info *info = file->private_data;
+	struct g_sensor_info data;
 
 	switch (cmd) {
 	case AD5823_IOCTL_GET_CONFIG:
@@ -150,34 +155,46 @@ static long ad5823_ioctl(struct file *file,
 	}
     //HTC_start: add g-sensor info
     case AD5823_IOCTL_SET_GSENSOR_MODE:
-        #if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
-        GSensor_set_mode((u8) arg);
-        #else
-			//pr_err("[CAM] %s: AD5823_IOCTL_SET_GSENSOR_MODE is not supported.", __func__);
-        #endif
+        if (info->pdata && info->pdata->set_gsensor_mode)
+	{
+		if(info->pdata->set_gsensor_mode((u8) arg) < 0)
+		{
+			pr_err("[CAM] AD5823: %s: 0x%x\n", __func__, __LINE__);
+			return -EFAULT;
+		}
+	}
         break;
     case AD5823_IOCTL_GET_GSENSOR_DATA:
     {
-        #if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
-        short gsensor_info[3];
-        GSensorReadData(gsensor_info);
+	if (info->pdata && info->pdata->get_gsensor_data)
+	{
+		short gsensor_info[3];
+		info->pdata->get_gsensor_data(gsensor_info);
 
-        struct g_sensor_info data = {
-            .x = gsensor_info[0],
-            .y = gsensor_info[1],
-            .z = gsensor_info[2],
-        };
-        if (copy_to_user((void __user *) arg,
-                 &data,
-                 sizeof(struct g_sensor_info))) {
-            pr_err("[CAM] AD5823: %s: 0x%x\n", __func__, __LINE__);
-            return -EFAULT;
-        }
-        #else
-			//pr_err("[CAM] %s: AD5823_IOCTL_GET_GSENSOR_DATA is not supported.", __func__);
-        #endif
+		data.x = gsensor_info[0];
+		data.y = gsensor_info[1];
+		data.z = gsensor_info[2];
+
+		if (copy_to_user((void __user *) arg,
+			 &data,
+			sizeof(struct g_sensor_info))) {
+			pr_err("[CAM] AD5823: %s: 0x%x\n", __func__, __LINE__);
+			return -EFAULT;
+		}
+	}
         break;
     }
+	/* set flash light */
+	case AD5823_IOCTL_SET_FLASHLIGHT:
+	if (info->pdata && info->pdata->set_flashlight)
+	{
+		if(info->pdata->set_flashlight((int) arg) < 0)
+		{
+			pr_err("[CAM] AD5823: %s: 0x%x, brightness = %lu\n", __func__, __LINE__, arg);
+			return -EFAULT;
+		}
+	}
+	break;
     //HTC_end
 
 	default:
@@ -194,6 +211,7 @@ static int ad5823_open(struct inode *inode, struct file *file)
 	file->private_data = info;
     pr_info("[CAM] ad5823_open::%s\n", __func__);
 //	ad5823_write(info->i2c_client, VCM_MODE, RING_MODE); //other bit default are 0
+	first = 1;
 	return 0;
 }
 
@@ -239,11 +257,11 @@ static int ad5823_probe(struct i2c_client *client,
 
 	info->pdata = client->dev.platform_data;
 	info->i2c_client = client;
-	info->config.settle_time = SETTLETIME_MS;
-	info->config.focal_length = FOCAL_LENGTH;
-	info->config.fnumber = FNUMBER;
-	info->config.pos_low = POS_LOW;
-	info->config.pos_high = POS_HIGH;
+	info->config.settle_time = info->pdata->settle_time;
+	info->config.focal_length = info->pdata->focal_length;
+	info->config.fnumber = info->pdata->fnumber;
+	info->config.pos_low = info->pdata->pos_low;
+	info->config.pos_high = info->pdata->pos_high;
 	i2c_set_clientdata(client, info);
 	return 0;
 }
@@ -287,4 +305,3 @@ static void __exit ad5823_exit(void)
 
 module_init(ad5823_init);
 module_exit(ad5823_exit);
-

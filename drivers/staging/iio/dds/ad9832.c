@@ -77,7 +77,7 @@ static ssize_t ad9832_write(struct device *dev,
 		size_t len)
 {
 	struct iio_dev *dev_info = dev_get_drvdata(dev);
-	struct ad9832_state *st = dev_info->dev_data;
+	struct ad9832_state *st = iio_priv(dev_info);
 	struct iio_dev_attr *this_attr = to_iio_dev_attr(attr);
 	int ret;
 	long val;
@@ -153,17 +153,6 @@ error_ret:
 	return ret ? ret : len;
 }
 
-static ssize_t ad9832_show_name(struct device *dev,
-				 struct device_attribute *attr,
-				 char *buf)
-{
-	struct iio_dev *dev_info = dev_get_drvdata(dev);
-	struct ad9832_state *st = iio_dev_get_devdata(dev_info);
-
-	return sprintf(buf, "%s\n", spi_get_device_id(st->spi)->name);
-}
-static IIO_DEVICE_ATTR(name, S_IRUGO, ad9832_show_name, NULL, 0);
-
 /**
  * see dds.h for further information
  */
@@ -199,7 +188,6 @@ static struct attribute *ad9832_attributes[] = {
 	&iio_dev_attr_dds0_freqsymbol.dev_attr.attr,
 	&iio_dev_attr_dds0_phasesymbol.dev_attr.attr,
 	&iio_dev_attr_dds0_out_enable.dev_attr.attr,
-	&iio_dev_attr_name.dev_attr.attr,
 	NULL,
 };
 
@@ -207,10 +195,17 @@ static const struct attribute_group ad9832_attribute_group = {
 	.attrs = ad9832_attributes,
 };
 
+static const struct iio_info ad9832_info = {
+	.attrs = &ad9832_attribute_group,
+	.driver_module = THIS_MODULE,
+};
+
 static int __devinit ad9832_probe(struct spi_device *spi)
 {
 	struct ad9832_platform_data *pdata = spi->dev.platform_data;
+	struct iio_dev *indio_dev;
 	struct ad9832_state *st;
+	struct regulator *reg;
 	int ret;
 
 	if (!pdata) {
@@ -218,35 +213,28 @@ static int __devinit ad9832_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
-	st = kzalloc(sizeof(*st), GFP_KERNEL);
-	if (st == NULL) {
-		ret = -ENOMEM;
-		goto error_ret;
-	}
-
-	st->reg = regulator_get(&spi->dev, "vcc");
-	if (!IS_ERR(st->reg)) {
-		ret = regulator_enable(st->reg);
+	reg = regulator_get(&spi->dev, "vcc");
+	if (!IS_ERR(reg)) {
+		ret = regulator_enable(reg);
 		if (ret)
 			goto error_put_reg;
 	}
 
-	st->mclk = pdata->mclk;
-
-	spi_set_drvdata(spi, st);
-	st->spi = spi;
-
-	st->indio_dev = iio_allocate_device();
-	if (st->indio_dev == NULL) {
+	indio_dev = iio_allocate_device(sizeof(*st));
+	if (indio_dev == NULL) {
 		ret = -ENOMEM;
 		goto error_disable_reg;
 	}
+	spi_set_drvdata(spi, indio_dev);
+	st = iio_priv(indio_dev);
+	st->reg = reg;
+	st->mclk = pdata->mclk;
+	st->spi = spi;
 
-	st->indio_dev->dev.parent = &spi->dev;
-	st->indio_dev->attrs = &ad9832_attribute_group;
-	st->indio_dev->dev_data = (void *) st;
-	st->indio_dev->driver_module = THIS_MODULE;
-	st->indio_dev->modes = INDIO_DIRECT_MODE;
+	indio_dev->dev.parent = &spi->dev;
+	indio_dev->name = spi_get_device_id(spi)->name;
+	indio_dev->info = &ad9832_info;
+	indio_dev->modes = INDIO_DIRECT_MODE;
 
 	/* Setup default messages */
 
@@ -317,35 +305,35 @@ static int __devinit ad9832_probe(struct spi_device *spi)
 	if (ret)
 		goto error_free_device;
 
-	ret = iio_device_register(st->indio_dev);
+	ret = iio_device_register(indio_dev);
 	if (ret)
 		goto error_free_device;
 
 	return 0;
 
 error_free_device:
-	iio_free_device(st->indio_dev);
+	iio_free_device(indio_dev);
 error_disable_reg:
-	if (!IS_ERR(st->reg))
-		regulator_disable(st->reg);
+	if (!IS_ERR(reg))
+		regulator_disable(reg);
 error_put_reg:
-	if (!IS_ERR(st->reg))
-		regulator_put(st->reg);
-	kfree(st);
-error_ret:
+	if (!IS_ERR(reg))
+		regulator_put(reg);
+
 	return ret;
 }
 
 static int __devexit ad9832_remove(struct spi_device *spi)
 {
-	struct ad9832_state *st = spi_get_drvdata(spi);
+	struct iio_dev *indio_dev = spi_get_drvdata(spi);
+	struct ad9832_state *st = iio_priv(indio_dev);
+	struct regulator *reg = st->reg;
 
-	iio_device_unregister(st->indio_dev);
-	if (!IS_ERR(st->reg)) {
-		regulator_disable(st->reg);
-		regulator_put(st->reg);
+	iio_device_unregister(indio_dev);
+	if (!IS_ERR(reg)) {
+		regulator_disable(reg);
+		regulator_put(reg);
 	}
-	kfree(st);
 	return 0;
 }
 

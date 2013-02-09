@@ -83,4 +83,22 @@ config INPUT_ISL29028_CM3628
 	  Say Y here to enable the CM3628 Short Distance Proximity
 	  Sensor with Ambient Light Sensor.
 
+config TPS61310_FLASHLIGHT
+	tristate "TPS61310 flashlight"
+	depends on I2C=y
+	help
+	  Say Y here to enable the TPS61310 flashlight driver
+
+config SND_AMP_TFA9887
+	tristate "TFA9887 amplifier"
+	depends on I2C=y
+	help
+	  Say Y here to enable the TFA9887 amplifier driver
+
+config SND_AMP_TPA6185
+	tristate "TPA6185 amplifier"
+	depends on I2C=y
+	help
+	  Say Y here to enable the TPA6185 amplifier driver
+
 endmenu

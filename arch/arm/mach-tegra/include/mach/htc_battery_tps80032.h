@@ -19,6 +19,7 @@
 #define HTC_BATT_IOCTL_MAGIC		0xba
 
 #define DEBUG_LOG_LENGTH		1024
+#define POWER_METER_LENGTH		16
 
 #define HTC_BATT_IOCTL_READ_SOURCE \
 	_IOR(HTC_BATT_IOCTL_MAGIC, 1, unsigned int)
@@ -38,6 +39,14 @@
 	_IOW(HTC_BATT_IOCTL_MAGIC, 8, struct battery_vol_alarm)
 #define HTC_BATT_IOCTL_SET_ALARM_TIMER_FLAG \
 	_IOW(HTC_BATT_IOCTL_MAGIC, 9, unsigned int)
+#define HTC_BATT_IOCTL_BATT_POWER_METER \
+	_IOW(HTC_BATT_IOCTL_MAGIC, 10, char[POWER_METER_LENGTH])
+#define HTC_BATT_IOCTL_SET_VREG \
+	_IOW(HTC_BATT_IOCTL_MAGIC, 11, unsigned int)
+#define HTC_BATT_IOCTL_SET_VSYS_REG \
+	_IOW(HTC_BATT_IOCTL_MAGIC, 12, unsigned int)
+#define HTC_BATT_IOCTL_ADC_TRIGGER \
+	_IOW(HTC_BATT_IOCTL_MAGIC, 13, unsigned int)
 
 #define REGULAR_BATTERRY_TIMER		"regular_timer"
 #define CABLE_DETECTION			"cable"
@@ -48,6 +57,18 @@
 
 #define MBAT_IN_LOW_TRIGGER		0
 #define MBAT_IN_HIGH_TRIGGER		1
+
+#define NORMAL_TEMP_COND	0
+#define LOW_TEMP_COND		1
+#define HIGH_TEMP_COND		2
+
+#define BATTERY_LEVEL_SIG_SHIFT		(8)
+#define BATTERY_LEVEL_SIG_MASK		(0xFFFFFF)
+#define BATTERY_LEVEL_SIG		(0xBBC566)
+#define BATTERY_IS_CHARGING_FULL_SHIFT	(7)
+#define BATTERY_IS_CHARGING_FULL_MASK	(0x1)
+#define BATTERY_LEVEL_MASK		(0x7F)
+#define BATTERY_LEVEL_NO_VALUE		(0xFF)
 
 struct battery_adc_reply {
 	u32 adc_voltage[ADC_REPLY_ARRAY_SIZE];
@@ -72,11 +93,13 @@ enum {
 	GUAGE_DS2784,
 	GUAGE_DS2746,
 	GUAGE_BQ27510,
+	GUAGE_TPS80032,
 };
 
 enum {
 	LINEAR_CHARGER,
 	SWITCH_CHARGER_TPS65200,
+	SWITCH_CHARGER_TPS80032,
 };
 
 enum {
@@ -99,6 +122,7 @@ struct htc_battery_platform_data {
 	int vzero_clb_channel;
 	int volt_adc_offset;
 	int power_off_by_id;
+	int sw_temp_25;
 };
 
 #endif

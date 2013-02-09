@@ -212,43 +212,13 @@ void	MhlTxDriveStates(void)
 }
 
 #ifdef CONFIG_INTERNAL_CHARGING_SUPPORT
-
 bool Tri_state_dongle_GPIO0(void)
 {
 	bool result = true;
 
-#if 1
-
-#define	INTR_CBUS1_DESIRED_MASK			(BIT_2 | BIT_3 | BIT_4 | BIT_5 | BIT_6)
-#define	UNMASK_CBUS1_INTERRUPTS			I2C_WriteByte(CBUS_SLAVE_ADDR, 0x09, INTR_CBUS1_DESIRED_MASK)
-#define	MASK_CBUS1_INTERRUPTS			I2C_WriteByte(CBUS_SLAVE_ADDR, 0x09, 0x00)
-#define	INTR_CBUS2_DESIRED_MASK			(BIT_2 | BIT_3 | BIT_4)
-#define	UNMASK_CBUS2_INTERRUPTS			I2C_WriteByte(CBUS_SLAVE_ADDR, 0x1F, INTR_CBUS2_DESIRED_MASK)
-#define	MASK_CBUS2_INTERRUPTS			I2C_WriteByte(CBUS_SLAVE_ADDR, 0x1F, 0x00)
-
-	int timeout = 100;
-
-	MASK_CBUS1_INTERRUPTS;
-	MASK_CBUS2_INTERRUPTS;
-
-
-	return result;
-
-
-	while (mscCmdInProgress && --timeout)
-		hr_msleep(1);
-
-	TPI_DEBUG_PRINT(("%s: timeout = %d\n", __func__, timeout));
-
-	if (!timeout) {
-		result = false;
-		goto l_end;
-	}
-#endif
-	I2C_WriteByte(CBUS_SLAVE_ADDR, 0x13, 0x33);
-	I2C_WriteByte(CBUS_SLAVE_ADDR, 0x14, 0x80);
-	I2C_WriteByte(CBUS_SLAVE_ADDR, 0x12, 0x08);
-
+	I2C_WriteByte(CBUS_SLAVE_ADDR,0x13, 0x33);       // enable backdoor access
+	I2C_WriteByte(CBUS_SLAVE_ADDR,0x14, 0x80);
+	I2C_WriteByte(CBUS_SLAVE_ADDR,0x12, 0x08);
 
 	I2C_WriteByte(CBUS_SLAVE_ADDR, 0xc0,  0xff);
 	I2C_WriteByte(CBUS_SLAVE_ADDR, 0xc1,  0x7F);
@@ -260,12 +230,6 @@ bool Tri_state_dongle_GPIO0(void)
 	I2C_WriteByte(CBUS_SLAVE_ADDR, 0x13, 0x33);
 	I2C_WriteByte(CBUS_SLAVE_ADDR, 0x14, 0x00);
 	I2C_WriteByte(CBUS_SLAVE_ADDR, 0x12, 0x08);
-
-#if 1
-l_end:
-	UNMASK_CBUS2_INTERRUPTS;
-	UNMASK_CBUS1_INTERRUPTS;
-#endif
 
 	return result;
 }
@@ -326,23 +290,24 @@ void SiiMhlTxMscDetectCharger(uint8_t data1)
 			/* GPIO0_state=3; */
 
 			mscCmdInProgress = false;
-			SiiMhlTxReadDevcap(02);
+			SiiMhlTxReadDevcap(0x02);
 			mscCmdInProgress = false;
 			Chk_Dongle_Step = 1;
+			return;
 		}
 
 		if (Chk_Dongle_Step == 1) {
 
 			mscCmdInProgress = false;
 
-			if ((data1 & 0x10)) {
+			if (data1 & 0x10) {
 				/* Turn off phone Vbus output ; */
 				Low_dongle_GPIO0();
 
 				/* GPIO0_state = 0;  */
-				SiiMhlTxReadDevcap(02);
 				mscCmdInProgress = false;
 				Chk_Dongle_Step = 2;
+				return;
 			} else {
 
 				Chk_Dongle_Step = 0;
@@ -352,8 +317,8 @@ void SiiMhlTxMscDetectCharger(uint8_t data1)
 				/* turn on phone VBUS output.; */
 				TPI_DEBUG_PRINT(("No charger!!\n"));
 
-				if (gStatusMHL != CONNECT_TYPE_NONE) {
-					gStatusMHL = CONNECT_TYPE_NONE;
+				if (gStatusMHL != CONNECT_TYPE_INTERNAL) {
+					gStatusMHL = CONNECT_TYPE_INTERNAL;
 					ProcessMhlStatus(true, false);
 				}
 			}
@@ -397,9 +362,9 @@ void	SiiMhlTxMscCommandDone(uint8_t data1)
 
 #ifdef CONFIG_INTERNAL_CHARGING_SUPPORT
 		SiiMhlTxMscDetectCharger(data1);
-#endif
-
+#else
 		mhlTxConfig.mscState	= MSC_STATE_POW_DONE;
+#endif
 	} else if ((MHL_READ_DEVCAP == mhlTxConfig.mscLastCommand) &&
 			(0x0A == mhlTxConfig.mscLastOffset)) {
 		mhlTxConfig.mscState	= MSC_STATE_RCP_READY;

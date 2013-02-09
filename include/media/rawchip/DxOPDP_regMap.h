@@ -85,14 +85,14 @@
 /* ********************************************************************************** */
 /* User parameters default values: */
 /* ********************************************************************************** */
-#define DxOPDP_dfltVal_ucode_id_7_0                                             0x04
+#define DxOPDP_dfltVal_ucode_id_7_0                                             0x07
 #define DxOPDP_dfltVal_ucode_id_15_8                                            0x01
 #define DxOPDP_dfltVal_hw_id_7_0                                                0x5b
 #define DxOPDP_dfltVal_hw_id_15_8                                               0xe6
 #define DxOPDP_dfltVal_calib_id_0_7_0                                           0x00
 #define DxOPDP_dfltVal_calib_id_1_7_0                                           0x00
 #define DxOPDP_dfltVal_calib_id_2_7_0                                           0x00
-#define DxOPDP_dfltVal_calib_id_3_7_0                                           0x00
+#define DxOPDP_dfltVal_calib_id_3_7_0                                           0x01
 #define DxOPDP_dfltVal_error_code_7_0                                           0x00
 #define DxOPDP_dfltVal_visible_line_size_7_0                                    0x00
 #define DxOPDP_dfltVal_visible_line_size_15_8                                   0x00

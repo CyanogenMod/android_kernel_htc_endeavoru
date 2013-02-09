@@ -24,6 +24,7 @@ config MIPS
 	select GENERIC_IRQ_PROBE
 	select GENERIC_IRQ_SHOW
 	select HAVE_ARCH_JUMP_LABEL
+	select IRQ_FORCED_THREADING
 
 menu "Machine selection"
 
@@ -185,6 +186,7 @@ config MACH_JAZZ
 	select CSRC_R4K
 	select DEFAULT_SGI_PARTITION if CPU_BIG_ENDIAN
 	select GENERIC_ISA_DMA
+	select HAVE_PCSPKR_PLATFORM
 	select IRQ_CPU
 	select I8253
 	select I8259
@@ -211,6 +213,24 @@ config MACH_JZ4740
 	select SYS_HAS_EARLY_PRINTK
 	select HAVE_PWM
 	select HAVE_CLK
+
+config LANTIQ
+	bool "Lantiq based platforms"
+	select DMA_NONCOHERENT
+	select IRQ_CPU
+	select CEVT_R4K
+	select CSRC_R4K
+	select SYS_HAS_CPU_MIPS32_R1
+	select SYS_HAS_CPU_MIPS32_R2
+	select SYS_SUPPORTS_BIG_ENDIAN
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_MULTITHREADING
+	select SYS_HAS_EARLY_PRINTK
+	select ARCH_REQUIRE_GPIOLIB
+	select SWAP_IO_SPACE
+	select BOOT_RAW
+	select HAVE_CLK
+	select MIPS_MACHINE
 
 config LASAT
 	bool "LASAT Networks platforms"
@@ -248,6 +268,7 @@ config MIPS_MALTA
 	select CSRC_R4K
 	select DMA_NONCOHERENT
 	select GENERIC_ISA_DMA
+	select HAVE_PCSPKR_PLATFORM
 	select IRQ_CPU
 	select IRQ_GIC
 	select HW_HAS_PCI
@@ -622,6 +643,7 @@ config SNI_RM
 	select DEFAULT_SGI_PARTITION if CPU_BIG_ENDIAN
 	select DMA_NONCOHERENT
 	select GENERIC_ISA_DMA
+	select HAVE_PCSPKR_PLATFORM
 	select HW_HAS_EISA
 	select HW_HAS_PCI
 	select IRQ_CPU
@@ -701,6 +723,7 @@ config CAVIUM_OCTEON_SIMULATOR
 	select SYS_SUPPORTS_HIGHMEM
 	select SYS_SUPPORTS_HOTPLUG_CPU
 	select SYS_HAS_CPU_CAVIUM_OCTEON
+	select HOLES_IN_ZONE
 	help
 	  The Octeon simulator is software performance model of the Cavium
 	  Octeon Processor. It supports simulating Octeon processors on x86
@@ -723,6 +746,7 @@ config CAVIUM_OCTEON_REFERENCE_BOARD
 	select ZONE_DMA32
 	select USB_ARCH_HAS_OHCI
 	select USB_ARCH_HAS_EHCI
+	select HOLES_IN_ZONE
 	help
 	  This option supports all of the Octeon reference boards from Cavium
 	  Networks. It builds a kernel that dynamically determines the Octeon
@@ -736,6 +760,33 @@ config CAVIUM_OCTEON_REFERENCE_BOARD
 		Hikari
 	  Say Y here for most Octeon reference boards.
 
+config NLM_XLR_BOARD
+	bool "Netlogic XLR/XLS based systems"
+	depends on EXPERIMENTAL
+	select BOOT_ELF32
+	select NLM_COMMON
+	select NLM_XLR
+	select SYS_HAS_CPU_XLR
+	select SYS_SUPPORTS_SMP
+	select HW_HAS_PCI
+	select SWAP_IO_SPACE
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_64BIT_KERNEL
+	select 64BIT_PHYS_ADDR
+	select SYS_SUPPORTS_BIG_ENDIAN
+	select SYS_SUPPORTS_HIGHMEM
+	select DMA_COHERENT
+	select NR_CPUS_DEFAULT_32
+	select CEVT_R4K
+	select CSRC_R4K
+	select IRQ_CPU
+	select ZONE_DMA if 64BIT
+	select SYNC_R4K
+	select SYS_HAS_EARLY_PRINTK
+	help
+	  Support for systems based on Netlogic XLR and XLS processors.
+	  Say Y here if you have a XLR or XLS based board.
+
 endchoice
 
 source "arch/mips/alchemy/Kconfig"
@@ -743,6 +794,7 @@ source "arch/mips/ath79/Kconfig"
 source "arch/mips/bcm63xx/Kconfig"
 source "arch/mips/jazz/Kconfig"
 source "arch/mips/jz4740/Kconfig"
+source "arch/mips/lantiq/Kconfig"
 source "arch/mips/lasat/Kconfig"
 source "arch/mips/pmc-sierra/Kconfig"
 source "arch/mips/powertv/Kconfig"
@@ -752,6 +804,7 @@ source "arch/mips/txx9/Kconfig"
 source "arch/mips/vr41xx/Kconfig"
 source "arch/mips/cavium-octeon/Kconfig"
 source "arch/mips/loongson/Kconfig"
+source "arch/mips/netlogic/Kconfig"
 
 endmenu
 
@@ -773,14 +826,6 @@ config ARCH_HAS_ILOG2_U64
 config ARCH_SUPPORTS_OPROFILE
 	bool
 	default y if !MIPS_MT_SMTC
-
-config GENERIC_FIND_NEXT_BIT
-	bool
-	default y
-
-config GENERIC_FIND_BIT_LE
-	bool
-	default y
 
 config GENERIC_HWEIGHT
 	bool
@@ -929,6 +974,9 @@ config ISA_DMA_API
 	bool
 
 config GENERIC_GPIO
+	bool
+
+config HOLES_IN_ZONE
 	bool
 
 #
@@ -1420,6 +1468,17 @@ config CPU_BMIPS5000
 	help
 	  Broadcom BMIPS5000 processors.
 
+config CPU_XLR
+	bool "Netlogic XLR SoC"
+	depends on SYS_HAS_CPU_XLR
+	select CPU_SUPPORTS_32BIT_KERNEL
+	select CPU_SUPPORTS_64BIT_KERNEL
+	select CPU_SUPPORTS_HIGHMEM
+	select WEAK_ORDERING
+	select WEAK_REORDERING_BEYOND_LLSC
+	select CPU_SUPPORTS_HUGEPAGES
+	help
+	  Netlogic Microsystems XLR/XLS processors.
 endchoice
 
 if CPU_LOONGSON2F
@@ -1548,6 +1607,9 @@ config SYS_HAS_CPU_BMIPS4380
 	bool
 
 config SYS_HAS_CPU_BMIPS5000
+	bool
+
+config SYS_HAS_CPU_XLR
 	bool
 
 #
@@ -2334,6 +2396,8 @@ config MMU
 
 config I8253
 	bool
+	select CLKSRC_I8253
+	select CLKEVT_I8253
 	select MIPS_EXTERNAL_TIMER
 
 config ZONE_DMA32
@@ -2434,21 +2498,5 @@ source "arch/mips/Kconfig.debug"
 source "security/Kconfig"
 
 source "crypto/Kconfig"
-
-menuconfig VIRTUALIZATION
-	bool "Virtualization"
-	default n
-	---help---
-	  Say Y here to get to see options for using your Linux host to run other
-	  operating systems inside virtual machines (guests).
-	  This option alone does not add any kernel code.
-
-	  If you say N, all options in this submenu will be skipped and disabled.
-
-if VIRTUALIZATION
-
-source drivers/virtio/Kconfig
-
-endif # VIRTUALIZATION
 
 source "lib/Kconfig"

@@ -18,20 +18,68 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/reboot.h>
+#include <linux/syscore_ops.h>
+#include <linux/memblock.h>
+#include <linux/slab.h>
+
 #include "board.h"
-#include <mach/restart.h>
 
 #define NVDUMPER_CLEAN 0xf000caf3U
 #define NVDUMPER_DIRTY 0xdeadbeefU
+#define NVDUMPER_RESERVED_LEN 4096
 
-static uint32_t *nvdumper_ptr;
-struct htc_reboot_params *reboot_params;
+static uint32_t *nvdumper_ptr = NULL;
+static unsigned long nvdumper_reserved = 0;
+static void* reboot_params = NULL;
+static void* last_reboot_params = NULL;
 
-unsigned reboot_battery_first_level = 0;
-EXPORT_SYMBOL_GPL(reboot_battery_first_level);
+void* get_last_reboot_params()
+{
+	return last_reboot_params;
+}
 
-int get_dirty_state(void)
+void* get_reboot_params()
+{
+	return reboot_params;
+}
+
+static int __init tegra_nvdumper_arg(char *options)
+{
+	char *p = options;
+
+	nvdumper_reserved = memparse(p, &p);
+	return 0;
+}
+early_param("nvdumper_reserved", tegra_nvdumper_arg);
+
+/*
+ * NOTE:
+ *     nvdumper reserves one page at nvdumper_reserved, but htc_reboot_params
+ *     uses previous one page from nvdumper_reserved.
+ */
+
+void nvdumper_reserve_init(void)
+{
+	unsigned long reserve_start, reserve_len;
+
+	if (!nvdumper_reserved)
+		return;
+
+	reserve_start = nvdumper_reserved - NVDUMPER_RESERVED_LEN;
+	reserve_len   = 2 * NVDUMPER_RESERVED_LEN;
+
+	if (memblock_reserve(nvdumper_reserved, NVDUMPER_RESERVED_LEN)) {
+		pr_err("Failed to reserve nvdumper page %08lx@%08lx\n",
+			   reserve_start, reserve_len);
+		nvdumper_reserved = 0;
+		return;
+	}
+
+	pr_info("Nvdumper reserved: %08lx - %08lx\n",
+		reserve_start, reserve_len);
+}
+
+static int get_dirty_state(void)
 {
 	uint32_t val;
 
@@ -44,7 +92,7 @@ int get_dirty_state(void)
 		return -1;
 }
 
-void set_dirty_state(int dirty)
+static void set_dirty_state(int dirty)
 {
 	if (dirty)
 		iowrite32(NVDUMPER_DIRTY, nvdumper_ptr);
@@ -52,50 +100,53 @@ void set_dirty_state(int dirty)
 		iowrite32(NVDUMPER_CLEAN, nvdumper_ptr);
 }
 
-static int nvdumper_reboot_cb(struct notifier_block *nb,
-		unsigned long event, void *unused)
+static	void nvdumper_syscore_shutdown(void)
 {
-	//printk(KERN_INFO "nvdumper: rebooting dirty.\n");
-	printk(KERN_INFO "nvdumper: rebooting cleanly.\n");
+	printk(KERN_INFO "nvdumper: reboot / shutdown cleanly.\n");
 	set_dirty_state(0);
-	return NOTIFY_DONE;
 }
 
-struct notifier_block nvdumper_reboot_notifier = {
-	.notifier_call = nvdumper_reboot_cb,
+static struct syscore_ops nvdumper_syscore_ops = {
+	.shutdown = nvdumper_syscore_shutdown,
 };
 
 static int __init nvdumper_init(void)
 {
-	int ret, dirty;
+	int dirty;
 
-	printk(KERN_INFO "nvdumper: nvdumper_reserved:0x%x\n", nvdumper_reserved);
+	printk(KERN_INFO "nvdumper: nvdumper_reserved: phys: 0x%p\n", (void*) nvdumper_reserved);
 	if (!nvdumper_reserved) {
 		printk(KERN_INFO "nvdumper: not configured\n");
 		return -ENOTSUPP;
 	}
 	nvdumper_ptr = ioremap_nocache(nvdumper_reserved,
 			NVDUMPER_RESERVED_LEN);
-	printk(KERN_INFO "nvdumper: nvdumper_ptr:0x%p\n", nvdumper_ptr);
+	printk(KERN_INFO "nvdumper: nvdumper_ptr: virt: 0x%p\n", (void*) nvdumper_ptr);
 	if (!nvdumper_ptr) {
 		printk(KERN_INFO "nvdumper: failed to ioremap memory "
 			"at 0x%08lx\n", nvdumper_reserved);
+		BUG();
 		return -EIO;
 	}
 	reboot_params = ioremap_nocache(nvdumper_reserved - NVDUMPER_RESERVED_LEN,
 			NVDUMPER_RESERVED_LEN);
-	printk(KERN_INFO "nvdumper: reboot_params:0x%p\n", reboot_params);
+	printk(KERN_INFO "nvdumper: reboot_params: virt: 0x%p\n", reboot_params);
 	if (!reboot_params) {
 		printk(KERN_INFO "nvdumper: failed to ioremap memory "
 			"at 0x%08lx\n", nvdumper_reserved - NVDUMPER_RESERVED_LEN);
+		BUG();
 		return -EIO;
 	}
-	reboot_battery_first_level = reboot_params->battery_level;
-	memset(reboot_params, 0x0, sizeof(struct htc_reboot_params));
-	ret = register_reboot_notifier(&nvdumper_reboot_notifier);
-	printk(KERN_INFO "nvdumper: ret:%d\n", ret);
-	if (ret)
-		return ret;
+	last_reboot_params = (void*) kzalloc(NVDUMPER_RESERVED_LEN, GFP_KERNEL);
+	if (!last_reboot_params) {
+		printk(KERN_INFO "nvdumper: failed to save last_reboot_params - out of memory\n");
+		BUG();
+		return -ENOMEM;
+	}
+	memcpy(last_reboot_params, reboot_params, NVDUMPER_RESERVED_LEN);
+	memset(reboot_params, 0x0, NVDUMPER_RESERVED_LEN);
+	register_syscore_ops(&nvdumper_syscore_ops);
+
 	dirty = get_dirty_state();
 	printk(KERN_INFO "nvdumper: dirty:%d\n", dirty);
 	switch (dirty) {
@@ -109,16 +160,19 @@ static int __init nvdumper_init(void)
 		printk(KERN_INFO "nvdumper: last reboot was unknown\n");
 		break;
 	}
+
+	/*
+	 * default dirty
+	 */
 	set_dirty_state(1);
 	return 0;
 }
 
 static int __exit nvdumper_exit(void)
 {
-	unregister_reboot_notifier(&nvdumper_reboot_notifier);
+	unregister_syscore_ops(&nvdumper_syscore_ops);
 	set_dirty_state(0);
 	iounmap(nvdumper_ptr);
-	iounmap(reboot_params);
 	return 0;
 }
 

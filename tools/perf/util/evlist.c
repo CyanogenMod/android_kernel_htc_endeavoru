@@ -12,7 +12,6 @@
 #include "evlist.h"
 #include "evsel.h"
 #include "util.h"
-#include "debug.h"
 
 #include <sys/mman.h>
 
@@ -86,10 +85,45 @@ int perf_evlist__add_default(struct perf_evlist *evlist)
 	struct perf_evsel *evsel = perf_evsel__new(&attr, 0);
 
 	if (evsel == NULL)
-		return -ENOMEM;
+		goto error;
+
+	/* use strdup() because free(evsel) assumes name is allocated */
+	evsel->name = strdup("cycles");
+	if (!evsel->name)
+		goto error_free;
 
 	perf_evlist__add(evlist, evsel);
 	return 0;
+error_free:
+	perf_evsel__delete(evsel);
+error:
+	return -ENOMEM;
+}
+
+void perf_evlist__disable(struct perf_evlist *evlist)
+{
+	int cpu, thread;
+	struct perf_evsel *pos;
+
+	for (cpu = 0; cpu < evlist->cpus->nr; cpu++) {
+		list_for_each_entry(pos, &evlist->entries, node) {
+			for (thread = 0; thread < evlist->threads->nr; thread++)
+				ioctl(FD(pos, cpu, thread), PERF_EVENT_IOC_DISABLE);
+		}
+	}
+}
+
+void perf_evlist__enable(struct perf_evlist *evlist)
+{
+	int cpu, thread;
+	struct perf_evsel *pos;
+
+	for (cpu = 0; cpu < evlist->cpus->nr; cpu++) {
+		list_for_each_entry(pos, &evlist->entries, node) {
+			for (thread = 0; thread < evlist->threads->nr; thread++)
+				ioctl(FD(pos, cpu, thread), PERF_EVENT_IOC_ENABLE);
+		}
+	}
 }
 
 int perf_evlist__alloc_pollfd(struct perf_evlist *evlist)
@@ -257,19 +291,15 @@ int perf_evlist__alloc_mmap(struct perf_evlist *evlist)
 	return evlist->mmap != NULL ? 0 : -ENOMEM;
 }
 
-static int __perf_evlist__mmap(struct perf_evlist *evlist, struct perf_evsel *evsel,
+static int __perf_evlist__mmap(struct perf_evlist *evlist,
 			       int idx, int prot, int mask, int fd)
 {
 	evlist->mmap[idx].prev = 0;
 	evlist->mmap[idx].mask = mask;
 	evlist->mmap[idx].base = mmap(NULL, evlist->mmap_len, prot,
 				      MAP_SHARED, fd, 0);
-	if (evlist->mmap[idx].base == MAP_FAILED) {
-		if (evlist->cpus->map[idx] == -1 && evsel->attr.inherit)
-			ui__warning("Inherit is not allowed on per-task "
-				    "events using mmap.\n");
+	if (evlist->mmap[idx].base == MAP_FAILED)
 		return -1;
-	}
 
 	perf_evlist__add_pollfd(evlist, fd);
 	return 0;
@@ -289,7 +319,7 @@ static int perf_evlist__mmap_per_cpu(struct perf_evlist *evlist, int prot, int m
 
 				if (output == -1) {
 					output = fd;
-					if (__perf_evlist__mmap(evlist, evsel, cpu,
+					if (__perf_evlist__mmap(evlist, cpu,
 								prot, mask, output) < 0)
 						goto out_unmap;
 				} else {
@@ -329,7 +359,7 @@ static int perf_evlist__mmap_per_thread(struct perf_evlist *evlist, int prot, in
 
 			if (output == -1) {
 				output = fd;
-				if (__perf_evlist__mmap(evlist, evsel, thread,
+				if (__perf_evlist__mmap(evlist, thread,
 							prot, mask, output) < 0)
 					goto out_unmap;
 			} else {
@@ -458,4 +488,48 @@ int perf_evlist__set_filters(struct perf_evlist *evlist)
 	}
 
 	return 0;
+}
+
+bool perf_evlist__valid_sample_type(const struct perf_evlist *evlist)
+{
+	struct perf_evsel *pos, *first;
+
+	pos = first = list_entry(evlist->entries.next, struct perf_evsel, node);
+
+	list_for_each_entry_continue(pos, &evlist->entries, node) {
+		if (first->attr.sample_type != pos->attr.sample_type)
+			return false;
+	}
+
+	return true;
+}
+
+u64 perf_evlist__sample_type(const struct perf_evlist *evlist)
+{
+	struct perf_evsel *first;
+
+	first = list_entry(evlist->entries.next, struct perf_evsel, node);
+	return first->attr.sample_type;
+}
+
+bool perf_evlist__valid_sample_id_all(const struct perf_evlist *evlist)
+{
+	struct perf_evsel *pos, *first;
+
+	pos = first = list_entry(evlist->entries.next, struct perf_evsel, node);
+
+	list_for_each_entry_continue(pos, &evlist->entries, node) {
+		if (first->attr.sample_id_all != pos->attr.sample_id_all)
+			return false;
+	}
+
+	return true;
+}
+
+bool perf_evlist__sample_id_all(const struct perf_evlist *evlist)
+{
+	struct perf_evsel *first;
+
+	first = list_entry(evlist->entries.next, struct perf_evsel, node);
+	return first->attr.sample_id_all;
 }

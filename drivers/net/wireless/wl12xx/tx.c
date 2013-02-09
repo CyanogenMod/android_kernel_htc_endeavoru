@@ -65,9 +65,34 @@ static int wl1271_alloc_tx_id(struct wl1271 *wl, struct sk_buff *skb)
 static void wl1271_free_tx_id(struct wl1271 *wl, int id)
 {
 	if (__test_and_clear_bit(id, wl->tx_frames_map)) {
+		if (unlikely(wl->tx_frames_cnt == ACX_TX_DESCRIPTORS))
+			clear_bit(WL1271_FLAG_FW_TX_BUSY, &wl->flags);
+
 		wl->tx_frames[id] = NULL;
 		wl->tx_frames_cnt--;
 	}
+}
+
+static int wl1271_tx_update_filters(struct wl1271 *wl,
+						 struct sk_buff *skb)
+{
+	struct ieee80211_hdr *hdr;
+
+	hdr = (struct ieee80211_hdr *)(skb->data +
+				       sizeof(struct wl1271_tx_hw_descr));
+
+	/*
+	 * stop bssid-based filtering before transmitting authentication
+	 * requests. this way the hw will never drop authentication
+	 * responses coming from BSSIDs it isn't familiar with (e.g. on
+	 * roaming)
+	 */
+	if (!ieee80211_is_auth(hdr->frame_control))
+		return 0;
+
+	wl1271_configure_filters(wl, FIF_OTHER_BSS);
+
+	return wl1271_acx_rx_config(wl, wl->rx_config, wl->rx_filter);
 }
 
 static void wl1271_tx_ap_update_inconnection_sta(struct wl1271 *wl,
@@ -127,13 +152,29 @@ u8 wl1271_tx_get_hlid(struct sk_buff *skb)
 	}
 }
 
+static unsigned int wl12xx_calc_packet_alignment(struct wl1271 *wl,
+						unsigned int packet_length)
+{
+	if (wl->quirks & WL12XX_QUIRK_BLOCKSIZE_ALIGNMENT)
+		return ALIGN(packet_length, WL12XX_BUS_BLOCK_SIZE);
+	else
+		return ALIGN(packet_length, WL1271_TX_ALIGN_TO);
+}
+
 static int wl1271_tx_allocate(struct wl1271 *wl, struct sk_buff *skb, u32 extra,
 				u32 buf_offset, u8 hlid)
 {
 	struct wl1271_tx_hw_descr *desc;
 	u32 total_len = skb->len + sizeof(struct wl1271_tx_hw_descr) + extra;
+	u32 len;
 	u32 total_blocks;
-	int id, ret = -EBUSY;
+	int id, ret = -EBUSY, ac;
+	u32 spare_blocks;
+
+	if (unlikely(wl->quirks & WL12XX_QUIRK_USE_2_SPARE_BLOCKS))
+		spare_blocks = 2;
+	else
+		spare_blocks = 1;
 
 	if (buf_offset + total_len > WL1271_AGGR_BUFFER_SIZE)
 		return -EAGAIN;
@@ -145,17 +186,29 @@ static int wl1271_tx_allocate(struct wl1271 *wl, struct sk_buff *skb, u32 extra,
 
 	/* approximate the number of blocks required for this packet
 	   in the firmware */
-	total_blocks = total_len + TX_HW_BLOCK_SIZE - 1;
-	total_blocks = total_blocks / TX_HW_BLOCK_SIZE + TX_HW_BLOCK_SPARE;
+	len = wl12xx_calc_packet_alignment(wl, total_len);
+
+	total_blocks = (len + TX_HW_BLOCK_SIZE - 1) / TX_HW_BLOCK_SIZE +
+		spare_blocks;
+
 	if (total_blocks <= wl->tx_blocks_available) {
 		desc = (struct wl1271_tx_hw_descr *)skb_push(
 			skb, total_len - skb->len);
 
-		desc->extra_mem_blocks = TX_HW_BLOCK_SPARE;
-		desc->total_mem_blocks = total_blocks;
+		/* HW descriptor fields change between wl127x and wl128x */
+		if (wl->chip.id == CHIP_ID_1283_PG20) {
+			desc->wl128x_mem.total_mem_blocks = total_blocks;
+		} else {
+			desc->wl127x_mem.extra_blocks = spare_blocks;
+			desc->wl127x_mem.total_mem_blocks = total_blocks;
+		}
+
 		desc->id = id;
 
 		wl->tx_blocks_available -= total_blocks;
+
+		ac = wl1271_tx_get_queue(skb_get_queue_mapping(skb));
+		wl->tx_allocated_blocks[ac] += total_blocks;
 
 		if (wl->bss_type == BSS_TYPE_AP_BSS)
 			wl->links[hlid].allocated_blks += total_blocks;
@@ -172,13 +225,18 @@ static int wl1271_tx_allocate(struct wl1271 *wl, struct sk_buff *skb, u32 extra,
 	return ret;
 }
 
+static bool wl12xx_is_dummy_packet(struct wl1271 *wl, struct sk_buff *skb)
+{
+	return wl->dummy_packet == skb;
+}
+
 static void wl1271_tx_fill_hdr(struct wl1271 *wl, struct sk_buff *skb,
 			      u32 extra, struct ieee80211_tx_info *control,
 			      u8 hlid)
 {
 	struct timespec ts;
 	struct wl1271_tx_hw_descr *desc;
-	int pad, ac, rate_idx;
+	int aligned_len, ac, rate_idx;
 	s64 hosttime;
 	u16 tx_attr;
 
@@ -202,12 +260,25 @@ static void wl1271_tx_fill_hdr(struct wl1271 *wl, struct sk_buff *skb,
 	else
 		desc->life_time = cpu_to_le16(TX_HW_AP_MODE_PKT_LIFETIME_TU);
 
-	/* configure the tx attributes */
-	tx_attr = wl->session_counter << TX_HW_ATTR_OFST_SESSION_COUNTER;
-
-	/* queue (we use same identifiers for tid's and ac's */
+	/* queue */
 	ac = wl1271_tx_get_queue(skb_get_queue_mapping(skb));
-	desc->tid = ac;
+	desc->tid = skb->priority;
+
+	if (wl12xx_is_dummy_packet(wl, skb)) {
+		/*
+		 * FW expects the dummy packet to have an invalid session id -
+		 * any session id that is different than the one set in the join
+		 */
+		tx_attr = ((~wl->session_counter) <<
+			   TX_HW_ATTR_OFST_SESSION_COUNTER) &
+			   TX_HW_ATTR_SESSION_COUNTER;
+
+		tx_attr |= TX_HW_ATTR_TX_DUMMY_REQ;
+	} else {
+		/* configure the tx attributes */
+		tx_attr =
+			wl->session_counter << TX_HW_ATTR_OFST_SESSION_COUNTER;
+	}
 
 	if (wl->bss_type != BSS_TYPE_AP_BSS) {
 		desc->aid = hlid;
@@ -237,20 +308,37 @@ static void wl1271_tx_fill_hdr(struct wl1271 *wl, struct sk_buff *skb,
 	tx_attr |= rate_idx << TX_HW_ATTR_OFST_RATE_POLICY;
 	desc->reserved = 0;
 
-	/* align the length (and store in terms of words) */
-	pad = ALIGN(skb->len, WL1271_TX_ALIGN_TO);
-	desc->length = cpu_to_le16(pad >> 2);
+	aligned_len = wl12xx_calc_packet_alignment(wl, skb->len);
 
-	/* calculate number of padding bytes */
-	pad = pad - skb->len;
-	tx_attr |= pad << TX_HW_ATTR_OFST_LAST_WORD_PAD;
+	if (wl->chip.id == CHIP_ID_1283_PG20) {
+		desc->wl128x_mem.extra_bytes = aligned_len - skb->len;
+		desc->length = cpu_to_le16(aligned_len >> 2);
+
+		wl1271_debug(DEBUG_TX, "tx_fill_hdr: hlid: %d "
+			     "tx_attr: 0x%x len: %d life: %d mem: %d",
+			     desc->hlid, tx_attr,
+			     le16_to_cpu(desc->length),
+			     le16_to_cpu(desc->life_time),
+			     desc->wl128x_mem.total_mem_blocks);
+	} else {
+		int pad;
+
+		/* Store the aligned length in terms of words */
+		desc->length = cpu_to_le16(aligned_len >> 2);
+
+		/* calculate number of padding bytes */
+		pad = aligned_len - skb->len;
+		tx_attr |= pad << TX_HW_ATTR_OFST_LAST_WORD_PAD;
+
+		wl1271_debug(DEBUG_TX, "tx_fill_hdr: pad: %d hlid: %d "
+			     "tx_attr: 0x%x len: %d life: %d mem: %d", pad,
+			     desc->hlid, tx_attr,
+			     le16_to_cpu(desc->length),
+			     le16_to_cpu(desc->life_time),
+			     desc->wl127x_mem.total_mem_blocks);
+	}
 
 	desc->tx_attr = cpu_to_le16(tx_attr);
-
-	wl1271_debug(DEBUG_TX, "tx_fill_hdr: pad: %d hlid: %d "
-		"tx_attr: 0x%x len: %d life: %d mem: %d", pad, desc->hlid,
-		le16_to_cpu(desc->tx_attr), le16_to_cpu(desc->length),
-		le16_to_cpu(desc->life_time), desc->total_mem_blocks);
 }
 
 /* caller must hold wl->mutex */
@@ -297,21 +385,31 @@ static int wl1271_prepare_tx_frame(struct wl1271 *wl, struct sk_buff *skb,
 	if (ret < 0)
 		return ret;
 
+	wl1271_tx_fill_hdr(wl, skb, extra, info, hlid);
+
 	if (wl->bss_type == BSS_TYPE_AP_BSS) {
 		wl1271_tx_ap_update_inconnection_sta(wl, skb);
 		wl1271_tx_regulate_link(wl, hlid);
+	} else {
+		wl1271_tx_update_filters(wl, skb);
 	}
 
-	wl1271_tx_fill_hdr(wl, skb, extra, info, hlid);
-
 	/*
-	 * The length of each packet is stored in terms of words. Thus, we must
-	 * pad the skb data to make sure its length is aligned.
-	 * The number of padding bytes is computed and set in wl1271_tx_fill_hdr
+	 * The length of each packet is stored in terms of
+	 * words. Thus, we must pad the skb data to make sure its
+	 * length is aligned.  The number of padding bytes is computed
+	 * and set in wl1271_tx_fill_hdr.
+	 * In special cases, we want to align to a specific block size
+	 * (eg. for wl128x with SDIO we align to 256).
 	 */
-	total_len = ALIGN(skb->len, WL1271_TX_ALIGN_TO);
+	total_len = wl12xx_calc_packet_alignment(wl, skb->len);
+
 	memcpy(wl->aggr_buf + buf_offset, skb->data, skb->len);
 	memset(wl->aggr_buf + buf_offset + skb->len, 0, total_len - skb->len);
+
+	/* Revert side effects in the dummy packet skb, so it can be reused */
+	if (wl12xx_is_dummy_packet(wl, skb))
+		skb_pull(skb, sizeof(struct wl1271_tx_hw_descr));
 
 	return total_len;
 }
@@ -346,37 +444,62 @@ u32 wl1271_tx_enabled_rates_get(struct wl1271 *wl, u32 rate_set)
 void wl1271_handle_tx_low_watermark(struct wl1271 *wl)
 {
 	unsigned long flags;
+	int i;
 
-	if (test_bit(WL1271_FLAG_TX_QUEUE_STOPPED, &wl->flags) &&
-	    wl->tx_queue_count <= WL1271_TX_QUEUE_LOW_WATERMARK) {
-		/* firmware buffer has space, restart queues */
-		spin_lock_irqsave(&wl->wl_lock, flags);
-		ieee80211_wake_queues(wl->hw);
-		clear_bit(WL1271_FLAG_TX_QUEUE_STOPPED, &wl->flags);
-		spin_unlock_irqrestore(&wl->wl_lock, flags);
+	for (i = 0; i < NUM_TX_QUEUES; i++) {
+		if (test_bit(i, &wl->stopped_queues_map) &&
+		    wl->tx_queue_count[i] <= WL1271_TX_QUEUE_LOW_WATERMARK) {
+			/* firmware buffer has space, restart queues */
+			spin_lock_irqsave(&wl->wl_lock, flags);
+			ieee80211_wake_queue(wl->hw,
+					     wl1271_tx_get_mac80211_queue(i));
+			clear_bit(i, &wl->stopped_queues_map);
+			spin_unlock_irqrestore(&wl->wl_lock, flags);
+		}
 	}
+}
+
+static struct sk_buff_head *wl1271_select_queue(struct wl1271 *wl,
+						struct sk_buff_head *queues)
+{
+	int i, q = -1;
+	u32 min_blks = 0xffffffff;
+
+	/*
+	 * Find a non-empty ac where:
+	 * 1. There are packets to transmit
+	 * 2. The FW has the least allocated blocks
+	 */
+	for (i = 0; i < NUM_TX_QUEUES; i++)
+		if (!skb_queue_empty(&queues[i]) &&
+		    (wl->tx_allocated_blocks[i] < min_blks)) {
+			q = i;
+			min_blks = wl->tx_allocated_blocks[q];
+		}
+
+	if (q == -1)
+		return NULL;
+
+	return &queues[q];
 }
 
 static struct sk_buff *wl1271_sta_skb_dequeue(struct wl1271 *wl)
 {
 	struct sk_buff *skb = NULL;
 	unsigned long flags;
+	struct sk_buff_head *queue;
 
-	skb = skb_dequeue(&wl->tx_queue[CONF_TX_AC_VO]);
-	if (skb)
+	queue = wl1271_select_queue(wl, wl->tx_queue);
+	if (!queue)
 		goto out;
-	skb = skb_dequeue(&wl->tx_queue[CONF_TX_AC_VI]);
-	if (skb)
-		goto out;
-	skb = skb_dequeue(&wl->tx_queue[CONF_TX_AC_BE]);
-	if (skb)
-		goto out;
-	skb = skb_dequeue(&wl->tx_queue[CONF_TX_AC_BK]);
+
+	skb = skb_dequeue(queue);
 
 out:
 	if (skb) {
+		int q = wl1271_tx_get_queue(skb_get_queue_mapping(skb));
 		spin_lock_irqsave(&wl->wl_lock, flags);
-		wl->tx_queue_count--;
+		wl->tx_queue_count[q]--;
 		spin_unlock_irqrestore(&wl->wl_lock, flags);
 	}
 
@@ -388,6 +511,7 @@ static struct sk_buff *wl1271_ap_skb_dequeue(struct wl1271 *wl)
 	struct sk_buff *skb = NULL;
 	unsigned long flags;
 	int i, h, start_hlid;
+	struct sk_buff_head *queue;
 
 	/* start from the link after the last one */
 	start_hlid = (wl->last_tx_hlid + 1) % AP_MAX_LINKS;
@@ -396,25 +520,25 @@ static struct sk_buff *wl1271_ap_skb_dequeue(struct wl1271 *wl)
 	for (i = 0; i < AP_MAX_LINKS; i++) {
 		h = (start_hlid + i) % AP_MAX_LINKS;
 
-		skb = skb_dequeue(&wl->links[h].tx_queue[CONF_TX_AC_VO]);
+		/* only consider connected stations */
+		if (h >= WL1271_AP_STA_HLID_START &&
+		    !test_bit(h - WL1271_AP_STA_HLID_START, wl->ap_hlid_map))
+			continue;
+
+		queue = wl1271_select_queue(wl, wl->links[h].tx_queue);
+		if (!queue)
+			continue;
+
+		skb = skb_dequeue(queue);
 		if (skb)
-			goto out;
-		skb = skb_dequeue(&wl->links[h].tx_queue[CONF_TX_AC_VI]);
-		if (skb)
-			goto out;
-		skb = skb_dequeue(&wl->links[h].tx_queue[CONF_TX_AC_BE]);
-		if (skb)
-			goto out;
-		skb = skb_dequeue(&wl->links[h].tx_queue[CONF_TX_AC_BK]);
-		if (skb)
-			goto out;
+			break;
 	}
 
-out:
 	if (skb) {
+		int q = wl1271_tx_get_queue(skb_get_queue_mapping(skb));
 		wl->last_tx_hlid = h;
 		spin_lock_irqsave(&wl->wl_lock, flags);
-		wl->tx_queue_count--;
+		wl->tx_queue_count[q]--;
 		spin_unlock_irqrestore(&wl->wl_lock, flags);
 	} else {
 		wl->last_tx_hlid = 0;
@@ -425,10 +549,26 @@ out:
 
 static struct sk_buff *wl1271_skb_dequeue(struct wl1271 *wl)
 {
-	if (wl->bss_type == BSS_TYPE_AP_BSS)
-		return wl1271_ap_skb_dequeue(wl);
+	unsigned long flags;
+	struct sk_buff *skb = NULL;
 
-	return wl1271_sta_skb_dequeue(wl);
+	if (wl->bss_type == BSS_TYPE_AP_BSS)
+		skb = wl1271_ap_skb_dequeue(wl);
+	else
+		skb = wl1271_sta_skb_dequeue(wl);
+
+	if (!skb &&
+	    test_and_clear_bit(WL1271_FLAG_DUMMY_PACKET_PENDING, &wl->flags)) {
+		int q;
+
+		skb = wl->dummy_packet;
+		q = wl1271_tx_get_queue(skb_get_queue_mapping(skb));
+		spin_lock_irqsave(&wl->wl_lock, flags);
+		wl->tx_queue_count[q]--;
+		spin_unlock_irqrestore(&wl->wl_lock, flags);
+	}
+
+	return skb;
 }
 
 static void wl1271_skb_queue_head(struct wl1271 *wl, struct sk_buff *skb)
@@ -436,7 +576,9 @@ static void wl1271_skb_queue_head(struct wl1271 *wl, struct sk_buff *skb)
 	unsigned long flags;
 	int q = wl1271_tx_get_queue(skb_get_queue_mapping(skb));
 
-	if (wl->bss_type == BSS_TYPE_AP_BSS) {
+	if (wl12xx_is_dummy_packet(wl, skb)) {
+		set_bit(WL1271_FLAG_DUMMY_PACKET_PENDING, &wl->flags);
+	} else if (wl->bss_type == BSS_TYPE_AP_BSS) {
 		u8 hlid = wl1271_tx_get_hlid(skb);
 		skb_queue_head(&wl->links[hlid].tx_queue[q], skb);
 
@@ -447,28 +589,32 @@ static void wl1271_skb_queue_head(struct wl1271 *wl, struct sk_buff *skb)
 	}
 
 	spin_lock_irqsave(&wl->wl_lock, flags);
-	wl->tx_queue_count++;
+	wl->tx_queue_count[q]++;
 	spin_unlock_irqrestore(&wl->wl_lock, flags);
+}
+
+static bool wl1271_tx_is_data_present(struct sk_buff *skb)
+{
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)(skb->data);
+
+	return ieee80211_is_data_present(hdr->frame_control);
 }
 
 void wl1271_tx_work_locked(struct wl1271 *wl)
 {
 	struct sk_buff *skb;
-	bool woken_up = false;
 	u32 buf_offset = 0;
 	bool sent_packets = false;
+	bool had_data = false;
+	bool is_ap = (wl->bss_type == BSS_TYPE_AP_BSS);
 	int ret;
 
 	if (unlikely(wl->state == WL1271_STATE_OFF))
-		goto out;
+		return;
 
 	while ((skb = wl1271_skb_dequeue(wl))) {
-		if (!woken_up) {
-			ret = wl1271_ps_elp_wakeup(wl);
-			if (ret < 0)
-				goto out_ack;
-			woken_up = true;
-		}
+		if (wl1271_tx_is_data_present(skb))
+			had_data = true;
 
 		ret = wl1271_prepare_tx_frame(wl, skb, buf_offset);
 		if (ret == -EAGAIN) {
@@ -516,18 +662,35 @@ out_ack:
 
 		wl1271_handle_tx_low_watermark(wl);
 	}
+	if (!is_ap && wl->conf.rx_streaming.interval && had_data &&
+	    (wl->conf.rx_streaming.always ||
+	     test_bit(WL1271_FLAG_SOFT_GEMINI, &wl->flags))) {
+		u32 timeout = wl->conf.rx_streaming.duration;
 
-out:
-	if (woken_up)
-		wl1271_ps_elp_sleep(wl);
+		/* enable rx streaming */
+		if (!test_bit(WL1271_FLAG_RX_STREAMING_STARTED, &wl->flags))
+			ieee80211_queue_work(wl->hw,
+					     &wl->rx_streaming_enable_work);
+
+		mod_timer(&wl->rx_streaming_timer,
+			  jiffies + msecs_to_jiffies(timeout));
+	}
 }
 
 void wl1271_tx_work(struct work_struct *work)
 {
 	struct wl1271 *wl = container_of(work, struct wl1271, tx_work);
+	int ret;
 
 	mutex_lock(&wl->mutex);
+	ret = wl1271_ps_elp_wakeup(wl);
+	if (ret < 0)
+		goto out;
+
 	wl1271_tx_work_locked(wl);
+
+	wl1271_ps_elp_sleep(wl);
+out:
 	mutex_unlock(&wl->mutex);
 }
 
@@ -549,6 +712,11 @@ static void wl1271_tx_complete_packet(struct wl1271 *wl,
 	skb = wl->tx_frames[id];
 	info = IEEE80211_SKB_CB(skb);
 
+	if (wl12xx_is_dummy_packet(wl, skb)) {
+		wl1271_free_tx_id(wl, id);
+		return;
+	}
+
 	/* update the TX status info */
 	if (result->status == TX_SUCCESS) {
 		if (!(info->flags & IEEE80211_TX_CTL_NO_ACK))
@@ -567,10 +735,24 @@ static void wl1271_tx_complete_packet(struct wl1271 *wl,
 
 	wl->stats.retry_count += result->ack_failures;
 
-	/* update security sequence number */
-	wl->tx_security_seq += (result->lsb_security_sequence_number -
-				wl->tx_security_last_seq);
-	wl->tx_security_last_seq = result->lsb_security_sequence_number;
+	/*
+	 * update sequence number only when relevant, i.e. only in
+	 * sessions of TKIP, AES and GEM (not in open or WEP sessions)
+	 */
+	if (info->control.hw_key &&
+	    (info->control.hw_key->cipher == WLAN_CIPHER_SUITE_TKIP ||
+	     info->control.hw_key->cipher == WLAN_CIPHER_SUITE_CCMP ||
+	     info->control.hw_key->cipher == WL1271_CIPHER_SUITE_GEM)) {
+		u8 fw_lsb = result->tx_security_sequence_number_lsb;
+		u8 cur_lsb = wl->tx_security_last_seq_lsb;
+
+		/*
+		 * update security sequence number, taking care of potential
+		 * wrap-around
+		 */
+		wl->tx_security_seq += (fw_lsb - cur_lsb + 256) % 256;
+		wl->tx_security_last_seq_lsb = fw_lsb;
+	}
 
 	/* remove private header from packet */
 	skb_pull(skb, sizeof(struct wl1271_tx_hw_descr));
@@ -590,7 +772,7 @@ static void wl1271_tx_complete_packet(struct wl1271 *wl,
 
 	/* return the packet to the stack */
 	skb_queue_tail(&wl->deferred_tx_queue, skb);
-	ieee80211_queue_work(wl->hw, &wl->netstack_work);
+	queue_work(wl->freezable_wq, &wl->netstack_work);
 	wl1271_free_tx_id(wl, result->id);
 }
 
@@ -635,30 +817,33 @@ void wl1271_tx_complete(struct wl1271 *wl)
 void wl1271_tx_reset_link_queues(struct wl1271 *wl, u8 hlid)
 {
 	struct sk_buff *skb;
-	int i, total = 0;
+	int i;
 	unsigned long flags;
 	struct ieee80211_tx_info *info;
+	int total[NUM_TX_QUEUES];
 
 	for (i = 0; i < NUM_TX_QUEUES; i++) {
+		total[i] = 0;
 		while ((skb = skb_dequeue(&wl->links[hlid].tx_queue[i]))) {
 			wl1271_debug(DEBUG_TX, "link freeing skb 0x%p", skb);
 			info = IEEE80211_SKB_CB(skb);
 			info->status.rates[0].idx = -1;
 			info->status.rates[0].count = 0;
-			ieee80211_tx_status(wl->hw, skb);
-			total++;
+			ieee80211_tx_status_ni(wl->hw, skb);
+			total[i]++;
 		}
 	}
 
 	spin_lock_irqsave(&wl->wl_lock, flags);
-	wl->tx_queue_count -= total;
+	for (i = 0; i < NUM_TX_QUEUES; i++)
+		wl->tx_queue_count[i] -= total[i];
 	spin_unlock_irqrestore(&wl->wl_lock, flags);
 
 	wl1271_handle_tx_low_watermark(wl);
 }
 
-/* caller must hold wl->mutex */
-void wl1271_tx_reset(struct wl1271 *wl)
+/* caller must hold wl->mutex and TX must be stopped */
+void wl1271_tx_reset(struct wl1271 *wl, bool reset_tx_queues)
 {
 	int i;
 	struct sk_buff *skb;
@@ -678,21 +863,27 @@ void wl1271_tx_reset(struct wl1271 *wl)
 			while ((skb = skb_dequeue(&wl->tx_queue[i]))) {
 				wl1271_debug(DEBUG_TX, "freeing skb 0x%p",
 					     skb);
-				info = IEEE80211_SKB_CB(skb);
-				info->status.rates[0].idx = -1;
-				info->status.rates[0].count = 0;
-				ieee80211_tx_status(wl->hw, skb);
+
+				if (!wl12xx_is_dummy_packet(wl, skb)) {
+					info = IEEE80211_SKB_CB(skb);
+					info->status.rates[0].idx = -1;
+					info->status.rates[0].count = 0;
+					ieee80211_tx_status_ni(wl->hw, skb);
+				}
 			}
+			wl->tx_queue_count[i] = 0;
 		}
 	}
 
-	wl->tx_queue_count = 0;
+	wl->stopped_queues_map = 0;
 
 	/*
 	 * Make sure the driver is at a consistent state, in case this
 	 * function is called from a context other than interface removal.
+	 * This call will always wake the TX queues.
 	 */
-	wl1271_handle_tx_low_watermark(wl);
+	if (reset_tx_queues)
+		wl1271_handle_tx_low_watermark(wl);
 
 	for (i = 0; i < ACX_TX_DESCRIPTORS; i++) {
 		if (wl->tx_frames[i] == NULL)
@@ -702,21 +893,27 @@ void wl1271_tx_reset(struct wl1271 *wl)
 		wl1271_free_tx_id(wl, i);
 		wl1271_debug(DEBUG_TX, "freeing skb 0x%p", skb);
 
-		/* Remove private headers before passing the skb to mac80211 */
-		info = IEEE80211_SKB_CB(skb);
-		skb_pull(skb, sizeof(struct wl1271_tx_hw_descr));
-		if (info->control.hw_key &&
-		    info->control.hw_key->cipher == WLAN_CIPHER_SUITE_TKIP) {
-			int hdrlen = ieee80211_get_hdrlen_from_skb(skb);
-			memmove(skb->data + WL1271_TKIP_IV_SPACE, skb->data,
-				hdrlen);
-			skb_pull(skb, WL1271_TKIP_IV_SPACE);
+		if (!wl12xx_is_dummy_packet(wl, skb)) {
+			/*
+			 * Remove private headers before passing the skb to
+			 * mac80211
+			 */
+			info = IEEE80211_SKB_CB(skb);
+			skb_pull(skb, sizeof(struct wl1271_tx_hw_descr));
+			if (info->control.hw_key &&
+			    info->control.hw_key->cipher ==
+			    WLAN_CIPHER_SUITE_TKIP) {
+				int hdrlen = ieee80211_get_hdrlen_from_skb(skb);
+				memmove(skb->data + WL1271_TKIP_IV_SPACE,
+					skb->data, hdrlen);
+				skb_pull(skb, WL1271_TKIP_IV_SPACE);
+			}
+
+			info->status.rates[0].idx = -1;
+			info->status.rates[0].count = 0;
+
+			ieee80211_tx_status_ni(wl->hw, skb);
 		}
-
-		info->status.rates[0].idx = -1;
-		info->status.rates[0].count = 0;
-
-		ieee80211_tx_status(wl->hw, skb);
 	}
 }
 
@@ -731,8 +928,10 @@ void wl1271_tx_flush(struct wl1271 *wl)
 	while (!time_after(jiffies, timeout)) {
 		mutex_lock(&wl->mutex);
 		wl1271_debug(DEBUG_TX, "flushing tx buffer: %d %d",
-			     wl->tx_frames_cnt, wl->tx_queue_count);
-		if ((wl->tx_frames_cnt == 0) && (wl->tx_queue_count == 0)) {
+			     wl->tx_frames_cnt,
+			     wl1271_tx_total_queue_count(wl));
+		if ((wl->tx_frames_cnt == 0) &&
+		    (wl1271_tx_total_queue_count(wl) == 0)) {
 			mutex_unlock(&wl->mutex);
 			return;
 		}

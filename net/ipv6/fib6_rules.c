@@ -21,6 +21,10 @@
 #include <net/ip6_route.h>
 #include <net/netlink.h>
 
+// ** [Start] HTC add iptables debug log
+#define FIB_RULE_DEBUG 1
+// ** [End] HTC add iptables debug log
+
 struct fib6_rule
 {
 	struct fib_rule		common;
@@ -153,6 +157,10 @@ static int fib6_rule_configure(struct fib_rule *rule, struct sk_buff *skb,
 	struct net *net = sock_net(skb->sk);
 	struct fib6_rule *rule6 = (struct fib6_rule *) rule;
 
+#ifdef FIB_RULE_DEBUG
+	printk(KERN_DEBUG "[NET][IPV6][RULE] %s \n", __func__);
+#endif
+
 	if (rule->action == FR_ACT_TO_TBL) {
 		if (rule->table == RT6_TABLE_UNSPEC)
 			goto errout;
@@ -210,6 +218,10 @@ static int fib6_rule_fill(struct fib_rule *rule, struct sk_buff *skb,
 {
 	struct fib6_rule *rule6 = (struct fib6_rule *) rule;
 
+#ifdef FIB_RULE_DEBUG
+	printk(KERN_DEBUG "[NET][IPV6][RULE] %s \n", __func__);
+#endif
+
 	frh->dst_len = rule6->dst.plen;
 	frh->src_len = rule6->src.plen;
 	frh->tos = rule6->tclass;
@@ -261,6 +273,10 @@ static int __net_init fib6_rules_net_init(struct net *net)
 	struct fib_rules_ops *ops;
 	int err = -ENOMEM;
 
+#ifdef FIB_RULE_DEBUG
+	printk(KERN_DEBUG "[NET][IPV6][RULE] %s \n", __func__);
+#endif
+
 	ops = fib_rules_register(&fib6_rules_ops_template, net);
 	if (IS_ERR(ops))
 		return PTR_ERR(ops);
@@ -281,12 +297,19 @@ out:
 	return err;
 
 out_fib6_rules_ops:
+
+#ifdef FIB_RULE_DEBUG
+	printk(KERN_DEBUG "[NET][IPV6][RULE] %s :fib_rules_unregister\n", __func__);
+#endif
 	fib_rules_unregister(ops);
 	goto out;
 }
 
 static void __net_exit fib6_rules_net_exit(struct net *net)
 {
+#ifdef FIB_RULE_DEBUG
+	printk(KERN_DEBUG "[NET][IPV6][RULE] %s :fib_rules_unregister\n", __func__);
+#endif
 	fib_rules_unregister(net->ipv6.fib6_rules_ops);
 }
 
@@ -297,11 +320,17 @@ static struct pernet_operations fib6_rules_net_ops = {
 
 int __init fib6_rules_init(void)
 {
+#ifdef FIB_RULE_DEBUG
+	printk(KERN_DEBUG "[NET][IPV6][RULE] %s \n", __func__);
+#endif
 	return register_pernet_subsys(&fib6_rules_net_ops);
 }
 
 
 void fib6_rules_cleanup(void)
 {
+#ifdef FIB_RULE_DEBUG
+	printk(KERN_DEBUG "[NET][IPV6][RULE] %s \n", __func__);
+#endif
 	unregister_pernet_subsys(&fib6_rules_net_ops);
 }

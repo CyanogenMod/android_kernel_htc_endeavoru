@@ -18,203 +18,11 @@
 #define _AIC3008_H
 
 #include <sound/soc.h>
-#include <linux/regulator/consumer.h>
-#include <linux/ioctl.h> /* for defining the IO controls */
-#include <../../../arch/arm/mach-tegra/gpio-names.h>
-
-/*****************************************************************************/
-/* IO CONTROL definition for AIC3008                                         */
-/*****************************************************************************/
-#define AIC3008_IO_IOCTL_MAGIC     's'
-#define AIC3008_IO_SET_TX_PARAM     _IOW(AIC3008_IO_IOCTL_MAGIC, 0x10, unsigned)
-#define AIC3008_IO_SET_RX_PARAM     _IOW(AIC3008_IO_IOCTL_MAGIC, 0x11, unsigned)
-#define AIC3008_IO_CONFIG_TX        _IOW(AIC3008_IO_IOCTL_MAGIC, 0x12, unsigned int)
-#define AIC3008_IO_CONFIG_RX        _IOW(AIC3008_IO_IOCTL_MAGIC, 0x13, unsigned int)
-#define AIC3008_IO_SET_DSP_PARAM    _IOW(AIC3008_IO_IOCTL_MAGIC, 0x20, unsigned)
-#define AIC3008_IO_CONFIG_MEDIA     _IOW(AIC3008_IO_IOCTL_MAGIC, 0x21, unsigned int)
-#define AIC3008_IO_CONFIG_VOICE     _IOW(AIC3008_IO_IOCTL_MAGIC, 0x22, unsigned int)
-#define AIC3008_IO_CONFIG_VOLUME_L  _IOW(AIC3008_IO_IOCTL_MAGIC, 0x23, unsigned int)
-#define AIC3008_IO_CONFIG_VOLUME_R  _IOW(AIC3008_IO_IOCTL_MAGIC, 0x24, unsigned int)
-#define AIC3008_IO_POWERDOWN        _IOW(AIC3008_IO_IOCTL_MAGIC, 0x25, unsigned int)
-#define AIC3008_IO_LOOPBACK         _IOW(AIC3008_IO_IOCTL_MAGIC, 0x26, unsigned int)
-#define AIC3008_IO_DUMP_PAGES       _IOW(AIC3008_IO_IOCTL_MAGIC, 0x30, unsigned int)
-#define AIC3008_IO_READ_REG         _IOWR(AIC3008_IO_IOCTL_MAGIC, 0x31, unsigned)
-#define AIC3008_IO_WRITE_REG        _IOW(AIC3008_IO_IOCTL_MAGIC, 0x32, unsigned)
-#define AIC3008_IO_RESET            _IOW(AIC3008_IO_IOCTL_MAGIC, 0x33, unsigned int)
-#define AIC3008_IO_DUMP_DSP         _IOW(AIC3008_IO_IOCTL_MAGIC, 0x34, unsigned int)
-#define AIC3008_IO_GET_PCBID        _IOR(AIC3008_IO_IOCTL_MAGIC, 0x35, unsigned int)
+#include <../arch/arm/mach-tegra/htc_audio_power.h>
 
 #define AIC3008_MAX_PAGES        255
 #define AIC3008_MAX_REGS         128
 #define AIC3008_MAX_RETRY        10
-
-#define IO_CTL_ROW_MAX      64
-#define IO_CTL_COL_MAX      1024
-#define MINIDSP_ROW_MAX     32
-#define MINIDSP_COL_MAX     20000
-
-/* structures for SPI commands */
-typedef struct _CODEC_SPI_CMD {
-	unsigned char act;
-	unsigned char reg;
-	unsigned char data;
-} CODEC_SPI_CMD;
-
-typedef struct _CODEC_SPI_CMD_PARAM {
-	CODEC_SPI_CMD *data;
-	unsigned int len;
-} CODEC_SPI_CMD_PARAM;
-
-struct AIC3008_PARAM {
-	unsigned int row_num;
-	unsigned int col_num;
-	void *cmd_data;
-};
-
-struct CODEC_CFG {
-	unsigned char tb_idx;
-	unsigned char index;
-};
-
-
-/* enumerated modes */
-enum aic3008_uplink_mode {
-	INITIAL = 0,
-	CALL_UPLINK_IMIC_RECEIVER = 1,
-	CALL_UPLINK_EMIC_HEADPHONE,
-	CALL_UPLINK_IMIC_HEADPHONE,
-	CALL_UPLINK_IMIC_SPEAKER,
-	CALL_UPLINK_IMIC_RECEIVER_DUALMIC,
-	CALL_UPLINK_EMIC_HEADPHONE_DUALMIC,
-	CALL_UPLINK_IMIC_SPEAKER_DUALMIC,
-	VOICERECORD_IMIC = 8,
-	VOICERECORD_EMIC,
-	VIDEORECORD_IMIC,
-	VIDEORECORD_EMIC,
-	VOICERECOGNITION_IMIC = 12,
-	VOICERECOGNITION_EMIC,
-	UPLINK_BT_AP = 14,
-	UPLINK_BT_BB,
-	FM_IN_SPEAKER = 16,
-	FM_IN_HEADPHONE,
-	TTY_IN_HCO = 18,
-	TTY_IN_VCO,
-	TTY_IN_FULL,
-	UPLINK_MUSE = 21,
-	UPLINK_HAC,
-	UPLINK_PATH_OFF = 23,
-	UPLINK_WAKEUP,
-	POWER_OFF = 25,
-	STEREO_VIDEO_RECORDING_IMIC_PORTRAIT = 26,
-	STEREO_VIDEO_RECORDING_IMIC_LANDSCAPE,
-	VOIP_UPLINK_IMIC_RECEIVER = 28,
-	VOIP_UPLINK_EMIC_HEADPHONE,
-	VOIP_UPLINK_IMIC_HEADPHONE,
-	VOIP_UPLINK_IMIC_SPEAKER,
-	VOIP_UPLINK_BT,
-	CALL_UPLINK_IMIC_RECEIVER_DUALMIC_WB = 33,
-	CALL_UPLINK_EMIC_HEADPHONE_DUALMIC_WB,
-	CALL_UPLINK_IMIC_SPEAKER_DUALMIC_WB,
-	CALL_UPLINK_IMIC_DOCK,
-	MFG_VIDEORECORD_2ndMIC = 37,
-	CALL_UPLINK_EMIC_HEADPHONE_BEATS = 38,
-	CALL_UPLINK_EMIC_HEADPHONE_BEATS_WB,
-	VOIP_UPLINK_EMIC_HEADPHONE_BEATS,
-	UPLINK_MODE_END,
-};
-
-enum aic3008_downlink_mode {
-	CALL_DOWNLINK_IMIC_RECEIVER = 1,
-	CALL_DOWNLINK_EMIC_HEADPHONE,
-	CALL_DOWNLINK_IMIC_HEADPHONE,
-	CALL_DOWNLINK_IMIC_SPEAKER,
-	CALL_DOWNLINK_IMIC_RECEIVER_DUALMIC,
-	CALL_DOWNLINK_EMIC_HEADPHONE_DUALMIC,
-	CALL_DOWNLINK_IMIC_SPEAKER_DUALMIC,
-	PLAYBACK_RECEIVER = 8,
-	PLAYBACK_HEADPHONE,
-	PLAYBACK_SPEAKER,
-	RING_HEADPHONE_SPEAKER = 11,
-	PLAYBACK_SPEAKER_ALT = 12,
-	USB_AUDIO = 13,
-	DOWNLINK_BT_AP = 14,
-	DOWNLINK_BT_BB,
-	FM_OUT_SPEAKER = 16,
-	FM_OUT_HEADPHONE,
-	TTY_OUT_HCO = 18,
-	TTY_OUT_VCO,
-	TTY_OUT_FULL,
-	DOWNLINK_MUSE,
-	DOWNLINK_HAC,
-	DOWNLINK_PATH_OFF = 23,
-	DOWNLINK_WAKEUP,
-	PLAYBACK_HEADPHONE_URBEATS = 25,
-	PLAYBACK_HEADPHONE_SOLO,
-	PLAYBACK_SPEAKER_BEATS,
-	VOIP_DOWNLINK_IMIC_RECEIVER = 28,
-	VOIP_DOWNLINK_EMIC_HEADPHONE,
-	VOIP_DOWNLINK_IMIC_HEADPHONE,
-	VOIP_DOWNLINK_IMIC_SPEAKER,
-	VOIP_DOWNLINK_BT,
-	CALL_DOWNLINK_IMIC_RECEIVER_DUALMIC_WB,
-	CALL_DOWNLINK_EMIC_HEADPHONE_DUALMIC_WB,
-	CALL_DOWNLINK_IMIC_SPEAKER_DUALMIC_WB,
-	CALL_DOWNLINK_IMIC_DOCK,
-	PLAYBACK_DOCK,
-	CALL_DOWNLINK_EMIC_HEADPHONE_BEATS = 38,
-	CALL_DOWNLINK_EMIC_HEADPHONE_BEATS_WB,
-	VOIP_DOWNLINK_EMIC_HEADPHONE_BEATS,
-	CALL_DOWNLINK_IMIC_HEADPHONE_WB,
-	MFG_PLAYBACK_L_SPEAKER = 42,
-	MFG_PLAYBACK_R_SPEAKER,
-	PLAYBACK_HEADPHONE_FULLDELPX,
-	PLAYBACK_SPK_FULLDELPX,
-	DOWNLINK_MODE_END,
-};
-
-enum htc_audio_sound_effect {
-    MFG = 0,
-	Phone_Default = 1,
-	Phone_Receiver_Dualmic,
-	Phone_Speaker_Dualmic,
-	Phone_Headset,
-	Phone_HAC,
-	Phone_TTY,
-	Phone_BT,
-	Phone_Handset_Dualmic_WB,
-	Phone_Speaker_Dualmic_WB,
-	Phone_Headset_WB,
-	Phone_Dock = 11,
-	Playback_Default = 12,
-	Playback_Speaker_Default,
-	Playback_Headset_Generic,
-	Playback_Headset_urBeats,
-	Playback_Headset_Solo,
-	Playback_Headset_Pro,
-	Playback_Headset_Studio,
-	Playback_SPK_Beats,
-	Playback_Dock,
-	Playback_SPK_Ring = 21,
-	Record_Default = 22,
-	Record_V_Mono,
-	Record_V_IMIC_Landscape_Stereo,
-	Record_V_IMIC_Portrait_Stereo,
-	Record_A_VoiceRecoder_AMR,
-	Record_A_VoiceRecoder_AAC,
-	Record_A_Note_Recording,
-	Record_A_Speaker_VR = 29,
-	FM_Headset = 30,
-	FM_Speaker = 31,
-	VOIP_Receiver = 32,
-	VOIP_Speaker,
-	VOIP_Headset,
-	VOIP_BT = 35,
-	SKYPE_Receiver = 36,
-	SKYPE_Speaker,
-	SPYPE_Headset = 38,
-    End_Audio_Effect,
-};
-
 
 /* control operations structure */
 struct aic3008_ctl_ops {
@@ -245,9 +53,6 @@ extern void aic3008_register_ctl_ops(struct aic3008_ctl_ops *ops);
 void aic3008_CodecInit(void);
 int aic3008_setMode(int cmd, int idx, int is_call_mode);
 void aic3008_set_mic_bias(int en);
-
-
-
 
 /*****************************************************************************/
 /* AIC3008 register addresses                                                */
@@ -443,26 +248,6 @@ void aic3008_set_mic_bias(int en);
 #define AIC3008_ASI_WCLK_NDIV			13	/* ASI WCLK N divider pwr + divide by 32 ~ 128 */
 #define AIC3008_ASI_BCLK_WCLK_OUT		14	/* ASI WCLK/BLCK output mux. */
 #define AIC3008_ASI_DATA_OUT			15	/* ASI Data Out from eg DOUT1 from ADI1 out, AD1/2/3 in, pin-pin loop back */
-
-#define AIC3008_WCLK1_GPIO				65	/* pin control for WCLK1 */
-#define AIC3008_DOUT1_GPIO				67	/* pin control for DOUT1 */
-#define AIC3008_DIN1_GPIO				68	/* pin control for DIN1 */
-#define AIC3008_WCLK2_GPIO				69	/* pin control for WCLK2 */
-#define AIC3008_BCLK2_GPIO				70	/* pin control for BCLK2 */
-#define AIC3008_DOUT2_GPIO				71	/* pin control for DOUT2 */
-#define AIC3008_DIN2_GPIO				72	/* pin control for DIN2 */
-#define AIC3008_WCLK3_GPIO				73	/* pin control for BCLK3 */
-#define AIC3008_BCLK3_GPIO				74	/* pin control for WCLK3 */
-#define AIC3008_DOUT3_GPIO				75	/* pin control for DOUT3 */
-#define AIC3008_DIN3_GPIO				76	/* pin control for DIN3 */
-#define AIC3008_MCLK2					82	/* pin control for MCLK2 */
-#define AIC3008_GPIO1					86	/* pin control for GPIO1 */
-#define AIC3008_GPIO2					87	/* pin control for GPIO2 */
-#define AIC3008_GPI1					91	/* pin control for GPI1 */
-#define AIC3008_GPI2					92	/* pin control for GPI2 */
-#define AIC3008_GPO1					96	/* pin control for GPO1 */
-#define AIC3008_DIG_MIC					101	/* Digital Microphone Input Pin Control */
-#define AIC3008_DSP_DATA_PORT			118	/* miniDSP data port control */
 /*****************************************************************************/
 
 /* Audio serial data interface control register A bits */
@@ -518,92 +303,28 @@ void aic3008_set_mic_bias(int en);
 /* Default input volume */
 #define DEFAULT_GAIN    0x20
 
-/* GPIO API */
-enum {
-	AIC3008_GPIO1_FUNC_DISABLED		= 0,
-	AIC3008_GPIO1_FUNC_AUDIO_WORDCLK_ADC	= 1,
-	AIC3008_GPIO1_FUNC_CLOCK_MUX		= 2,
-	AIC3008_GPIO1_FUNC_CLOCK_MUX_DIV2		= 3,
-	AIC3008_GPIO1_FUNC_CLOCK_MUX_DIV4		= 4,
-	AIC3008_GPIO1_FUNC_CLOCK_MUX_DIV8		= 5,
-	AIC3008_GPIO1_FUNC_SHORT_CIRCUIT_IRQ	= 6,
-	AIC3008_GPIO1_FUNC_AGC_NOISE_IRQ		= 7,
-	AIC3008_GPIO1_FUNC_INPUT			= 8,
-	AIC3008_GPIO1_FUNC_OUTPUT			= 9,
-	AIC3008_GPIO1_FUNC_DIGITAL_MIC_MODCLK	= 10,
-	AIC3008_GPIO1_FUNC_AUDIO_WORDCLK		= 11,
-	AIC3008_GPIO1_FUNC_BUTTON_IRQ		= 12,
-	AIC3008_GPIO1_FUNC_HEADSET_DETECT_IRQ	= 13,
-	AIC3008_GPIO1_FUNC_HEADSET_DETECT_OR_BUTTON_IRQ	= 14,
-	AIC3008_GPIO1_FUNC_ALL_IRQ		= 16
-};
-
-enum {
-	AIC3008_GPIO2_FUNC_DISABLED		= 0,
-	AIC3008_GPIO2_FUNC_HEADSET_DETECT_IRQ	= 2,
-	AIC3008_GPIO2_FUNC_INPUT			= 3,
-	AIC3008_GPIO2_FUNC_OUTPUT			= 4,
-	AIC3008_GPIO2_FUNC_DIGITAL_MIC_INPUT	= 5,
-	AIC3008_GPIO2_FUNC_AUDIO_BITCLK		= 8,
-	AIC3008_GPIO2_FUNC_HEADSET_DETECT_OR_BUTTON_IRQ = 9,
-	AIC3008_GPIO2_FUNC_ALL_IRQ		= 10,
-	AIC3008_GPIO2_FUNC_SHORT_CIRCUIT_OR_AGC_IRQ = 11,
-	AIC3008_GPIO2_FUNC_HEADSET_OR_BUTTON_PRESS_OR_SHORT_CIRCUIT_IRQ = 12,
-	AIC3008_GPIO2_FUNC_SHORT_CIRCUIT_IRQ	= 13,
-	AIC3008_GPIO2_FUNC_AGC_NOISE_IRQ		= 14,
-	AIC3008_GPIO2_FUNC_BUTTON_PRESS_IRQ	= 15
-};
-
-struct aic3008_setup_data {
-	unsigned int gpio_func[2];
-};
-
 /* Number of supplies voltages */
 #define AIC3008_NUM_SUPPLIES    4
 #define AIC3008_CACHEREGNUM     100
 
-struct aic3008_platform_data {
-	bool irq_active_low;   /* Set if IRQ active low, default high */
-
-    /* Default register value for R6 (Mic bias), used to configure
-	 * microphone detection.  In conjunction with gpio_cfg this
-	 * can be used to route the microphone status signals out onto
-	 * the GPIOs for use with snd_soc_jack_add_gpios().
-	 */
-	u16 micdet_cfg;
-
-	int micdet_delay;      /* Delay after microphone detection (ms) */
-
-	int gpio_base;
-
-	u32 gpio_cfg[AIC3008_CACHEREGNUM]; /* Default register values for GPIO pin mux */
-};
-
 /* codec private data */
 struct aic3008_priv {
 	struct snd_soc_codec *codec;
-	struct regulator_bulk_data supplies[AIC3008_NUM_SUPPLIES];
 	unsigned int sysclk;
 	int master;
-	int gpio_reset;
+
+	bool is_call_mode;
+	int downlink_id;
+	int uplink_id;
+	int aic3008_dsp_id;
+	int es305_cfg_id;
 
 	/* Reference counts */
-	int class_w_users;
 	int playback_active;
 	int capture_active;
-
-	struct completion wseq; /* race condition */
-
-	struct snd_soc_jack *mic_jack;
-	int mic_det;
-	int mic_short;
-	int mic_last_report;
-	int mic_delay;
 
 	struct snd_pcm_substream *master_substream;
 	struct snd_pcm_substream *slave_substream;
 };
-
-static int aic3008_config(CODEC_SPI_CMD *cmds, int size);
 
 #endif /* _AIC3008_H */

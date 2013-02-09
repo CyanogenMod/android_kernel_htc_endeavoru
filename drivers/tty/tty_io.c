@@ -1,6 +1,4 @@
 /*
- *  linux/drivers/char/tty_io.c
- *
  *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
@@ -96,6 +94,7 @@
 #include <linux/delay.h>
 #include <linux/seq_file.h>
 #include <linux/serial.h>
+#include <linux/ratelimit.h>
 
 #include <linux/uaccess.h>
 #include <asm/system.h>
@@ -195,8 +194,7 @@ static inline struct tty_struct *file_tty(struct file *file)
 	return ((struct tty_file_private *)file->private_data)->tty;
 }
 
-/* Associate a new file with the tty structure */
-int tty_add_file(struct tty_struct *tty, struct file *file)
+int tty_alloc_file(struct file *file)
 {
 	struct tty_file_private *priv;
 
@@ -204,15 +202,36 @@ int tty_add_file(struct tty_struct *tty, struct file *file)
 	if (!priv)
 		return -ENOMEM;
 
+	file->private_data = priv;
+
+	return 0;
+}
+
+/* Associate a new file with the tty structure */
+void tty_add_file(struct tty_struct *tty, struct file *file)
+{
+	struct tty_file_private *priv = file->private_data;
+
 	priv->tty = tty;
 	priv->file = file;
-	file->private_data = priv;
 
 	spin_lock(&tty_files_lock);
 	list_add(&priv->list, &tty->tty_files);
 	spin_unlock(&tty_files_lock);
+}
 
-	return 0;
+/**
+ * tty_free_file - free file->private_data
+ *
+ * This shall be used only for fail path handling when tty_add_file was not
+ * called yet.
+ */
+void tty_free_file(struct file *file)
+{
+	struct tty_file_private *priv = file->private_data;
+
+	file->private_data = NULL;
+	kfree(priv);
 }
 
 /* Delete file from its tty */
@@ -223,8 +242,7 @@ void tty_del_file(struct file *file)
 	spin_lock(&tty_files_lock);
 	list_del(&priv->list);
 	spin_unlock(&tty_files_lock);
-	file->private_data = NULL;
-	kfree(priv);
+	tty_free_file(file);
 }
 
 
@@ -964,12 +982,14 @@ static ssize_t tty_read(struct file *file, char __user *buf, size_t count,
 }
 
 void tty_write_unlock(struct tty_struct *tty)
+	__releases(&tty->atomic_write_lock)
 {
 	mutex_unlock(&tty->atomic_write_lock);
 	wake_up_interruptible_poll(&tty->write_wait, POLLOUT);
 }
 
 int tty_write_lock(struct tty_struct *tty, int ndelay)
+	__acquires(&tty->atomic_write_lock)
 {
 	if (!mutex_trylock(&tty->atomic_write_lock)) {
 		if (ndelay)
@@ -1294,8 +1314,7 @@ static int tty_driver_install_tty(struct tty_driver *driver,
  *
  *	Locking: tty_mutex for now
  */
-static void tty_driver_remove_tty(struct tty_driver *driver,
-						struct tty_struct *tty)
+void tty_driver_remove_tty(struct tty_driver *driver, struct tty_struct *tty)
 {
 	if (driver->ops->remove)
 		driver->ops->remove(driver, tty);
@@ -1391,16 +1410,15 @@ struct tty_struct *tty_init_dev(struct tty_driver *driver, int idx,
 		return ERR_PTR(-ENODEV);
 
 	tty = alloc_tty_struct();
-	if (!tty)
-		goto fail_no_mem;
+	if (!tty) {
+		retval = -ENOMEM;
+		goto err_module_put;
+	}
 	initialize_tty_struct(tty, driver, idx);
 
 	retval = tty_driver_install_tty(driver, tty);
-	if (retval < 0) {
-		free_tty_struct(tty);
-		module_put(driver->owner);
-		return ERR_PTR(retval);
-	}
+	if (retval < 0)
+		goto err_deinit_tty;
 
 	/*
 	 * Structures all installed ... call the ldisc open routines.
@@ -1409,17 +1427,19 @@ struct tty_struct *tty_init_dev(struct tty_driver *driver, int idx,
 	 */
 	retval = tty_ldisc_setup(tty, tty->link);
 	if (retval)
-		goto release_mem_out;
+		goto err_release_tty;
 	return tty;
 
-fail_no_mem:
+err_deinit_tty:
+	deinitialize_tty_struct(tty);
+	free_tty_struct(tty);
+err_module_put:
 	module_put(driver->owner);
-	return ERR_PTR(-ENOMEM);
+	return ERR_PTR(retval);
 
 	/* call the tty release_tty routine to clean out this slot */
-release_mem_out:
-	if (printk_ratelimit())
-		printk(KERN_INFO "tty_init_dev: ldisc open failed, "
+err_release_tty:
+	printk_ratelimited(KERN_INFO "tty_init_dev: ldisc open failed, "
 				 "clearing slot %d\n", idx);
 	release_tty(tty, idx);
 	return ERR_PTR(retval);
@@ -1810,6 +1830,10 @@ static int tty_open(struct inode *inode, struct file *filp)
 	nonseekable_open(inode, filp);
 
 retry_open:
+	retval = tty_alloc_file(filp);
+	if (retval)
+		return -ENOMEM;
+
 	noctty = filp->f_flags & O_NOCTTY;
 	index  = -1;
 	retval = 0;
@@ -1822,6 +1846,7 @@ retry_open:
 		if (!tty) {
 			tty_unlock();
 			mutex_unlock(&tty_mutex);
+			tty_free_file(filp);
 			return -ENXIO;
 		}
 		driver = tty_driver_kref_get(tty->driver);
@@ -1854,6 +1879,7 @@ retry_open:
 		}
 		tty_unlock();
 		mutex_unlock(&tty_mutex);
+		tty_free_file(filp);
 		return -ENODEV;
 	}
 
@@ -1861,6 +1887,7 @@ retry_open:
 	if (!driver) {
 		tty_unlock();
 		mutex_unlock(&tty_mutex);
+		tty_free_file(filp);
 		return -ENODEV;
 	}
 got_driver:
@@ -1871,6 +1898,8 @@ got_driver:
 		if (IS_ERR(tty)) {
 			tty_unlock();
 			mutex_unlock(&tty_mutex);
+			tty_driver_kref_put(driver);
+			tty_free_file(filp);
 			return PTR_ERR(tty);
 		}
 	}
@@ -1886,14 +1915,11 @@ got_driver:
 	tty_driver_kref_put(driver);
 	if (IS_ERR(tty)) {
 		tty_unlock();
+		tty_free_file(filp);
 		return PTR_ERR(tty);
 	}
 
-	retval = tty_add_file(tty, filp);
-	if (retval) {
-		tty_unlock();
-		return retval;
-	}
+	tty_add_file(tty, filp);
 
 	check_tty_count(tty, "tty_open");
 	if (tty->driver->type == TTY_DRIVER_TYPE_PTY &&
@@ -1902,12 +1928,10 @@ got_driver:
 #ifdef TTY_DEBUG_HANGUP
 	printk(KERN_DEBUG "opening %s...", tty->name);
 #endif
-	if (!retval) {
-		if (tty->ops->open)
-			retval = tty->ops->open(tty, filp);
-		else
-			retval = -ENODEV;
-	}
+	if (tty->ops->open)
+		retval = tty->ops->open(tty, filp);
+	else
+		retval = -ENODEV;
 	filp->f_flags = saved_flags;
 
 	if (!retval && test_bit(TTY_EXCLUSIVE, &tty->flags) &&
@@ -2885,6 +2909,20 @@ void initialize_tty_struct(struct tty_struct *tty,
 	tty->index = idx;
 	tty_line_name(driver, idx, tty->name);
 	tty->dev = tty_get_device(tty);
+}
+
+/**
+ *	deinitialize_tty_struct
+ *	@tty: tty to deinitialize
+ *
+ *	This subroutine deinitializes a tty structure that has been newly
+ *	allocated but tty_release cannot be called on that yet.
+ *
+ *	Locking: none - tty in question must not be exposed at this point
+ */
+void deinitialize_tty_struct(struct tty_struct *tty)
+{
+	tty_ldisc_deinit(tty);
 }
 
 /**

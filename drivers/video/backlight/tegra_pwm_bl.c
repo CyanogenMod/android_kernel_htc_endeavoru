@@ -22,9 +22,61 @@
 #include <linux/tegra_pwm_bl.h>
 #include <linux/delay.h>
 #include <mach/dc.h>
-#include "../tegra/dc/dc_priv.h"
+#include <mach/panel_id.h>
+#include <mach/board_htc.h>
 extern int tegra_dsi_send_panel_short_cmd(struct tegra_dc *dc, u8 *pdata, u8 data_len);
-extern void setbkl(struct tegra_dc *dc,u16 brightness);
+
+extern struct tegra_dc *tegra_dc_get_dc(unsigned idx);
+extern unsigned long g_panel_id;
+
+static u8 enhance_on[]={0x55,0x83};
+static u8 enhance_off[]={0x55,0x03};
+
+static ssize_t store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct tegra_dc *dc;
+	int value = 1;
+
+	sscanf(buf,"%d\n",&value);
+
+	dc = tegra_dc_get_dc(0);
+
+	switch (PANEL_MASK(g_panel_id)) {
+		case PANEL_ID_SHARP_HX_C3:
+		case PANEL_ID_SHARP_HX_C4:
+		case PANEL_ID_SHARP_HX_C5:
+		case PANEL_ID_SHARP_HX:
+		case PANEL_ID_SHARP_HX_43:
+			enhance_on[0] = 0xE3;
+			enhance_on[1] = 0x01;
+			enhance_off[0] = 0xE3;
+			enhance_off[1] = 0x00;
+			break;
+		default:
+			break;
+	}
+
+	if ( value == 1)
+	{
+		tegra_dsi_send_panel_short_cmd(dc, enhance_on, ARRAY_SIZE(enhance_on));
+		printk("[DISP]enable color enhancement %d\n", value);
+	} else
+	{
+		tegra_dsi_send_panel_short_cmd(dc, enhance_off, ARRAY_SIZE(enhance_off));
+		printk("[DISP]disable color enhancement %d\n", value);
+	}
+	return count;
+}
+static ssize_t show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	return ;
+}
+
+static DEVICE_ATTR(enhance, 0664, show, store);
+
 struct tegra_pwm_bl_data {
 	struct device *dev;
 	int which_dc;
@@ -40,8 +92,7 @@ static int tegra_pwm_backlight_update_status(struct backlight_device *bl)
 	int brightness = bl->props.brightness;
 	int max = bl->props.max_brightness;
 	struct tegra_dc *dc;
-	u8 pdata[]={0x51,0xFF};
-	u8 dimming_off[]={0x53,0x24};
+	u8 pdata[]={0x53,0x2C,0x51,0xFF};
 	if (!bl->props.bkl_on) {
 		/*printk(KERN_DEBUG "[DISP] %s skip brightness=%d ,duty_cycle=%d\n",__FUNCTION__,brightness,tbl->params.duty_cycle);*/
 		return 0;
@@ -74,16 +125,14 @@ static int tegra_pwm_backlight_update_status(struct backlight_device *bl)
 		bkl_debug = false;
 		printk(KERN_INFO "[DISP] %s brightness=%d ,duty_cycle=%d\n",__FUNCTION__,brightness,tbl->params.duty_cycle);
 	}
-	pdata[1]=tbl->params.duty_cycle;
+	pdata[3]=tbl->params.duty_cycle;
 	/* Call tegra display controller function to update backlight */
 	dc = tegra_dc_get_dc(tbl->which_dc);
 	if (tbl->params.backlight_mode==MIPI_BACKLIGHT){
-		if (brightness == 0) {
-			tegra_dsi_send_panel_short_cmd(dc, dimming_off, ARRAY_SIZE(dimming_off));
-			hr_msleep(20);
-		}
-		tegra_dsi_send_panel_short_cmd(dc, pdata, ARRAY_SIZE(pdata));
-		//setbkl(dc, brightness);
+		if ((brightness == 0) || !tbl->params.dimming_enable)
+			pdata[1] = 0x24;
+		if (dc)
+			tegra_dsi_send_panel_short_cmd(dc, pdata, ARRAY_SIZE(pdata));
 	}
 	else if (dc)
 		tegra_dc_config_pwm(dc, &tbl->params);
@@ -117,7 +166,6 @@ static int tegra_pwm_backlight_probe(struct platform_device *pdev)
 	struct platform_tegra_pwm_backlight_data *data;
 	struct backlight_device *bl;
 	struct tegra_pwm_bl_data *tbl;
-	struct tegra_dc* dc;
 	int ret;
 
 	data = pdev->dev.platform_data;
@@ -144,11 +192,10 @@ static int tegra_pwm_backlight_probe(struct platform_device *pdev)
 	tbl->params.clk_div = data->clk_div;
 	tbl->params.clk_select = data->clk_select;
 	tbl->params.backlight_mode = data->backlight_mode;
-	if(tbl->params.backlight_mode == MIPI_BACKLIGHT){
-		dc = tegra_dc_get_dc(data->which_dc);
-		tegra_dc_turn_off_pwm(dc);
-	}
+	tbl->params.dimming_enable = data->dimming_enable;
+
 	memset(&props, 0, sizeof(struct backlight_properties));
+	props.cam_launch_bkl_value = data->cam_launch_bkl_value;
 	props.type = BACKLIGHT_RAW;
 	props.max_brightness = data->max_brightness;
 	bl = backlight_device_register(dev_name(&pdev->dev), &pdev->dev, tbl,
@@ -159,11 +206,22 @@ static int tegra_pwm_backlight_probe(struct platform_device *pdev)
 		goto err_bl;
 	}
 
+	if (board_mfg_mode() == BOARD_MFG_MODE_FACTORY2)
+		ret = device_create_file(&pdev->dev, &dev_attr_enhance);
+
 	bl->props.bkl_on = 1;
 	bl->props.brightness = data->dft_brightness;
 
-	if ( data->draw_battery != 1 )
-		backlight_update_status(bl);
+	switch(data->backlight_status) {
+		case BACKLIGHT_SKIP_WHEN_PROBE:
+			break;
+		case BACKLIGHT_DISABLE:
+			bl->props.bkl_on = 0;
+			break;
+		case BACKLIGHT_ENABLE:
+		default:
+			backlight_update_status(bl);
+	}
 
 	platform_set_drvdata(pdev, bl);
 	return 0;

@@ -185,15 +185,20 @@ static int addr4_resolve(struct sockaddr_in *src_in,
 	__be32 dst_ip = dst_in->sin_addr.s_addr;
 	struct rtable *rt;
 	struct neighbour *neigh;
+	struct flowi4 fl4;
 	int ret;
 
-	rt = ip_route_output(&init_net, dst_ip, src_ip, 0, addr->bound_dev_if);
+	memset(&fl4, 0, sizeof(fl4));
+	fl4.daddr = dst_ip;
+	fl4.saddr = src_ip;
+	fl4.flowi4_oif = addr->bound_dev_if;
+	rt = ip_route_output_key(&init_net, &fl4);
 	if (IS_ERR(rt)) {
 		ret = PTR_ERR(rt);
 		goto out;
 	}
 	src_in->sin_family = AF_INET;
-	src_in->sin_addr.s_addr = rt->rt_src;
+	src_in->sin_addr.s_addr = fl4.saddr;
 
 	if (rt->dst.dev->flags & IFF_LOOPBACK) {
 		ret = rdma_translate_ip((struct sockaddr *) dst_in, addr);
@@ -210,7 +215,9 @@ static int addr4_resolve(struct sockaddr_in *src_in,
 
 	neigh = neigh_lookup(&arp_tbl, &rt->rt_gateway, rt->dst.dev);
 	if (!neigh || !(neigh->nud_state & NUD_VALID)) {
-		neigh_event_send(rt->dst.neighbour, NULL);
+		rcu_read_lock();
+		neigh_event_send(dst_get_neighbour(&rt->dst), NULL);
+		rcu_read_unlock();
 		ret = -ENODATA;
 		if (neigh)
 			goto release;
@@ -268,14 +275,16 @@ static int addr6_resolve(struct sockaddr_in6 *src_in,
 		goto put;
 	}
 
-	neigh = dst->neighbour;
+	rcu_read_lock();
+	neigh = dst_get_neighbour(dst);
 	if (!neigh || !(neigh->nud_state & NUD_VALID)) {
-		neigh_event_send(dst->neighbour, NULL);
+		if (neigh)
+			neigh_event_send(neigh, NULL);
 		ret = -ENODATA;
-		goto put;
+	} else {
+		ret = rdma_copy_addr(addr, dst->dev, neigh->ha);
 	}
-
-	ret = rdma_copy_addr(addr, dst->dev, neigh->ha);
+	rcu_read_unlock();
 put:
 	dst_release(dst);
 	return ret;

@@ -47,10 +47,17 @@ enum stripetype4 {
 };
 
 /* Individual ip address */
+struct nfs4_pnfs_ds_addr {
+	struct sockaddr_storage	da_addr;
+	size_t			da_addrlen;
+	struct list_head	da_node;  /* nfs4_pnfs_dev_hlist dev_dslist */
+	char			*da_remotestr;	/* human readable addr+port */
+};
+
 struct nfs4_pnfs_ds {
 	struct list_head	ds_node;  /* nfs4_pnfs_dev_hlist dev_dslist */
-	u32			ds_ip_addr;
-	u32			ds_port;
+	char			*ds_remotestr;	/* comma sep list of addrs */
+	struct list_head	ds_addrs;
 	struct nfs_client	*ds_clp;
 	atomic_t		ds_count;
 };
@@ -59,9 +66,7 @@ struct nfs4_pnfs_ds {
 #define NFS4_DEVICE_ID_NEG_ENTRY	0x00000001
 
 struct nfs4_file_layout_dsaddr {
-	struct hlist_node		node;
-	struct nfs4_deviceid		deviceid;
-	atomic_t			ref;
+	struct nfs4_deviceid_node	id_node;
 	unsigned long			flags;
 	u32				stripe_count;
 	u8				*stripe_indices;
@@ -91,18 +96,22 @@ FILELAYOUT_LSEG(struct pnfs_layout_segment *lseg)
 			    generic_hdr);
 }
 
+static inline struct nfs4_deviceid_node *
+FILELAYOUT_DEVID_NODE(struct pnfs_layout_segment *lseg)
+{
+	return &FILELAYOUT_LSEG(lseg)->dsaddr->id_node;
+}
+
 extern struct nfs_fh *
 nfs4_fl_select_ds_fh(struct pnfs_layout_segment *lseg, u32 j);
 
 extern void print_ds(struct nfs4_pnfs_ds *ds);
-extern void print_deviceid(struct nfs4_deviceid *dev_id);
 u32 nfs4_fl_calc_j_index(struct pnfs_layout_segment *lseg, loff_t offset);
 u32 nfs4_fl_calc_ds_index(struct pnfs_layout_segment *lseg, u32 j);
 struct nfs4_pnfs_ds *nfs4_fl_prepare_ds(struct pnfs_layout_segment *lseg,
 					u32 ds_idx);
-extern struct nfs4_file_layout_dsaddr *
-nfs4_fl_find_get_deviceid(struct nfs4_deviceid *dev_id);
 extern void nfs4_fl_put_deviceid(struct nfs4_file_layout_dsaddr *dsaddr);
+extern void nfs4_fl_free_deviceid(struct nfs4_file_layout_dsaddr *dsaddr);
 struct nfs4_file_layout_dsaddr *
 get_device_info(struct inode *inode, struct nfs4_deviceid *dev_id, gfp_t gfp_flags);
 

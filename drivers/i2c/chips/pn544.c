@@ -14,14 +14,9 @@
 #include <linux/platform_device.h>
 #include <linux/gpio.h>
 #include <linux/miscdevice.h>
+#include <linux/wakelock.h>
 #include <linux/pn544.h>
 
-#include <linux/mutex.h>
-
-/* include for lock_kernel and unlock_kernel, but it's not exist in 2.6.39 
-* #include <linux/smp_lock.h>
-* #include <linux/spinlock.h>
-*/
 int is_debug = 0;
 
 #define DBUF(buff,count) \
@@ -40,13 +35,12 @@ int is_debug = 0;
 
 #define I2C_RETRY_COUNT 10
 
-static DEFINE_MUTEX(nfc_mutex);
-
 struct pn544_dev	{
 	struct class		*pn544_class;
 	struct device		*pn_dev;
 	wait_queue_head_t	read_wq;
 	struct mutex		read_mutex;
+	struct wake_lock io_wake_lock;
 	struct i2c_client	*client;
 	struct miscdevice	pn544_device;
 	unsigned int		irq_gpio;
@@ -249,6 +243,8 @@ static ssize_t pn544_dev_read(struct file *filp, char __user *buf,
 
 	}
 
+	wake_lock_timeout(&pni ->io_wake_lock, IO_WAKE_LOCK_TIMEOUT);
+
 	/* Read data */
 	memset(read_buffer, 0, MAX_BUFFER_SIZE);
 	ret = pn544_RxData(read_buffer, count);
@@ -282,15 +278,14 @@ fail:
 static ssize_t pn544_dev_write(struct file *filp, const char __user *buf,
 		size_t count, loff_t *offset)
 {
-	struct pn544_dev  *pn544_dev;
+	struct pn544_dev *pni = pn_info;
 	char buffer[MAX_BUFFER_SIZE];
 	int ret;
 	int i;
 	i = 0;
 
 	D("%s: start count = %u\n", __func__, count);
-
-	pn544_dev = filp->private_data;
+	wake_lock_timeout(&pni ->io_wake_lock, IO_WAKE_LOCK_TIMEOUT);
 
 	if (count > MAX_BUFFER_SIZE) {
 		E("%s : count =%d> MAX_BUFFER_SIZE\n", __func__, count);
@@ -384,14 +379,10 @@ fail:
 }
 
 
-static long pn544_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)                                                                
+static long pn544_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	long ret;
-	//lock_kernel();
-	mutex_lock(&nfc_mutex);
 	ret = pn544_dev_ioctl(filp->f_path.dentry->d_inode, filp, cmd, arg);
-	mutex_unlock(&nfc_mutex);
-	//unlock_kernel();
 	return ret;
 }
 
@@ -401,7 +392,6 @@ static const struct file_operations pn544_dev_fops = {
 	.read	= pn544_dev_read,
 	.write	= pn544_dev_write,
 	.open	= pn544_dev_open,
-	//.ioctl  = pn544_dev_ioctl,
 	.unlocked_ioctl = pn544_unlocked_ioctl,
 };
 
@@ -512,7 +502,7 @@ static ssize_t pn_temp1_store(struct device *dev,
 					I("%s: i2cw[%d]=%x\n", \
 						__func__, i, i2cw[i]);
 					ptr = strpbrk(++ptr, " ");
-					if (ptr == NULL) 
+					if (ptr == NULL)
 						break;
 				}
 
@@ -644,6 +634,9 @@ static int pn544_probe(struct i2c_client *client,
 	mutex_init(&pni->read_mutex);
 	spin_lock_init(&pni->irq_enabled_lock);
 
+	I("%s: init io_wake_lock\n", __func__);
+	wake_lock_init(&pni->io_wake_lock, WAKE_LOCK_SUSPEND, PN544_I2C_NAME);
+
 	pni->pn544_device.minor = MISC_DYNAMIC_MINOR;
 	pni->pn544_device.name = "pn544";
 	pni->pn544_device.fops = &pn544_dev_fops;
@@ -713,6 +706,7 @@ err_request_irq_failed:
 	misc_deregister(&pni->pn544_device);
 err_misc_register:
 	mutex_destroy(&pni->read_mutex);
+	wake_lock_destroy(&pni->io_wake_lock);
 	kfree(pni);
 	pn_info = NULL;
 	gpio_free(platform_data->firm_gpio);
@@ -734,6 +728,7 @@ static int pn544_remove(struct i2c_client *client)
 	free_irq(client->irq, pn544_dev);
 	misc_deregister(&pn544_dev->pn544_device);
 	mutex_destroy(&pn544_dev->read_mutex);
+	wake_lock_destroy(&pn544_dev->io_wake_lock);
 	gpio_free(pn544_dev->irq_gpio);
 	gpio_free(pn544_dev->ven_gpio);
 	gpio_free(pn544_dev->firm_gpio);

@@ -48,6 +48,7 @@ enum charger_control_flag {
 	OVER_HEAT_CHARGER,
 	COOL_CHARGER,
 	TOGGLE_CHARGER,
+	ENABLE_HIZ,
 	END_CHARGER
 };
 
@@ -55,5 +56,6 @@ enum charger_control_flag {
 
 int htc_battery_charger_disable(void);
 int htc_battery_get_zcharge_mode(void);
+int htc_battery_charger_hiz(void);
 
 #endif

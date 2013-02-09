@@ -332,9 +332,8 @@ vrtc_mrst_do_probe(struct device *dev, struct resource *iomem, int rtc_irq)
 	if (!iomem)
 		return -ENODEV;
 
-	iomem = request_mem_region(iomem->start,
-			iomem->end + 1 - iomem->start,
-			driver_name);
+	iomem = request_mem_region(iomem->start, resource_size(iomem),
+				   driver_name);
 	if (!iomem) {
 		dev_dbg(dev, "i/o mem already in use.\n");
 		return -EBUSY;
@@ -380,7 +379,7 @@ cleanup1:
 cleanup0:
 	dev_set_drvdata(dev, NULL);
 	mrst_rtc.dev = NULL;
-	release_region(iomem->start, iomem->end + 1 - iomem->start);
+	release_mem_region(iomem->start, resource_size(iomem));
 	dev_err(dev, "rtc-mrst: unable to initialise\n");
 	return retval;
 }
@@ -406,7 +405,7 @@ static void __devexit rtc_mrst_do_remove(struct device *dev)
 	mrst->rtc = NULL;
 
 	iomem = mrst->iomem;
-	release_region(iomem->start, iomem->end + 1 - iomem->start);
+	release_mem_region(iomem->start, resource_size(iomem));
 	mrst->iomem = NULL;
 
 	mrst->dev = NULL;

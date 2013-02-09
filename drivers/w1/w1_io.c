@@ -1,7 +1,7 @@
 /*
  *	w1_io.c
  *
- * Copyright (c) 2004 Evgeniy Polyakov <johnpol@2ka.mipt.ru>
+ * Copyright (c) 2004 Evgeniy Polyakov <zbr@ioremap.net>
  *
  *
  * This program is free software; you can redistribute it and/or modify
@@ -388,6 +388,32 @@ int w1_reset_select_slave(struct w1_slave *sl)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(w1_reset_select_slave);
+
+/**
+ * When the workflow with a slave amongst many requires several
+ * successive commands a reset between each, this function is similar
+ * to doing a reset then a match ROM for the last matched ROM. The
+ * advantage being that the matched ROM step is skipped in favor of the
+ * resume command. The slave must support the command of course.
+ *
+ * If the bus has only one slave, traditionnaly the match ROM is skipped
+ * and a "SKIP ROM" is done for efficiency. On multi-slave busses, this
+ * doesn't work of course, but the resume command is the next best thing.
+ *
+ * The w1 master lock must be held.
+ *
+ * @param dev     the master device
+ */
+int w1_reset_resume_command(struct w1_master *dev)
+{
+	if (w1_reset_bus(dev))
+		return -1;
+
+	/* This will make only the last matched slave perform a skip ROM. */
+	w1_write_8(dev, W1_RESUME_CMD);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(w1_reset_resume_command);
 
 /**
  * Put out a strong pull-up of the specified duration after the next write

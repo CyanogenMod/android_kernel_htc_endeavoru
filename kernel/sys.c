@@ -8,7 +8,6 @@
 #include <linux/mm.h>
 #include <linux/utsname.h>
 #include <linux/mman.h>
-#include <linux/notifier.h>
 #include <linux/reboot.h>
 #include <linux/prctl.h>
 #include <linux/highuid.h>
@@ -38,6 +37,8 @@
 #include <linux/fs_struct.h>
 #include <linux/gfp.h>
 #include <linux/syscore_ops.h>
+#include <linux/version.h>
+#include <linux/ctype.h>
 
 #include <linux/compat.h>
 #include <linux/syscalls.h>
@@ -45,6 +46,8 @@
 #include <linux/user_namespace.h>
 
 #include <linux/kmsg_dump.h>
+/* Move somewhere else to avoid recompiling? */
+#include <generated/utsrelease.h>
 
 #include <asm/uaccess.h>
 #include <asm/io.h>
@@ -80,9 +83,6 @@
 #ifndef SET_TSC_CTL
 # define SET_TSC_CTL(a)		(-EINVAL)
 #endif
-
-#define BOOT_DEBUG_LOG_ENTER(fn) \
-	printk(KERN_NOTICE "Entering %s\n", fn);
 
 /*
  * this is where the system-wide overflow UID and GID are defined, for
@@ -308,26 +308,50 @@ out_unlock:
  */
 void emergency_restart(void)
 {
-	BOOT_DEBUG_LOG_ENTER("emergency_restart");
-
 	kmsg_dump(KMSG_DUMP_EMERG);
-	BOOT_DEBUG_LOG_ENTER("machine_emergency_restart");
 	machine_emergency_restart();
 }
 EXPORT_SYMBOL_GPL(emergency_restart);
 
 void kernel_restart_prepare(char *cmd)
 {
-	BOOT_DEBUG_LOG_ENTER("blocking_notifier_call_chain");
 	blocking_notifier_call_chain(&reboot_notifier_list, SYS_RESTART, cmd);
 	system_state = SYSTEM_RESTART;
-	BOOT_DEBUG_LOG_ENTER("device_shutdown");
+	usermodehelper_disable();
 	device_shutdown();
-	BOOT_DEBUG_LOG_ENTER("sysdev_shutdown");
-	sysdev_shutdown();
-	BOOT_DEBUG_LOG_ENTER("syscore_shutdown");
 	syscore_shutdown();
 }
+
+/**
+ *	register_reboot_notifier - Register function to be called at reboot time
+ *	@nb: Info about notifier function to be called
+ *
+ *	Registers a function with the list of functions
+ *	to be called at reboot time.
+ *
+ *	Currently always returns zero, as blocking_notifier_chain_register()
+ *	always returns zero.
+ */
+int register_reboot_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&reboot_notifier_list, nb);
+}
+EXPORT_SYMBOL(register_reboot_notifier);
+
+/**
+ *	unregister_reboot_notifier - Unregister previously registered reboot notifier
+ *	@nb: Hook to be unregistered
+ *
+ *	Unregisters a previously registered reboot
+ *	notifier function.
+ *
+ *	Returns zero on success, or %-ENOENT on failure.
+ */
+int unregister_reboot_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&reboot_notifier_list, nb);
+}
+EXPORT_SYMBOL(unregister_reboot_notifier);
 
 /**
  *	kernel_restart - reboot the system
@@ -339,27 +363,22 @@ void kernel_restart_prepare(char *cmd)
  */
 void kernel_restart(char *cmd)
 {
-	BOOT_DEBUG_LOG_ENTER("kernel_restart");
-
-	BOOT_DEBUG_LOG_ENTER("kernel_restart_prepare");
 	kernel_restart_prepare(cmd);
 	if (!cmd)
 		printk(KERN_EMERG "Restarting system.\n");
 	else
 		printk(KERN_EMERG "Restarting system with command '%s'.\n", cmd);
 	kmsg_dump(KMSG_DUMP_RESTART);
-	BOOT_DEBUG_LOG_ENTER("machine_restart");
 	machine_restart(cmd);
 }
 EXPORT_SYMBOL_GPL(kernel_restart);
 
 static void kernel_shutdown_prepare(enum system_states state)
 {
-	BOOT_DEBUG_LOG_ENTER("blocking_notifier_call_chain");
 	blocking_notifier_call_chain(&reboot_notifier_list,
 		(state == SYSTEM_HALT)?SYS_HALT:SYS_POWER_OFF, NULL);
 	system_state = state;
-	BOOT_DEBUG_LOG_ENTER("device_shutdown");
+	usermodehelper_disable();
 	device_shutdown();
 }
 /**
@@ -369,16 +388,10 @@ static void kernel_shutdown_prepare(enum system_states state)
  */
 void kernel_halt(void)
 {
-	BOOT_DEBUG_LOG_ENTER("kernel_halt");
-	BOOT_DEBUG_LOG_ENTER("kernel_shutdown_prepare");
 	kernel_shutdown_prepare(SYSTEM_HALT);
-	BOOT_DEBUG_LOG_ENTER("sysdev_shutdown");
-	sysdev_shutdown();
-	BOOT_DEBUG_LOG_ENTER("syscore_shutdown");
 	syscore_shutdown();
 	printk(KERN_EMERG "System halted.\n");
 	kmsg_dump(KMSG_DUMP_HALT);
-	BOOT_DEBUG_LOG_ENTER("machine_halt");
 	machine_halt();
 }
 
@@ -391,24 +404,13 @@ EXPORT_SYMBOL_GPL(kernel_halt);
  */
 void kernel_power_off(void)
 {
-	BOOT_DEBUG_LOG_ENTER("kernel_power_off");
-
-	BOOT_DEBUG_LOG_ENTER("kernel_shutdown_prepare");
 	kernel_shutdown_prepare(SYSTEM_POWER_OFF);
 	if (pm_power_off_prepare)
-	{
-		BOOT_DEBUG_LOG_ENTER("pm_power_off_prepare");
 		pm_power_off_prepare();
-	}
-	BOOT_DEBUG_LOG_ENTER("disable_nonboot_cpus");
 	disable_nonboot_cpus();
-	BOOT_DEBUG_LOG_ENTER("sysdev_shutdown");
-	sysdev_shutdown();
-	BOOT_DEBUG_LOG_ENTER("syscore_shutdown");
 	syscore_shutdown();
 	printk(KERN_EMERG "Power down.\n");
 	kmsg_dump(KMSG_DUMP_POWEROFF);
-	BOOT_DEBUG_LOG_ENTER("machine_power_off");
 	machine_power_off();
 }
 EXPORT_SYMBOL_GPL(kernel_power_off);
@@ -428,10 +430,24 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 {
 	char buffer[256];
 	int ret = 0;
+	int res = 0;
+	unsigned int len;
+	char path[64];
+	struct task_struct *task = current;
+	struct mm_struct *mm = get_task_mm(task);
 
-	/* We only trust the superuser with rebooting the system. */
-	if (!capable(CAP_SYS_BOOT))
-		return -EPERM;
+	len = mm->arg_end - mm->arg_start;
+	if (len > PAGE_SIZE)
+		len = PAGE_SIZE;
+
+	res = access_process_vm(task, mm->arg_start, path, len, 0);
+	mmput(mm);
+
+	if (!(!strcmp("/system/bin/reboot", path) && cmd == LINUX_REBOOT_CMD_RESTART2)) {
+		/* We only trust the superuser with rebooting the system. */
+		if (!capable(CAP_SYS_BOOT))
+			return -EPERM;
+	}
 
 	/* For safety, we require "magic" arguments. */
 	if (magic1 != LINUX_REBOOT_MAGIC1 ||
@@ -623,11 +639,18 @@ static int set_user(struct cred *new)
 	if (!new_user)
 		return -EAGAIN;
 
+	/*
+	 * We don't fail in case of NPROC limit excess here because too many
+	 * poorly written programs don't check set*uid() return code, assuming
+	 * it never fails if called by root.  We may still enforce NPROC limit
+	 * for programs doing set*uid()+execve() by harmlessly deferring the
+	 * failure to the execve() stage.
+	 */
 	if (atomic_read(&new_user->processes) >= rlimit(RLIMIT_NPROC) &&
-			new_user != INIT_USER) {
-		free_uid(new_user);
-		return -EAGAIN;
-	}
+			new_user != INIT_USER)
+		current->flags |= PF_NPROC_EXCEEDED;
+	else
+		current->flags &= ~PF_NPROC_EXCEEDED;
 
 	free_uid(new->user);
 	new->user = new_user;
@@ -1156,6 +1179,34 @@ DECLARE_RWSEM(uts_sem);
 #define override_architecture(name)	0
 #endif
 
+/*
+ * Work around broken programs that cannot handle "Linux 3.0".
+ * Instead we map 3.x to 2.6.40+x, so e.g. 3.0 would be 2.6.40
+ */
+static int override_release(char __user *release, int len)
+{
+	int ret = 0;
+	char buf[65];
+
+	if (current->personality & UNAME26) {
+		char *rest = UTS_RELEASE;
+		int ndots = 0;
+		unsigned v;
+
+		while (*rest) {
+			if (*rest == '.' && ++ndots >= 3)
+				break;
+			if (!isdigit(*rest) && *rest != '.')
+				break;
+			rest++;
+		}
+		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
+		snprintf(buf, len, "2.6.%u%s", v, rest);
+		ret = copy_to_user(release, buf, len);
+	}
+	return ret;
+}
+
 SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 {
 	int errno = 0;
@@ -1165,6 +1216,8 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 		errno = -EFAULT;
 	up_read(&uts_sem);
 
+	if (!errno && override_release(name->release, sizeof(name->release)))
+		errno = -EFAULT;
 	if (!errno && override_architecture(name))
 		errno = -EFAULT;
 	return errno;
@@ -1186,6 +1239,8 @@ SYSCALL_DEFINE1(uname, struct old_utsname __user *, name)
 		error = -EFAULT;
 	up_read(&uts_sem);
 
+	if (!error && override_release(name->release, sizeof(name->release)))
+		error = -EFAULT;
 	if (!error && override_architecture(name))
 		error = -EFAULT;
 	return error;
@@ -1219,6 +1274,8 @@ SYSCALL_DEFINE1(olduname, struct oldold_utsname __user *, name)
 	up_read(&uts_sem);
 
 	if (!error && override_architecture(name))
+		error = -EFAULT;
+	if (!error && override_release(name->release, sizeof(name->release)))
 		error = -EFAULT;
 	return error ? -EFAULT : 0;
 }

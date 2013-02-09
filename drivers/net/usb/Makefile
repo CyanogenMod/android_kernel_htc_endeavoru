@@ -23,11 +23,15 @@ obj-$(CONFIG_USB_NET_MCS7830)	+= mcs7830.o
 obj-$(CONFIG_USB_USBNET)	+= usbnet.o
 obj-$(CONFIG_USB_NET_INT51X1)	+= int51x1.o
 obj-$(CONFIG_USB_CDC_PHONET)	+= cdc-phonet.o
+obj-$(CONFIG_USB_NET_KALMIA)	+= kalmia.o
 obj-$(CONFIG_USB_IPHETH)	+= ipheth.o
 obj-$(CONFIG_USB_SIERRA_NET)	+= sierra_net.o
 obj-$(CONFIG_USB_NET_CX82310_ETH)	+= cx82310_eth.o
 obj-$(CONFIG_USB_NET_CDC_NCM)	+= cdc_ncm.o
 obj-$(CONFIG_USB_VL600)		+= lg-vl600.o
-ifeq (${CONFIG_MACH_ENDEAVORU},y)
 obj-$(CONFIG_USB_NET_RAW_IP)	+= raw_ip_net.o
-endif
+
+#Sophia
+rmnet_usb-y			:= rmnet_usb_ctrl.o rmnet_usb_data.o
+obj-$(CONFIG_MSM_RMNET_USB)	+= rmnet_usb.o
+

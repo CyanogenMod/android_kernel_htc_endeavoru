@@ -33,6 +33,12 @@
 extern void v7_flush_kern_cache_all(void *);
 extern void __flush_dcache_page(struct address_space *, struct page *);
 
+static void inner_flush_cache_all(void)
+{
+	on_each_cpu(v7_flush_kern_cache_all, NULL, 1);
+}
+
+#if defined(CONFIG_CPA)
 /*
  * The current flushing context - we pass it instead of 5 arguments:
  */
@@ -127,11 +133,6 @@ static void cpa_flush_range(unsigned long start, int numpages, int cache)
 					__pa((void *)addr) + PAGE_SIZE);
 		}
 	}
-}
-
-static void inner_flush_cache_all(void)
-{
-	on_each_cpu(v7_flush_kern_cache_all, NULL, 1);
 }
 
 static void cpa_flush_array(unsigned long *start, int numpages, int cache,
@@ -330,6 +331,10 @@ static void __set_pmd_pte(pmd_t *pmd, unsigned long address, pte_t *pte)
 
 	cpa_debug("__set_pmd_pte %x %x %x\n", pmd, pte, *pte);
 
+	/* enforce pte entry stores ordering to avoid pmd writes
+	 * bypassing pte stores.
+	 */
+	dsb();
 	/* change init_mm */
 	pmd_populate_kernel(&init_mm, pmd, pte);
 
@@ -341,7 +346,10 @@ static void __set_pmd_pte(pmd_t *pmd, unsigned long address, pte_t *pte)
 			pgd_index(address), address);
 		pmd_populate_kernel(NULL, pmd, pte);
 	}
-
+	/* enforce pmd entry stores ordering to avoid tlb flush bypassing
+	 * pmd entry stores.
+	 */
+	dsb();
 }
 
 static int
@@ -468,7 +476,13 @@ static int split_large_page(pte_t *kpte, unsigned long address)
 	pgprot_t ref_prot = 0, ext_prot = 0;
 	int ret = 0;
 
+	BUG_ON((address & PMD_MASK) < __pa(_end));
+
+	if (!debug_pagealloc)
+		mutex_unlock(&cpa_lock);
 	pbase = pte_alloc_one_kernel(&init_mm, address);
+	if (!debug_pagealloc)
+		mutex_lock(&cpa_lock);
 	if (!pbase)
 		return -ENOMEM;
 
@@ -1019,3 +1033,57 @@ int set_pages_array_iwb(struct page **pages, int addrinarray)
 			L_PTE_MT_INNER_WB, L_PTE_MT_MASK);
 }
 EXPORT_SYMBOL(set_pages_array_iwb);
+
+#else /* CONFIG_CPA */
+
+void update_page_count(int level, unsigned long pages)
+{
+}
+
+static void flush_cache(struct page **pages, int numpages)
+{
+	unsigned int i;
+	bool flush_inner = true;
+	unsigned long base;
+
+	if (numpages >= FLUSH_CLEAN_BY_SET_WAY_PAGE_THRESHOLD) {
+		inner_flush_cache_all();
+		flush_inner = false;
+	}
+
+	for (i = 0; i < numpages; i++) {
+		if (flush_inner)
+			__flush_dcache_page(page_mapping(pages[i]), pages[i]);
+		base = page_to_phys(pages[i]);
+		outer_flush_range(base, base + PAGE_SIZE);
+	}
+}
+
+int set_pages_array_uc(struct page **pages, int addrinarray)
+{
+	flush_cache(pages, addrinarray);
+	return 0;
+}
+EXPORT_SYMBOL(set_pages_array_uc);
+
+int set_pages_array_wc(struct page **pages, int addrinarray)
+{
+	flush_cache(pages, addrinarray);
+	return 0;
+}
+EXPORT_SYMBOL(set_pages_array_wc);
+
+int set_pages_array_wb(struct page **pages, int addrinarray)
+{
+	return 0;
+}
+EXPORT_SYMBOL(set_pages_array_wb);
+
+int set_pages_array_iwb(struct page **pages, int addrinarray)
+{
+	flush_cache(pages, addrinarray);
+	return 0;
+}
+EXPORT_SYMBOL(set_pages_array_iwb);
+
+#endif

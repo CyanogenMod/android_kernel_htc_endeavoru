@@ -30,6 +30,15 @@ enum {
 	BATT_STATE,
 };
 
+#define LIMIT_CHARGING_ANONYMOUS	(1U << 0)
+#define LIMIT_CHARGING_PHONE_CALL	(1U << 1)
+#define LIMIT_CHARGING_NAVIGATION	(1U << 2)
+#define LIMIT_CHARGING_MEDIALINK	(1U << 3)
+#define LIMIT_CHARGING_DATA_ENCRYPTION	(1U << 4)
+
+#define KEEP_EARLY_SUSPEND_LIMIT_CHARGING	(LIMIT_CHARGING_PHONE_CALL |\
+						LIMIT_CHARGING_DATA_ENCRYPTION)
+
 struct battery_info_reply {
 	u32 batt_vol;
 	u32 batt_id;
@@ -49,17 +58,21 @@ struct battery_info_reply {
 
 struct htc_battery_core {
 	int (*func_show_batt_attr)(struct device_attribute *attr, char *buf);
+	int (*func_show_batt_power_meter)(struct device_attribute *attr, char *buf);
 	int (*func_get_battery_info)(struct battery_info_reply *buffer);
 	int (*func_charger_control)(enum charger_control_flag);
 	void (*func_set_full_level)(int full_level);
 	void (*func_phone_call_notification)(int phone_call);
+	void (*func_limit_charging_notification)(unsigned int limit_type, int enable);
 };
 
 #ifdef CONFIG_HTC_BATT_CORE
 extern int htc_battery_core_update(void);
+extern int htc_battery_is_charging_full(void);
 extern int htc_battery_core_register(struct device *dev, struct htc_battery_core *htc_battery);
 #else
 static int htc_battery_core_update(void) { return 0; }
+extern int htc_battery_is_charging_full(void) { return 0; }
 static int htc_battery_core_register(struct device *dev, struct htc_battery_core *htc_battery) { return 0; }
 #endif
 #endif

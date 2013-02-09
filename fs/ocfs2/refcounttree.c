@@ -66,7 +66,7 @@ struct ocfs2_cow_context {
 			    u32 *num_clusters,
 			    unsigned int *extent_flags);
 	int (*cow_duplicate_clusters)(handle_t *handle,
-				      struct ocfs2_cow_context *context,
+				      struct file *file,
 				      u32 cpos, u32 old_cluster,
 				      u32 new_cluster, u32 new_len);
 };
@@ -2921,20 +2921,21 @@ static int ocfs2_clear_cow_buffer(handle_t *handle, struct buffer_head *bh)
 	return 0;
 }
 
-static int ocfs2_duplicate_clusters_by_page(handle_t *handle,
-					    struct ocfs2_cow_context *context,
-					    u32 cpos, u32 old_cluster,
-					    u32 new_cluster, u32 new_len)
+int ocfs2_duplicate_clusters_by_page(handle_t *handle,
+				     struct file *file,
+				     u32 cpos, u32 old_cluster,
+				     u32 new_cluster, u32 new_len)
 {
 	int ret = 0, partial;
-	struct ocfs2_caching_info *ci = context->data_et.et_ci;
+	struct inode *inode = file->f_path.dentry->d_inode;
+	struct ocfs2_caching_info *ci = INODE_CACHE(inode);
 	struct super_block *sb = ocfs2_metadata_cache_get_super(ci);
 	u64 new_block = ocfs2_clusters_to_blocks(sb, new_cluster);
 	struct page *page;
 	pgoff_t page_index;
 	unsigned int from, to, readahead_pages;
 	loff_t offset, end, map_end;
-	struct address_space *mapping = context->inode->i_mapping;
+	struct address_space *mapping = inode->i_mapping;
 
 	trace_ocfs2_duplicate_clusters_by_page(cpos, old_cluster,
 					       new_cluster, new_len);
@@ -2948,8 +2949,8 @@ static int ocfs2_duplicate_clusters_by_page(handle_t *handle,
 	 * We only duplicate pages until we reach the page contains i_size - 1.
 	 * So trim 'end' to i_size.
 	 */
-	if (end > i_size_read(context->inode))
-		end = i_size_read(context->inode);
+	if (end > i_size_read(inode))
+		end = i_size_read(inode);
 
 	while (offset < end) {
 		page_index = offset >> PAGE_CACHE_SHIFT;
@@ -2972,10 +2973,9 @@ static int ocfs2_duplicate_clusters_by_page(handle_t *handle,
 		if (PAGE_CACHE_SIZE <= OCFS2_SB(sb)->s_clustersize)
 			BUG_ON(PageDirty(page));
 
-		if (PageReadahead(page) && context->file) {
+		if (PageReadahead(page)) {
 			page_cache_async_readahead(mapping,
-						   &context->file->f_ra,
-						   context->file,
+						   &file->f_ra, file,
 						   page, page_index,
 						   readahead_pages);
 		}
@@ -2999,8 +2999,7 @@ static int ocfs2_duplicate_clusters_by_page(handle_t *handle,
 			}
 		}
 
-		ocfs2_map_and_dirty_page(context->inode,
-					 handle, from, to,
+		ocfs2_map_and_dirty_page(inode, handle, from, to,
 					 page, 0, &new_block);
 		mark_page_accessed(page);
 unlock:
@@ -3015,14 +3014,15 @@ unlock:
 	return ret;
 }
 
-static int ocfs2_duplicate_clusters_by_jbd(handle_t *handle,
-					   struct ocfs2_cow_context *context,
-					   u32 cpos, u32 old_cluster,
-					   u32 new_cluster, u32 new_len)
+int ocfs2_duplicate_clusters_by_jbd(handle_t *handle,
+				    struct file *file,
+				    u32 cpos, u32 old_cluster,
+				    u32 new_cluster, u32 new_len)
 {
 	int ret = 0;
-	struct super_block *sb = context->inode->i_sb;
-	struct ocfs2_caching_info *ci = context->data_et.et_ci;
+	struct inode *inode = file->f_path.dentry->d_inode;
+	struct super_block *sb = inode->i_sb;
+	struct ocfs2_caching_info *ci = INODE_CACHE(inode);
 	int i, blocks = ocfs2_clusters_to_blocks(sb, new_len);
 	u64 old_block = ocfs2_clusters_to_blocks(sb, old_cluster);
 	u64 new_block = ocfs2_clusters_to_blocks(sb, new_cluster);
@@ -3145,8 +3145,8 @@ static int ocfs2_replace_clusters(handle_t *handle,
 
 	/*If the old clusters is unwritten, no need to duplicate. */
 	if (!(ext_flags & OCFS2_EXT_UNWRITTEN)) {
-		ret = context->cow_duplicate_clusters(handle, context, cpos,
-						      old, new, len);
+		ret = context->cow_duplicate_clusters(handle, context->file,
+						      cpos, old, new, len);
 		if (ret) {
 			mlog_errno(ret);
 			goto out;
@@ -3162,22 +3162,22 @@ out:
 	return ret;
 }
 
-static int ocfs2_cow_sync_writeback(struct super_block *sb,
-				    struct ocfs2_cow_context *context,
-				    u32 cpos, u32 num_clusters)
+int ocfs2_cow_sync_writeback(struct super_block *sb,
+			     struct inode *inode,
+			     u32 cpos, u32 num_clusters)
 {
 	int ret = 0;
 	loff_t offset, end, map_end;
 	pgoff_t page_index;
 	struct page *page;
 
-	if (ocfs2_should_order_data(context->inode))
+	if (ocfs2_should_order_data(inode))
 		return 0;
 
 	offset = ((loff_t)cpos) << OCFS2_SB(sb)->s_clustersize_bits;
 	end = offset + (num_clusters << OCFS2_SB(sb)->s_clustersize_bits);
 
-	ret = filemap_fdatawrite_range(context->inode->i_mapping,
+	ret = filemap_fdatawrite_range(inode->i_mapping,
 				       offset, end - 1);
 	if (ret < 0) {
 		mlog_errno(ret);
@@ -3190,7 +3190,7 @@ static int ocfs2_cow_sync_writeback(struct super_block *sb,
 		if (map_end > end)
 			map_end = end;
 
-		page = find_or_create_page(context->inode->i_mapping,
+		page = find_or_create_page(inode->i_mapping,
 					   page_index, GFP_NOFS);
 		BUG_ON(!page);
 
@@ -3349,7 +3349,7 @@ static int ocfs2_make_clusters_writable(struct super_block *sb,
 	 * in write-back mode.
 	 */
 	if (context->get_clusters == ocfs2_di_get_clusters) {
-		ret = ocfs2_cow_sync_writeback(sb, context, cpos,
+		ret = ocfs2_cow_sync_writeback(sb, context->inode, cpos,
 					       orig_num_clusters);
 		if (ret)
 			mlog_errno(ret);
@@ -3706,7 +3706,7 @@ int ocfs2_refcount_cow_xattr(struct inode *inode,
 	context->cow_start = cow_start;
 	context->cow_len = cow_len;
 	context->ref_tree = ref_tree;
-	context->ref_root_bh = ref_root_bh;;
+	context->ref_root_bh = ref_root_bh;
 	context->cow_object = xv;
 
 	context->cow_duplicate_clusters = ocfs2_duplicate_clusters_by_jbd;
@@ -4368,25 +4368,6 @@ static inline int ocfs2_may_create(struct inode *dir, struct dentry *child)
 	return inode_permission(dir, MAY_WRITE | MAY_EXEC);
 }
 
-/* copied from user_path_parent. */
-static int ocfs2_user_path_parent(const char __user *path,
-				  struct nameidata *nd, char **name)
-{
-	char *s = getname(path);
-	int error;
-
-	if (IS_ERR(s))
-		return PTR_ERR(s);
-
-	error = kern_path_parent(s, nd);
-	if (error)
-		putname(s);
-	else
-		*name = s;
-
-	return error;
-}
-
 /**
  * ocfs2_vfs_reflink - Create a reference-counted link
  *
@@ -4460,10 +4441,8 @@ int ocfs2_reflink_ioctl(struct inode *inode,
 			bool preserve)
 {
 	struct dentry *new_dentry;
-	struct nameidata nd;
-	struct path old_path;
+	struct path old_path, new_path;
 	int error;
-	char *to = NULL;
 
 	if (!ocfs2_refcount_tree(OCFS2_SB(inode->i_sb)))
 		return -EOPNOTSUPP;
@@ -4474,39 +4453,33 @@ int ocfs2_reflink_ioctl(struct inode *inode,
 		return error;
 	}
 
-	error = ocfs2_user_path_parent(newname, &nd, &to);
-	if (error) {
+	new_dentry = user_path_create(AT_FDCWD, newname, &new_path, 0);
+	error = PTR_ERR(new_dentry);
+	if (IS_ERR(new_dentry)) {
 		mlog_errno(error);
 		goto out;
 	}
 
 	error = -EXDEV;
-	if (old_path.mnt != nd.path.mnt)
-		goto out_release;
-	new_dentry = lookup_create(&nd, 0);
-	error = PTR_ERR(new_dentry);
-	if (IS_ERR(new_dentry)) {
+	if (old_path.mnt != new_path.mnt) {
 		mlog_errno(error);
-		goto out_unlock;
+		goto out_dput;
 	}
 
-	error = mnt_want_write(nd.path.mnt);
+	error = mnt_want_write(new_path.mnt);
 	if (error) {
 		mlog_errno(error);
 		goto out_dput;
 	}
 
 	error = ocfs2_vfs_reflink(old_path.dentry,
-				  nd.path.dentry->d_inode,
+				  new_path.dentry->d_inode,
 				  new_dentry, preserve);
-	mnt_drop_write(nd.path.mnt);
+	mnt_drop_write(new_path.mnt);
 out_dput:
 	dput(new_dentry);
-out_unlock:
-	mutex_unlock(&nd.path.dentry->d_inode->i_mutex);
-out_release:
-	path_put(&nd.path);
-	putname(to);
+	mutex_unlock(&new_path.dentry->d_inode->i_mutex);
+	path_put(&new_path);
 out:
 	path_put(&old_path);
 

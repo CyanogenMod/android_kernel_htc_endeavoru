@@ -178,7 +178,7 @@
 		CALL(sys_ni_syscall)		/* vm86 */
 		CALL(sys_ni_syscall)		/* was sys_query_module */
 		CALL(sys_poll)
-		CALL(sys_nfsservctl)
+		CALL(sys_ni_syscall)		/* was nfsservctl */
 /* 170 */	CALL(sys_setresgid16)
 		CALL(sys_getresgid16)
 		CALL(sys_prctl)
@@ -383,6 +383,8 @@
 		CALL(sys_open_by_handle_at)
 		CALL(sys_clock_adjtime)
 		CALL(sys_syncfs)
+		CALL(sys_sendmmsg)
+/* 375 */	CALL(sys_setns)
 #ifndef syscalls_counted
 .equ syscalls_padding, ((NR_syscalls + 3) & ~3) - NR_syscalls
 #define syscalls_counted

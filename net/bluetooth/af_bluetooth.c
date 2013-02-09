@@ -43,12 +43,10 @@
 #ifdef CONFIG_ANDROID_PARANOID_NETWORK
 #include <linux/android_aid.h>
 #endif
-
 #ifndef CONFIG_BT_SOCK_DEBUG
 #undef  BT_DBG
 #define BT_DBG(D...)
 #endif
-
 #define VERSION "2.16"
 
 /* Bluetooth sockets */
@@ -149,18 +147,15 @@ static inline int current_has_bt_admin(void)
 {
 	return 1;
 }
-
 static inline int current_has_bt(void)
 {
 	return 1;
 }
 #endif
-
 static int bt_sock_create(struct net *net, struct socket *sock, int proto,
 			  int kern)
 {
 	int err;
-
 	if (proto == BTPROTO_RFCOMM || proto == BTPROTO_SCO ||
 			proto == BTPROTO_L2CAP) {
 		if (!current_has_bt())
@@ -387,7 +382,7 @@ int bt_sock_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
 		}
 
 		chunk = min_t(unsigned int, skb->len, size);
-		if (memcpy_toiovec(msg->msg_iov, skb->data, chunk)) {
+		if (skb_copy_datagram_iovec(skb, 0, msg->msg_iov, chunk)) {
 			skb_queue_head(&sk->sk_receive_queue, skb);
 			if (!copied)
 				copied = -EFAULT;
@@ -399,7 +394,33 @@ int bt_sock_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
 		sock_recv_ts_and_drops(msg, sk, skb);
 
 		if (!(flags & MSG_PEEK)) {
-			skb_pull(skb, chunk);
+			int skb_len = skb_headlen(skb);
+
+			if (chunk <= skb_len) {
+				__skb_pull(skb, chunk);
+			} else {
+				struct sk_buff *frag;
+
+				__skb_pull(skb, skb_len);
+				chunk -= skb_len;
+
+				skb_walk_frags(skb, frag) {
+					if (chunk <= frag->len) {
+						/* Pulling partial data */
+						skb->len -= chunk;
+						skb->data_len -= chunk;
+						__skb_pull(frag, chunk);
+						break;
+					} else if (frag->len) {
+						/* Pulling all frag data */
+						chunk -= frag->len;
+						skb->len -= frag->len;
+						skb->data_len -= frag->len;
+						__skb_pull(frag, frag->len);
+					}
+				}
+			}
+
 			if (skb->len) {
 				skb_queue_head(&sk->sk_receive_queue, skb);
 				break;

@@ -83,6 +83,23 @@ config SATA_AHCI_PLATFORM
 
 	  If unsure, say N.
 
+config SATA_AHCI_TEGRA
+	tristate "TEGRA AHCI SATA support"
+	depends on ARCH_TEGRA_3x_SOC
+	help
+	  This option enables support for TEGRA AHCI Serial ATA.
+
+	  If unsure, say N.
+
+config TEGRA_SATA_IDLE_POWERGATE
+	bool "TEGRA SATA idle power-gating"
+	depends on SATA_AHCI_TEGRA && PM && PM_RUNTIME
+	help
+	  This option enables power-gating during SATA idling.
+	  This option should not be enabled if sata clocks are in dvfs_table.
+
+	  If unsure, say N.
+
 config SATA_FSL
 	tristate "Freescale 3.0Gbps SATA support"
 	depends on FSL_SOC
@@ -313,6 +330,7 @@ config PATA_AMD
 
 config PATA_ARASAN_CF
 	tristate "ARASAN CompactFlash PATA Controller Support"
+	depends on DMADEVICES
 	select DMA_ENGINE
 	help
 	  Say Y here to support the ARASAN CompactFlash PATA controller
@@ -466,6 +484,15 @@ config PATA_ICSIDE
 	  On Acorn systems, say Y here if you wish to use the ICS PATA
 	  interface card.  This is not required for ICS partition support.
 	  If you are unsure, say N to this.
+
+config PATA_IMX
+	tristate "PATA support for Freescale iMX"
+	depends on ARCH_MXC
+	help
+	  This option enables support for the PATA host available on Freescale
+          iMX SoCs.
+
+	  If unsure, say N.
 
 config PATA_IT8213
 	tristate "IT8213 PATA support (Experimental)"

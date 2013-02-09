@@ -35,39 +35,10 @@ struct tegra_uart_platform_data {
 	bool is_loopback;
 
 #ifdef CONFIG_SERIAL_TEGRA_BRCM
-
-        /* BRCM_BT */
-        int rx_wakeup_irq;      /* wakeup irq */
-        /* bool: inject char into rx tty on wakeup */
-        unsigned char inject_rx_on_wakeup;
-        char rx_to_inject;
-        int (*gpio_config)(int);
-        void (*exit_lpm_cb)(struct uart_port *);
-
-        unsigned char cpu_lock_supported;
-
-		unsigned char bt_rts;
-		unsigned char bt_cts;
-		unsigned char bt_tx;
-		unsigned char bt_rx;
-
-        unsigned char bt_rts_pinmux;
-        unsigned char bt_cts_pinmux;
-        unsigned char bt_tx_pinmux;
-        unsigned char bt_rx_pinmux;
-
-        /* for bcm */
-        unsigned char bt_wakeup_pin_supported;
-        unsigned char bt_wakeup_pin;    /* Device to Chip */
-        unsigned char host_wakeup_pin;  /* Chip to Device */
-        unsigned char host_wakeup_pinmux;
-
+	unsigned char bt_wakeup_pin_supported;
+	unsigned char bt_wakeup_pin;    /* Device to Chip */
+	unsigned char host_wakeup_pin;  /* Chip to Device */
 #endif /* BRCM_BT */
-#ifdef CONFIG_SHARK_TD_WORKSHOP
-	bool uart_ipc;
-	unsigned bp_int_ap;
-	unsigned ap_int_bp;
-#endif
 #ifdef CONFIG_BT_CTS_WAKEUP
 	bool uart_bt;
 	unsigned bt_en;
@@ -79,15 +50,6 @@ int tegra_uart_is_tx_empty(struct uart_port *);
 void tegra_uart_request_clock_on(struct uart_port *);
 void tegra_uart_set_mctrl(struct uart_port *, unsigned int);
 void tegra_uart_request_clock_off(struct uart_port *uport);
-
-#ifdef CONFIG_SERIAL_TEGRA_BRCM
-void tegra_uart_config_active_mode(struct uart_port *u);
-void tegra_uart_config_sleep_mode(struct uart_port *u);
-void tegra_brcm_uart_request_clock_on(struct uart_port *);
-void tegra_brcm_uart_request_clock_on_locked(struct uart_port *);
-void tegra_brcm_uart_request_clock_off(struct uart_port *uport);
-void tegra_brcm_uart_request_clock_off_locked(struct uart_port *uport);
-#endif
 
 #endif /* _TEGRA_UART_H_ */
 

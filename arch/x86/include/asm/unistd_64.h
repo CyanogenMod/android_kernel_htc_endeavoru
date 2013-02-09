@@ -414,7 +414,7 @@ __SYSCALL(__NR_query_module, sys_ni_syscall)
 __SYSCALL(__NR_quotactl, sys_quotactl)
 
 #define __NR_nfsservctl				180
-__SYSCALL(__NR_nfsservctl, sys_nfsservctl)
+__SYSCALL(__NR_nfsservctl, sys_ni_syscall)
 
 /* reserved for LiS/STREAMS */
 #define __NR_getpmsg				181
@@ -677,6 +677,12 @@ __SYSCALL(__NR_open_by_handle_at, sys_open_by_handle_at)
 __SYSCALL(__NR_clock_adjtime, sys_clock_adjtime)
 #define __NR_syncfs                             306
 __SYSCALL(__NR_syncfs, sys_syncfs)
+#define __NR_sendmmsg				307
+__SYSCALL(__NR_sendmmsg, sys_sendmmsg)
+#define __NR_setns				308
+__SYSCALL(__NR_setns, sys_setns)
+#define __NR_getcpu				309
+__SYSCALL(__NR_getcpu, sys_getcpu)
 
 #ifndef __NO_STUBS
 #define __ARCH_WANT_OLD_READDIR

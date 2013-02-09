@@ -3,7 +3,7 @@
  *
  * CPU complex suspend & resume functions for Tegra SoCs
  *
- * Copyright (c) 2009-2011, NVIDIA Corporation.
+ * Copyright (c) 2009-2012, NVIDIA Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,6 +33,7 @@
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/suspend.h>
+#include <linux/earlysuspend.h>
 #include <linux/slab.h>
 #include <linux/serial_reg.h>
 #include <linux/seq_file.h>
@@ -41,10 +42,13 @@
 #include <linux/vmalloc.h>
 #include <linux/memblock.h>
 #include <linux/console.h>
+#include <linux/pm_qos_params.h>
+#include <linux/tegra_audio.h>
+
+#include <trace/events/power.h>
 
 #include <asm/cacheflush.h>
 #include <asm/cpu_pm.h>
-#include <asm/hardware/cache-l2x0.h>
 #include <asm/hardware/gic.h>
 #include <asm/localtimer.h>
 #include <asm/pgalloc.h>
@@ -55,7 +59,7 @@
 #include <mach/iomap.h>
 #include <mach/irqs.h>
 #include <mach/powergate.h>
-
+#include <mach/mfootprint.h>
 #include "board.h"
 #include "clock.h"
 #include "cpuidle.h"
@@ -133,12 +137,14 @@ struct suspend_context tegra_sctx;
 #define PMC_SW_WAKE_STATUS	0x18
 #define PMC_WAKE2_STATUS	0x168
 #define PMC_COREPWRGOOD_TIMER	0x3c
-#define PMC_SCRATCH0		0x50
-#define PMC_SCRATCH1		0x54
-#define PMC_SCRATCH4		0x60
 #define PMC_CPUPWRGOOD_TIMER	0xc8
 #define PMC_CPUPWROFF_TIMER	0xcc
 #define PMC_COREPWROFF_TIMER	PMC_WAKE_DELAY
+
+#define PMC_PWRGATE_TOGGLE	0x30
+#define PWRGATE_TOGGLE_START	(1 << 8)
+#define UN_PWRGATE_CPU		\
+	(PWRGATE_TOGGLE_START | TEGRA_CPU_POWERGATE_ID(TEGRA_POWERGATE_CPU))
 
 #ifdef CONFIG_TEGRA_CLUSTER_CONTROL
 #define PMC_SCRATCH4_WAKE_CLUSTER_MASK	(1<<31)
@@ -173,18 +179,24 @@ struct suspend_context tegra_sctx;
 #define MC_SECURITY_SIZE	0x70
 #define MC_SECURITY_CFG2	0x7c
 
+#define AWAKE_CPU_FREQ_MIN	51000
+static struct pm_qos_request_list awake_cpu_freq_req;
+
+/*
+ * SCLK_ADJUST_DELAY is timeout to delay lowering SCLK
+ * after display off/suspend. SCLK is kept at 40Mhz for the specified
+ * timeout period. This is done to solve audio glitch as it was
+ * found that dropping SCLK at 12Mhz doesn't provive enough bandwidth.
+ */
+#define SCLK_ADJUST_DELAY 20000
+static struct	delayed_work delayed_adjust;
+DEFINE_MUTEX(early_suspend_lock);
+
 struct dvfs_rail *tegra_cpu_rail;
 static struct dvfs_rail *tegra_core_rail;
 static struct clk *tegra_pclk;
 static const struct tegra_suspend_platform_data *pdata;
 static enum tegra_suspend_mode current_suspend_mode = TEGRA_SUSPEND_NONE;
-
-static const char *tegra_suspend_name[TEGRA_MAX_SUSPEND_MODE] = {
-	[TEGRA_SUSPEND_NONE]	= "none",
-	[TEGRA_SUSPEND_LP2]	= "lp2",
-	[TEGRA_SUSPEND_LP1]	= "lp1",
-	[TEGRA_SUSPEND_LP0]	= "lp0",
-};
 
 #if defined(CONFIG_TEGRA_CLUSTER_CONTROL) && INSTRUMENT_CLUSTER_SWITCH
 enum tegra_cluster_switch_time_id {
@@ -215,6 +227,13 @@ static unsigned long
 #endif
 
 #ifdef CONFIG_PM_SLEEP
+static const char *tegra_suspend_name[TEGRA_MAX_SUSPEND_MODE] = {
+	[TEGRA_SUSPEND_NONE]	= "none",
+	[TEGRA_SUSPEND_LP2]	= "lp2",
+	[TEGRA_SUSPEND_LP1]	= "lp1",
+	[TEGRA_SUSPEND_LP0]	= "lp0",
+};
+
 unsigned long tegra_cpu_power_good_time(void)
 {
 	if (WARN_ON_ONCE(!pdata))
@@ -251,8 +270,9 @@ static __init int create_suspend_pgtable(void)
 	if (!tegra_pgd)
 		return -ENOMEM;
 
+	/* Only identity-map size of lowmem (high_memory - PAGE_OFFSET) */
 	identity_mapping_add(tegra_pgd, PLAT_PHYS_OFFSET,
-			     PLAT_PHYS_OFFSET + memblock_phys_mem_size());
+		PLAT_PHYS_OFFSET + (unsigned long)high_memory - PAGE_OFFSET);
 	identity_mapping_add(tegra_pgd, IO_IRAM_PHYS,
 		IO_IRAM_PHYS + SECTION_SIZE);
 
@@ -366,14 +386,6 @@ static void restore_cpu_complex(u32 mode)
 	unsigned int reg, policy;
 
 	BUG_ON(cpu != 0);
-
-	/* restore original PLL settings */
-#ifdef CONFIG_ARCH_TEGRA_2x_SOC
-	writel(tegra_sctx.pllp_misc, clk_rst + CLK_RESET_PLLP_MISC);
-	writel(tegra_sctx.pllp_base, clk_rst + CLK_RESET_PLLP_BASE);
-#endif
-	writel(tegra_sctx.pllp_outa, clk_rst + CLK_RESET_PLLP_OUTA);
-	writel(tegra_sctx.pllp_outb, clk_rst + CLK_RESET_PLLP_OUTB);
 
 	/* Is CPU complex already running on PLLX? */
 	reg = readl(clk_rst + CLK_RESET_CCLK_BURST);
@@ -537,7 +549,7 @@ bool tegra_set_cpu_in_lp2(int cpu)
 	if ((cpu == 0) && cpumask_equal(&tegra_in_lp2, cpu_online_mask))
 		last_cpu = true;
 #ifdef CONFIG_ARCH_TEGRA_2x_SOC
-	else
+	else if (cpu == 1)
 		tegra2_cpu_set_resettable_soon();
 #endif
 
@@ -545,17 +557,27 @@ bool tegra_set_cpu_in_lp2(int cpu)
 	return last_cpu;
 }
 
+bool tegra_is_cpu_in_lp2(int cpu)
+{
+	bool in_lp2;
+
+	spin_lock(&tegra_lp2_lock);
+	in_lp2 = cpumask_test_cpu(cpu, &tegra_in_lp2);
+	spin_unlock(&tegra_lp2_lock);
+	return in_lp2;
+}
+
 static void tegra_sleep_core(enum tegra_suspend_mode mode,
 			     unsigned long v2p)
 {
 #ifdef CONFIG_TRUSTED_FOUNDATIONS
 	if (mode == TEGRA_SUSPEND_LP0) {
-		tegra_generic_smc(0xFFFFFFFC, 0xFFFFFFE3,
-				  virt_to_phys(tegra_resume));
+		tegra_generic_smc_uncached(0xFFFFFFFC, 0xFFFFFFE3,
+					   virt_to_phys(tegra_resume));
 	} else {
-		tegra_generic_smc(0xFFFFFFFC, 0xFFFFFFE6,
-				  (TEGRA_RESET_HANDLER_BASE +
-				   tegra_cpu_reset_handler_offset));
+		tegra_generic_smc_uncached(0xFFFFFFFC, 0xFFFFFFE6,
+					   (TEGRA_RESET_HANDLER_BASE +
+					    tegra_cpu_reset_handler_offset));
 	}
 #endif
 #ifdef CONFIG_ARCH_TEGRA_2x_SOC
@@ -568,9 +590,19 @@ static void tegra_sleep_core(enum tegra_suspend_mode mode,
 static inline void tegra_sleep_cpu(unsigned long v2p)
 {
 #ifdef CONFIG_TRUSTED_FOUNDATIONS
-	tegra_generic_smc(0xFFFFFFFC, 0xFFFFFFE4,
-			  (TEGRA_RESET_HANDLER_BASE +
-			   tegra_cpu_reset_handler_offset));
+	if (tegra_is_cpu_in_lp2(0)) {
+		struct thread_info *thread;
+
+		/* flush thread state (sleep SMC will also disable L2) */
+		thread = current_thread_info();
+		BUG_ON(!thread);
+
+		__cpuc_flush_dcache_area(thread, THREAD_SIZE);
+		outer_flush_range(__pa(thread), __pa(thread) + THREAD_SIZE);
+	}
+	tegra_generic_smc_uncached(0xFFFFFFFC, 0xFFFFFFE4,
+				   (TEGRA_RESET_HANDLER_BASE +
+				    tegra_cpu_reset_handler_offset));
 #endif
 	tegra_sleep_cpu_save(v2p);
 }
@@ -579,6 +611,7 @@ unsigned int tegra_idle_lp2_last(unsigned int sleep_time, unsigned int flags)
 {
 	u32 mode;	/* hardware + software power mode flags */
 	unsigned int remain;
+	pgd_t *pgd;
 
 	/* Only the last cpu down does the final suspend steps */
 	mode = readl(pmc + PMC_CTRL);
@@ -588,8 +621,7 @@ unsigned int tegra_idle_lp2_last(unsigned int sleep_time, unsigned int flags)
 	else
 		mode |= TEGRA_POWER_PWRREQ_OE;
 	mode &= ~TEGRA_POWER_EFFECT_LP0;
-	pmc_32kwritel(mode, PMC_CTRL);
-	mode |= flags;
+	writel(mode, pmc + PMC_CTRL);
 
 	tegra_cluster_switch_time(flags, tegra_cluster_switch_time_id_start);
 
@@ -598,9 +630,20 @@ unsigned int tegra_idle_lp2_last(unsigned int sleep_time, unsigned int flags)
 	 * are in LP2 state and irqs are disabled
 	 */
 	if (flags & TEGRA_POWER_CLUSTER_MASK) {
+		trace_cpu_cluster(POWER_CPU_CLUSTER_START);
 		set_power_timers(pdata->cpu_timer, 0,
 			clk_get_rate_all_locked(tegra_pclk));
-		tegra_cluster_switch_prolog(mode);
+		if (flags & TEGRA_POWER_CLUSTER_G) {
+			/*
+			 * To reduce the vdd_cpu up latency when LP->G
+			 * transition. Before the transition, enable
+			 * the vdd_cpu rail.
+			 */
+			if (is_lp_cluster())
+				writel(UN_PWRGATE_CPU,
+				       pmc + PMC_PWRGATE_TOGGLE);
+		}
+		tegra_cluster_switch_prolog(flags);
 	} else {
 		set_power_timers(pdata->cpu_timer, pdata->cpu_off_timer,
 			clk_get_rate_all_locked(tegra_pclk));
@@ -610,32 +653,39 @@ unsigned int tegra_idle_lp2_last(unsigned int sleep_time, unsigned int flags)
 		tegra_lp2_set_trigger(sleep_time);
 
 	cpu_complex_pm_enter();
-	suspend_cpu_complex(mode);
+	suspend_cpu_complex(flags);
 	tegra_cluster_switch_time(flags, tegra_cluster_switch_time_id_prolog);
 	flush_cache_all();
+	/*
+	 * No need to flush complete L2. Cleaning kernel and IO mappings
+	 * is enough for the LP code sequence that has L2 disabled but
+	 * MMU on.
+	 */
+	pgd = cpu_get_pgd();
+	outer_clean_range(__pa(pgd + USER_PTRS_PER_PGD),
+			  __pa(pgd + PTRS_PER_PGD));
 	outer_disable();
 
 	tegra_sleep_cpu(PLAT_PHYS_OFFSET - PAGE_OFFSET);
 
-#ifdef CONFIG_CACHE_L2X0
 	tegra_init_cache(false);
-#endif
 	tegra_cluster_switch_time(flags, tegra_cluster_switch_time_id_switch);
-	restore_cpu_complex(mode);
+	restore_cpu_complex(flags);
 	cpu_complex_pm_exit();
 
 	remain = tegra_lp2_timer_remain();
 	if (sleep_time)
 		tegra_lp2_set_trigger(0);
 
-	if (flags & TEGRA_POWER_CLUSTER_MASK)
-		tegra_cluster_switch_epilog(mode);
-
+	if (flags & TEGRA_POWER_CLUSTER_MASK) {
+		tegra_cluster_switch_epilog(flags);
+		trace_cpu_cluster(POWER_CPU_CLUSTER_DONE);
+	}
 	tegra_cluster_switch_time(flags, tegra_cluster_switch_time_id_epilog);
 
 #if INSTRUMENT_CLUSTER_SWITCH
 	if (flags & TEGRA_POWER_CLUSTER_MASK) {
-		pr_info("%s: prolog %lu us, switch %lu us, epilog %lu us, total %lu us\n",
+		pr_err("%s: prolog %lu us, switch %lu us, epilog %lu us, total %lu us\n",
 			is_lp_cluster() ? "G=>LP" : "LP=>G",
 			tegra_cluster_switch_times[tegra_cluster_switch_time_id_prolog] -
 			tegra_cluster_switch_times[tegra_cluster_switch_time_id_start],
@@ -720,7 +770,9 @@ static void tegra_pm_set(enum tegra_suspend_mode mode)
 
 	switch (mode) {
 	case TEGRA_SUSPEND_LP0:
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
 		rate = clk_get_rate_all_locked(tegra_pclk);
+#endif
 		if (pdata->combined_req) {
 			reg |= TEGRA_POWER_PWRREQ_OE;
 			reg &= ~TEGRA_POWER_CPU_PWRREQ_OE;
@@ -782,6 +834,10 @@ static int tegra_suspend_enter(suspend_state_t state)
 	read_persistent_clock(&ts_entry);
 
 	ret = tegra_suspend_dram(current_suspend_mode, 0);
+	if (ret) {
+		pr_info("[R] Aborting suspend, tegra_suspend_dram error=%d\n", ret);
+		goto abort_suspend;
+	}
 
 	read_persistent_clock(&ts_exit);
 
@@ -795,6 +851,7 @@ static int tegra_suspend_enter(suspend_state_t state)
 			tegra_dvfs_rail_pause(tegra_core_rail, delta, true);
 	}
 
+abort_suspend:
 	if (pdata && pdata->board_resume)
 		pdata->board_resume(current_suspend_mode, TEGRA_RESUME_AFTER_PERIPHERAL);
 
@@ -830,12 +887,27 @@ static void tegra_suspend_check_pwr_stats(void)
 unsigned long long wake_reason_resume;
 EXPORT_SYMBOL(wake_reason_resume);
 
-int resume_from_deep_suspend;
-EXPORT_SYMBOL(resume_from_deep_suspend);
-
 int tegra_suspend_dram(enum tegra_suspend_mode mode, unsigned int flags)
 {
-	BUG_ON(mode < 0 || mode >= TEGRA_MAX_SUSPEND_MODE);
+	int err = 0;
+	u32 scratch37 = 0xDEADBEEF;
+
+	if (WARN_ON(mode <= TEGRA_SUSPEND_NONE ||
+		mode >= TEGRA_MAX_SUSPEND_MODE)) {
+		err = -ENXIO;
+		goto fail;
+	}
+
+	if (tegra_is_voice_call_active()) {
+		u32 reg;
+
+		/* backup the current value of scratch37 */
+		scratch37 = readl(pmc + PMC_SCRATCH37);
+
+		/* If voice call is active, set a flag in PMC_SCRATCH37 */
+		reg = TEGRA_POWER_LP1_AUDIO;
+		pmc_32kwritel(reg, PMC_SCRATCH37);
+	}
 
 	if ((mode == TEGRA_SUSPEND_LP0) && !tegra_pm_irq_lp0_allowed()) {
 		pr_info("LP0 not used due to unsupported wakeup events\n");
@@ -853,6 +925,8 @@ int tegra_suspend_dram(enum tegra_suspend_mode mode, unsigned int flags)
 		pdata->board_suspend(mode, TEGRA_SUSPEND_BEFORE_CPU);
 
 	local_fiq_disable();
+
+	trace_cpu_suspend(CPU_SUSPEND_START);
 
 	cpu_pm_enter();
 	cpu_complex_pm_enter();
@@ -879,6 +953,9 @@ int tegra_suspend_dram(enum tegra_suspend_mode mode, unsigned int flags)
 	outer_flush_all();
 	outer_disable();
 
+	/* SSD_RIL: Workaround for resume HSIC Strobe glitch. */
+	writel(0x800, pmc + 0x0e0);
+
 	if (mode == TEGRA_SUSPEND_LP2)
 		tegra_sleep_cpu(PLAT_PHYS_OFFSET - PAGE_OFFSET);
 	else
@@ -891,6 +968,10 @@ int tegra_suspend_dram(enum tegra_suspend_mode mode, unsigned int flags)
 		tegra_lp0_resume_mc();
 	} else if (mode == TEGRA_SUSPEND_LP1)
 		*iram_cpu_lp1_mask = 0;
+
+	/* if scratch37 was clobbered during LP1, restore it */
+	if (scratch37 != 0xDEADBEEF)
+		pmc_32kwritel(scratch37, PMC_SCRATCH37);
 
 	restore_cpu_complex(flags);
 
@@ -913,15 +994,17 @@ int tegra_suspend_dram(enum tegra_suspend_mode mode, unsigned int flags)
 	if (pdata && pdata->board_resume)
 		pdata->board_resume(mode, TEGRA_RESUME_AFTER_CPU);
 
+	trace_cpu_suspend(CPU_SUSPEND_DONE);
+
 	local_fiq_enable();
 
 	tegra_common_resume();
 
 	wake_reason_resume = __raw_readl(pmc + PMC_WAKE_STATUS);
 	wake_reason_resume |= ((u64)readl(pmc + PMC_WAKE2_STATUS)) << 32;
-	resume_from_deep_suspend = 1;
 
-	return 0;
+fail:
+	return err;
 }
 
 /*
@@ -995,6 +1078,12 @@ static ssize_t suspend_mode_store(struct kobject *kobj,
 	len = name_ptr - buf;
 	if (!len)
 		goto bad_name;
+	/* TEGRA_SUSPEND_NONE not allowed as suspend state */
+	if (!(strncmp(buf, tegra_suspend_name[TEGRA_SUSPEND_NONE], len))
+		|| !(strncmp(buf, tegra_suspend_name[TEGRA_SUSPEND_LP2], len))) {
+		pr_info("Illegal tegra suspend state: %s\n", buf);
+		goto bad_name;
+	}
 
 	for (new_mode = TEGRA_SUSPEND_NONE; \
 			new_mode < TEGRA_MAX_SUSPEND_MODE; ++new_mode) {
@@ -1012,9 +1101,7 @@ static struct kobj_attribute suspend_mode_attribute =
 	__ATTR(mode, 0644, suspend_mode_show, suspend_mode_store);
 
 static struct kobject *suspend_kobj;
-#endif
 
-#ifdef CONFIG_PM_SLEEP
 static int tegra_pm_enter_suspend(void)
 {
 	pr_info("[R] Entering suspend state %s\n", lp_state[current_suspend_mode]);
@@ -1050,11 +1137,17 @@ void __init tegra_init_suspend(struct tegra_suspend_platform_data *plat)
 
 	tegra_cpu_rail = tegra_dvfs_get_rail_by_name("vdd_cpu");
 	tegra_core_rail = tegra_dvfs_get_rail_by_name("vdd_core");
+	pm_qos_add_request(&awake_cpu_freq_req, PM_QOS_CPU_FREQ_MIN,
+			   AWAKE_CPU_FREQ_MIN);
+
 	tegra_pclk = clk_get_sys(NULL, "pclk");
 	BUG_ON(IS_ERR(tegra_pclk));
 	pdata = plat;
 	(void)reg;
 	(void)mode;
+
+	if (plat->suspend_mode == TEGRA_SUSPEND_LP2)
+		plat->suspend_mode = TEGRA_SUSPEND_LP0;
 
 #ifndef CONFIG_PM_SLEEP
 	if (plat->suspend_mode != TEGRA_SUSPEND_NONE) {
@@ -1141,13 +1234,11 @@ out:
 	writel(0, pmc + PMC_SCRATCH41);
 
 	/* Always enable CPU power request; just normal polarity is supported */
-//#ifndef CONFIG_MACH_ENDEAVORU || CONFIG_MACH_ENDEAVORUTD
-#if !defined(CONFIG_MACH_ENDEAVORU) && !defined(CONFIG_MACH_ENDEAVORTD)
 	reg = readl(pmc + PMC_CTRL);
 	BUG_ON(reg & TEGRA_POWER_CPU_PWRREQ_POLARITY);
 	reg |= TEGRA_POWER_CPU_PWRREQ_OE;
 	pmc_32kwritel(reg, PMC_CTRL);
-#endif
+
 	/* Configure core power request and system clock control if LP0
 	   is supported */
 	__raw_writel(pdata->core_timer, pmc + PMC_COREPWRGOOD_TIMER);
@@ -1190,6 +1281,10 @@ out:
 
 	iram_cpu_lp2_mask = tegra_cpu_lp2_mask;
 	iram_cpu_lp1_mask = tegra_cpu_lp1_mask;
+
+	/* clear io dpd settings before kernel */
+	tegra_bl_io_dpd_cleanup();
+
 fail:
 #endif
 	if (plat->suspend_mode == TEGRA_SUSPEND_NONE)
@@ -1289,3 +1384,54 @@ static int tegra_debug_uart_syscore_init(void)
 	return 0;
 }
 arch_initcall(tegra_debug_uart_syscore_init);
+
+#ifdef CONFIG_HAS_EARLYSUSPEND
+static struct clk *clk_wake;
+static void delayed_adjusting_work(struct work_struct *work)
+{
+	mutex_lock(&early_suspend_lock);
+	if (clk_wake)
+		clk_disable(clk_wake);
+	mutex_unlock(&early_suspend_lock);
+}
+
+static void pm_early_suspend(struct early_suspend *h)
+{
+	MF_DEBUG("00230000");
+	mutex_lock(&early_suspend_lock);
+	MF_DEBUG("00230001");
+	schedule_delayed_work(&delayed_adjust, msecs_to_jiffies(SCLK_ADJUST_DELAY));
+	MF_DEBUG("00230002");
+	pm_qos_update_request(&awake_cpu_freq_req, PM_QOS_DEFAULT_VALUE);
+	MF_DEBUG("00230003");
+	mutex_unlock(&early_suspend_lock);
+	MF_DEBUG("00230004");
+}
+
+static void pm_late_resume(struct early_suspend *h)
+{
+	mutex_lock(&early_suspend_lock);
+	if (clk_wake && (clk_wake->refcnt >= 1))
+		clk_disable(clk_wake);
+	cancel_delayed_work(&delayed_adjust);
+	if (clk_wake)
+		clk_enable(clk_wake);
+	pm_qos_update_request(&awake_cpu_freq_req, (s32)AWAKE_CPU_FREQ_MIN);
+	mutex_unlock(&early_suspend_lock);
+}
+
+static struct early_suspend pm_early_suspender = {
+		.suspend = pm_early_suspend,
+		.resume = pm_late_resume,
+};
+
+static int pm_init_wake_behavior(void)
+{
+	clk_wake = tegra_get_clock_by_name("wake.sclk");
+	register_early_suspend(&pm_early_suspender);
+	INIT_DELAYED_WORK(&delayed_adjust, delayed_adjusting_work);
+	return 0;
+}
+
+late_initcall(pm_init_wake_behavior);
+#endif

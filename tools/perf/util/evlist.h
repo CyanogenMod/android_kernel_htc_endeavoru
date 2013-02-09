@@ -53,6 +53,9 @@ int perf_evlist__alloc_mmap(struct perf_evlist *evlist);
 int perf_evlist__mmap(struct perf_evlist *evlist, int pages, bool overwrite);
 void perf_evlist__munmap(struct perf_evlist *evlist);
 
+void perf_evlist__disable(struct perf_evlist *evlist);
+void perf_evlist__enable(struct perf_evlist *evlist);
+
 static inline void perf_evlist__set_maps(struct perf_evlist *evlist,
 					 struct cpu_map *cpus,
 					 struct thread_map *threads)
@@ -66,4 +69,9 @@ int perf_evlist__create_maps(struct perf_evlist *evlist, pid_t target_pid,
 void perf_evlist__delete_maps(struct perf_evlist *evlist);
 int perf_evlist__set_filters(struct perf_evlist *evlist);
 
+u64 perf_evlist__sample_type(const struct perf_evlist *evlist);
+bool perf_evlist__sample_id_all(const const struct perf_evlist *evlist);
+
+bool perf_evlist__valid_sample_type(const struct perf_evlist *evlist);
+bool perf_evlist__valid_sample_id_all(const struct perf_evlist *evlist);
 #endif /* __PERF_EVLIST_H */

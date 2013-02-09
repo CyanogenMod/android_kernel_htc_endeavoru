@@ -20,7 +20,6 @@
 #include <linux/profile.h>
 #include <linux/sched.h>
 #include <linux/module.h>
-
 #include <asm/irq_regs.h>
 
 #include "tick-internal.h"
@@ -325,8 +324,8 @@ void tick_nohz_stop_sched_tick(int inidle)
 
 	if (rcu_needs_cpu(cpu) || printk_needs_cpu(cpu) ||
 	    arch_needs_cpu(cpu)) {
-		next_jiffies = last_jiffies + 1;
-		delta_jiffies = 1;
+		next_jiffies = last_jiffies + jiffies_per_tick;
+		delta_jiffies = jiffies_per_tick;
 	} else {
 		/* Get the next timer wheel timer */
 		next_jiffies = get_next_timer_interrupt(last_jiffies);
@@ -336,11 +335,11 @@ void tick_nohz_stop_sched_tick(int inidle)
 	 * Do not stop the tick, if we are only one off
 	 * or if the cpu is required for rcu
 	 */
-	if (!ts->tick_stopped && delta_jiffies == 1)
+	if (!ts->tick_stopped && delta_jiffies == jiffies_per_tick)
 		goto out;
 
 	/* Schedule the tick, if we are at least one jiffie off */
-	if ((long)delta_jiffies >= 1) {
+	if ((long)delta_jiffies >= jiffies_per_tick) {
 
 		/*
 		 * If this cpu is the one which updates jiffies, then
@@ -389,7 +388,7 @@ void tick_nohz_stop_sched_tick(int inidle)
 		else
 			expires.tv64 = KTIME_MAX;
 
-		if (delta_jiffies > 1)
+		if (delta_jiffies > jiffies_per_tick)
 			cpumask_set_cpu(cpu, nohz_cpu_mask);
 
 		/* Skip reprogram of event if its not changed */
@@ -690,7 +689,6 @@ static inline void tick_check_nohz(int cpu)
 		tick_nohz_kick_tick(cpu, now);
 	}
 }
-
 #else
 
 static inline void tick_nohz_switch_to_nohz(void) { }

@@ -25,7 +25,7 @@
 //#include <linux/clk.h>
 
 
-static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_400[] = {
+static const struct tegra_emc_table endeavor_emc_tables_h5tc2g_400[] = {
 	{
 		0x31,       /* Rev 3.1 */
 		25500,      /* SDRAM frequency */
@@ -623,7 +623,7 @@ static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_400[] = {
 	},
 };
 
-static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_533[] = 
+static const struct tegra_emc_table endeavor_emc_tables_h5tc2g_533[] = 
 {
 	{
 		0x32,       /* Rev 3.2 */
@@ -716,7 +716,7 @@ static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_533[] =
 			0x00000000, /* EMC_CTT */
 			0x00000000, /* EMC_CTT_DURATION */
 			0x800001c5, /* EMC_DYN_SELF_REF_CONTROL */
-			0x00020001, /* MC_EMEM_ARB_CFG */
+			0x00030003, /* MC_EMEM_ARB_CFG */
 			0xc0000010, /* MC_EMEM_ARB_OUTSTANDING_REQ */
 			0x00000001, /* MC_EMEM_ARB_TIMING_RCD */
 			0x00000001, /* MC_EMEM_ARB_TIMING_RP */
@@ -836,7 +836,7 @@ static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_533[] =
 			0x00000000, /* EMC_CTT */
 			0x00000000, /* EMC_CTT_DURATION */
 			0x80000287, /* EMC_DYN_SELF_REF_CONTROL */
-			0x00010001, /* MC_EMEM_ARB_CFG */
+			0x00010003, /* MC_EMEM_ARB_CFG */
 			0xc0000010, /* MC_EMEM_ARB_OUTSTANDING_REQ */
 			0x00000001, /* MC_EMEM_ARB_TIMING_RCD */
 			0x00000001, /* MC_EMEM_ARB_TIMING_RP */
@@ -956,7 +956,7 @@ static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_533[] =
 			0x00000000, /* EMC_CTT */
 			0x00000000, /* EMC_CTT_DURATION */
 			0x8000040b, /* EMC_DYN_SELF_REF_CONTROL */
-			0x00000001, /* MC_EMEM_ARB_CFG */
+			0x00000003, /* MC_EMEM_ARB_CFG */
 			0xc0000018, /* MC_EMEM_ARB_OUTSTANDING_REQ */
 			0x00000001, /* MC_EMEM_ARB_TIMING_RCD */
 			0x00000001, /* MC_EMEM_ARB_TIMING_RP */
@@ -1076,7 +1076,7 @@ static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_533[] =
 			0x00000000, /* EMC_CTT */
 			0x00000000, /* EMC_CTT_DURATION */
 			0x80000713, /* EMC_DYN_SELF_REF_CONTROL */
-			0x00000003, /* MC_EMEM_ARB_CFG */
+			0x00000006, /* MC_EMEM_ARB_CFG */
 			0xc0000025, /* MC_EMEM_ARB_OUTSTANDING_REQ */
 			0x00000001, /* MC_EMEM_ARB_TIMING_RCD */
 			0x00000001, /* MC_EMEM_ARB_TIMING_RP */
@@ -1104,6 +1104,246 @@ static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_533[] =
 		0x00010042, /* Mode Register 1 */
 		0x00020001, /* Mode Register 2 */
 		0x00000001, /* EMC_CFG.DYN_SELF_REF */
+	},
+	{
+		0x32,       /* Rev 3.2 */
+		266500,     /* SDRAM frequency */
+		{
+			0x0000000f, /* EMC_RC */
+			0x00000022, /* EMC_RFC */
+			0x0000000b, /* EMC_RAS */
+			0x00000004, /* EMC_RP */
+			0x00000005, /* EMC_R2W */
+			0x00000005, /* EMC_W2R */
+			0x00000001, /* EMC_R2P */
+			0x00000007, /* EMC_W2P */
+			0x00000004, /* EMC_RD_RCD */
+			0x00000004, /* EMC_WR_RCD */
+			0x00000002, /* EMC_RRD */
+			0x00000002, /* EMC_REXT */
+			0x00000000, /* EMC_WEXT */
+			0x00000002, /* EMC_WDV */
+			0x00000004, /* EMC_QUSE */
+			0x00000002, /* EMC_QRST */
+			0x0000000c, /* EMC_QSAFE */
+			0x0000000b, /* EMC_RDV */
+			0x000003ef, /* EMC_REFRESH */
+			0x00000000, /* EMC_BURST_REFRESH_NUM */
+			0x000000fb, /* EMC_PRE_REFRESH_REQ_CNT */
+			0x00000001, /* EMC_PDEX2WR */
+			0x00000001, /* EMC_PDEX2RD */
+			0x00000004, /* EMC_PCHG2PDEN */
+			0x00000000, /* EMC_ACT2PDEN */
+			0x00000001, /* EMC_AR2PDEN */
+			0x00000009, /* EMC_RW2PDEN */
+			0x00000026, /* EMC_TXSR */
+			0x00000026, /* EMC_TXSRDLL */
+			0x00000004, /* EMC_TCKE */
+			0x0000000e, /* EMC_TFAW */
+			0x00000006, /* EMC_TRPAB */
+			0x00000004, /* EMC_TCLKSTABLE */
+			0x00000002, /* EMC_TCLKSTOP */
+			0x00000455, /* EMC_TREFBW */
+			0x00000000, /* EMC_QUSE_EXTRA */
+			0x00000006, /* EMC_FBIO_CFG6 */
+			0x00000000, /* EMC_ODT_WRITE */
+			0x00000000, /* EMC_ODT_READ */
+			0x00006282, /* EMC_FBIO_CFG5 */
+			0x003200a4, /* EMC_CFG_DIG_DLL */
+			0x00008000, /* EMC_CFG_DIG_DLL_PERIOD */
+			0x00070000, /* EMC_DLL_XFORM_DQS0 */
+			0x00070000, /* EMC_DLL_XFORM_DQS1 */
+			0x00070000, /* EMC_DLL_XFORM_DQS2 */
+			0x00070000, /* EMC_DLL_XFORM_DQS3 */
+			0x00072000, /* EMC_DLL_XFORM_DQS4 */
+			0x00072000, /* EMC_DLL_XFORM_DQS5 */
+			0x00072000, /* EMC_DLL_XFORM_DQS6 */
+			0x00072000, /* EMC_DLL_XFORM_DQS7 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE0 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE1 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE2 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE3 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE4 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE5 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE6 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE7 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS0 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS1 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS2 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS3 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS4 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS5 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS6 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS7 */
+			0x00080000, /* EMC_DLL_XFORM_DQ0 */
+			0x00080000, /* EMC_DLL_XFORM_DQ1 */
+			0x00080000, /* EMC_DLL_XFORM_DQ2 */
+			0x00080000, /* EMC_DLL_XFORM_DQ3 */
+			0x000e0220, /* EMC_XM2CMDPADCTRL */
+			0x0800003d, /* EMC_XM2DQSPADCTRL2 */
+			0x00000000, /* EMC_XM2DQPADCTRL2 */
+			0x77ffc004, /* EMC_XM2CLKPADCTRL */
+			0x01f1f008, /* EMC_XM2COMPPADCTRL */
+			0x00000000, /* EMC_XM2VTTGENPADCTRL */
+			0x00000007, /* EMC_XM2VTTGENPADCTRL2 */
+			0x08000068, /* EMC_XM2QUSEPADCTRL */
+			0x08000000, /* EMC_XM2DQSPADCTRL3 */
+			0x00000802, /* EMC_CTT_TERM_CTRL */
+			0x00064000, /* EMC_ZCAL_INTERVAL */
+			0x00000060, /* EMC_ZCAL_WAIT_CNT */
+			0x000a000a, /* EMC_MRS_WAIT_CNT */
+			0xa0f10000, /* EMC_AUTO_CAL_CONFIG */
+			0x00000000, /* EMC_CTT */
+			0x00000000, /* EMC_CTT_DURATION */
+			0x800008ee, /* EMC_DYN_SELF_REF_CONTROL */
+			0x00000008, /* MC_EMEM_ARB_CFG */
+			0xc0000030, /* MC_EMEM_ARB_OUTSTANDING_REQ */
+			0x00000001, /* MC_EMEM_ARB_TIMING_RCD */
+			0x00000002, /* MC_EMEM_ARB_TIMING_RP */
+			0x00000008, /* MC_EMEM_ARB_TIMING_RC */
+			0x00000004, /* MC_EMEM_ARB_TIMING_RAS */
+			0x00000006, /* MC_EMEM_ARB_TIMING_FAW */
+			0x00000001, /* MC_EMEM_ARB_TIMING_RRD */
+			0x00000002, /* MC_EMEM_ARB_TIMING_RAP2PRE */
+			0x00000005, /* MC_EMEM_ARB_TIMING_WAP2PRE */
+			0x00000001, /* MC_EMEM_ARB_TIMING_R2R */
+			0x00000000, /* MC_EMEM_ARB_TIMING_W2W */
+			0x00000003, /* MC_EMEM_ARB_TIMING_R2W */
+			0x00000003, /* MC_EMEM_ARB_TIMING_W2R */
+			0x03030001, /* MC_EMEM_ARB_DA_TURNS */
+			0x00090608, /* MC_EMEM_ARB_DA_COVERS */
+			0x70040c09, /* MC_EMEM_ARB_MISC0 */
+			0x001f0000, /* MC_EMEM_ARB_RING1_THROTTLE */
+			0xe0000000, /* EMC_FBIO_SPARE */
+			0xff00ff00, /* EMC_CFG_RSV */
+		},
+		0x00000018, /* EMC_ZCAL_WAIT_CNT after clock change */
+		0x001fffff, /* EMC_AUTO_CAL_INTERVAL */
+		0x00000001, /* EMC_CFG.PERIODIC_QRST */
+		0x00000000, /* Mode Register 0 */
+		0x00010042, /* Mode Register 1 */
+		0x00020002, /* Mode Register 2 */
+		0x00000000, /* EMC_CFG.DYN_SELF_REF */
+	},
+	{
+		0x32,       /* Rev 3.2 */
+		380000,     /* SDRAM frequency */
+		{
+			0x00000016, /* EMC_RC */
+			0x00000031, /* EMC_RFC */
+			0x0000000f, /* EMC_RAS */
+			0x00000006, /* EMC_RP */
+			0x00000007, /* EMC_R2W */
+			0x00000007, /* EMC_W2R */
+			0x00000002, /* EMC_R2P */
+			0x0000000a, /* EMC_W2P */
+			0x00000006, /* EMC_RD_RCD */
+			0x00000006, /* EMC_WR_RCD */
+			0x00000003, /* EMC_RRD */
+			0x00000002, /* EMC_REXT */
+			0x00000000, /* EMC_WEXT */
+			0x00000003, /* EMC_WDV */
+			0x00000007, /* EMC_QUSE */
+			0x00000004, /* EMC_QRST */
+			0x0000000d, /* EMC_QSAFE */
+			0x0000000e, /* EMC_RDV */
+			0x0000059d, /* EMC_REFRESH */
+			0x00000000, /* EMC_BURST_REFRESH_NUM */
+			0x00000167, /* EMC_PRE_REFRESH_REQ_CNT */
+			0x00000002, /* EMC_PDEX2WR */
+			0x00000002, /* EMC_PDEX2RD */
+			0x00000006, /* EMC_PCHG2PDEN */
+			0x00000000, /* EMC_ACT2PDEN */
+			0x00000001, /* EMC_AR2PDEN */
+			0x0000000c, /* EMC_RW2PDEN */
+			0x00000036, /* EMC_TXSR */
+			0x00000036, /* EMC_TXSRDLL */
+			0x00000006, /* EMC_TCKE */
+			0x00000013, /* EMC_TFAW */
+			0x00000008, /* EMC_TRPAB */
+			0x00000004, /* EMC_TCLKSTABLE */
+			0x00000002, /* EMC_TCLKSTOP */
+			0x0000062d, /* EMC_TREFBW */
+			0x00000000, /* EMC_QUSE_EXTRA */
+			0x00000004, /* EMC_FBIO_CFG6 */
+			0x00000000, /* EMC_ODT_WRITE */
+			0x00000000, /* EMC_ODT_READ */
+			0x00006282, /* EMC_FBIO_CFG5 */
+			0x001f0084, /* EMC_CFG_DIG_DLL */
+			0x00008000, /* EMC_CFG_DIG_DLL_PERIOD */
+			0x00050000, /* EMC_DLL_XFORM_DQS0 */
+			0x00050000, /* EMC_DLL_XFORM_DQS1 */
+			0x00050000, /* EMC_DLL_XFORM_DQS2 */
+			0x00050000, /* EMC_DLL_XFORM_DQS3 */
+			0x00072000, /* EMC_DLL_XFORM_DQS4 */
+			0x00072000, /* EMC_DLL_XFORM_DQS5 */
+			0x00072000, /* EMC_DLL_XFORM_DQS6 */
+			0x00072000, /* EMC_DLL_XFORM_DQS7 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE0 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE1 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE2 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE3 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE4 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE5 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE6 */
+			0x00000000, /* EMC_DLL_XFORM_QUSE7 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS0 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS1 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS2 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS3 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS4 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS5 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS6 */
+			0x00000000, /* EMC_DLI_TRIM_TXDQS7 */
+			0x00060000, /* EMC_DLL_XFORM_DQ0 */
+			0x00060000, /* EMC_DLL_XFORM_DQ1 */
+			0x00060000, /* EMC_DLL_XFORM_DQ2 */
+			0x00060000, /* EMC_DLL_XFORM_DQ3 */
+			0x000a0220, /* EMC_XM2CMDPADCTRL */
+			0x0800003d, /* EMC_XM2DQSPADCTRL2 */
+			0x00000000, /* EMC_XM2DQPADCTRL2 */
+			0x77ffc004, /* EMC_XM2CLKPADCTRL */
+			0x01f1f408, /* EMC_XM2COMPPADCTRL */
+			0x00000000, /* EMC_XM2VTTGENPADCTRL */
+			0x00000007, /* EMC_XM2VTTGENPADCTRL2 */
+			0x08000068, /* EMC_XM2QUSEPADCTRL */
+			0x08000000, /* EMC_XM2DQSPADCTRL3 */
+			0x00000802, /* EMC_CTT_TERM_CTRL */
+			0x00064000, /* EMC_ZCAL_INTERVAL */
+			0x00000089, /* EMC_ZCAL_WAIT_CNT */
+			0x000c000c, /* EMC_MRS_WAIT_CNT */
+			0xa0f10000, /* EMC_AUTO_CAL_CONFIG */
+			0x00000000, /* EMC_CTT */
+			0x00000000, /* EMC_CTT_DURATION */
+			0x80000c4d, /* EMC_DYN_SELF_REF_CONTROL */
+			0x0000000b, /* MC_EMEM_ARB_CFG */
+			0xc0000045, /* MC_EMEM_ARB_OUTSTANDING_REQ */
+			0x00000002, /* MC_EMEM_ARB_TIMING_RCD */
+			0x00000003, /* MC_EMEM_ARB_TIMING_RP */
+			0x0000000b, /* MC_EMEM_ARB_TIMING_RC */
+			0x00000006, /* MC_EMEM_ARB_TIMING_RAS */
+			0x00000009, /* MC_EMEM_ARB_TIMING_FAW */
+			0x00000001, /* MC_EMEM_ARB_TIMING_RRD */
+			0x00000002, /* MC_EMEM_ARB_TIMING_RAP2PRE */
+			0x00000006, /* MC_EMEM_ARB_TIMING_WAP2PRE */
+			0x00000001, /* MC_EMEM_ARB_TIMING_R2R */
+			0x00000000, /* MC_EMEM_ARB_TIMING_W2W */
+			0x00000004, /* MC_EMEM_ARB_TIMING_R2W */
+			0x00000004, /* MC_EMEM_ARB_TIMING_W2R */
+			0x04040001, /* MC_EMEM_ARB_DA_TURNS */
+			0x000c080b, /* MC_EMEM_ARB_DA_COVERS */
+			0x7026120c, /* MC_EMEM_ARB_MISC0 */
+			0x001f0000, /* MC_EMEM_ARB_RING1_THROTTLE */
+			0xe0000000, /* EMC_FBIO_SPARE */
+			0xff00ff88, /* EMC_CFG_RSV */
+		},
+		0x00000023, /* EMC_ZCAL_WAIT_CNT after clock change */
+		0x001fffff, /* EMC_AUTO_CAL_INTERVAL */
+		0x00000001, /* EMC_CFG.PERIODIC_QRST */
+		0x00000000, /* Mode Register 0 */
+		0x00010082, /* Mode Register 1 */
+		0x00020004, /* Mode Register 2 */
+		0x00000000, /* EMC_CFG.DYN_SELF_REF */
 	},
 	{
 		0x32,       /* Rev 3.2 */
@@ -1179,7 +1419,7 @@ static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_533[] =
 			0x0000000c, /* EMC_DLL_XFORM_DQ1 */
 			0x0000000c, /* EMC_DLL_XFORM_DQ2 */
 			0x0000000c, /* EMC_DLL_XFORM_DQ3 */
-			0x00080220, /* EMC_XM2CMDPADCTRL */
+			0x00090220, /* EMC_XM2CMDPADCTRL */
 			0x0800003d, /* EMC_XM2DQSPADCTRL2 */
 			0x00000000, /* EMC_XM2DQPADCTRL2 */
 			0x77ffc004, /* EMC_XM2CLKPADCTRL */
@@ -1196,7 +1436,7 @@ static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_533[] =
 			0x00000000, /* EMC_CTT */
 			0x00000000, /* EMC_CTT_DURATION */
 			0x800010d9, /* EMC_DYN_SELF_REF_CONTROL */
-			0x00000008, /* MC_EMEM_ARB_CFG */
+			0x0000000f, /* MC_EMEM_ARB_CFG */
 			0xc0000060, /* MC_EMEM_ARB_OUTSTANDING_REQ */
 			0x00000003, /* MC_EMEM_ARB_TIMING_RCD */
 			0x00000004, /* MC_EMEM_ARB_TIMING_RP */
@@ -1227,23 +1467,10 @@ static const struct tegra_emc_table enterprise_emc_tables_h5tc2g_533[] =
 	},
 };
 
-int enterprise_emc_init(void)
+int endeavoru_emc_init(void)
 {
-//    struct clk *emc;
-//	unsigned long  max_rate;
-//	emc = tegra_get_clock_by_name("emc");
-//	BUG_ON(!emc);
-//	max_rate = clk_get_max_rate(emc) / 1000;
-
-//    printk("max_rate : %d\n" ,max_rate);
-//    if (max_rate == 400000){
-//        printk("init 400MHz Timing table\n");
-//        tegra_init_emc(enterprise_emc_tables_h5tc2g_400,
-//          ARRAY_SIZE(enterprise_emc_tables_h5tc2g_400));
-//    } else if (max_rate == 533000){
         printk("init 533MHz Timing table\n");
-        tegra_init_emc(enterprise_emc_tables_h5tc2g_533,
-          ARRAY_SIZE(enterprise_emc_tables_h5tc2g_533));
-//    } 
+        tegra_init_emc(endeavor_emc_tables_h5tc2g_533,
+          ARRAY_SIZE(endeavor_emc_tables_h5tc2g_533));
 	return 0;
 }

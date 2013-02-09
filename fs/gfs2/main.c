@@ -16,7 +16,7 @@
 #include <linux/gfs2_ondisk.h>
 #include <linux/rcupdate.h>
 #include <linux/rculist_bl.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 
 #include "gfs2.h"
 #include "incore.h"
@@ -41,6 +41,7 @@ static void gfs2_init_inode_once(void *foo)
 	init_rwsem(&ip->i_rw_mutex);
 	INIT_LIST_HEAD(&ip->i_trunc_list);
 	ip->i_alloc = NULL;
+	ip->i_hash_cache = NULL;
 }
 
 static void gfs2_init_glock_once(void *foo)
@@ -53,6 +54,7 @@ static void gfs2_init_glock_once(void *foo)
 	INIT_LIST_HEAD(&gl->gl_lru);
 	INIT_LIST_HEAD(&gl->gl_ail_list);
 	atomic_set(&gl->gl_ail_count, 0);
+	atomic_set(&gl->gl_revokes, 0);
 }
 
 static void gfs2_init_gl_aspace_once(void *foo)
@@ -145,7 +147,7 @@ static int __init init_gfs2_fs(void)
 
 	gfs2_register_debugfs();
 
-	printk("GFS2 (built %s %s) installed\n", __DATE__, __TIME__);
+	printk("GFS2 installed\n");
 
 	return 0;
 

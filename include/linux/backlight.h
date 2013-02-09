@@ -76,6 +76,8 @@ struct backlight_properties {
 	unsigned int state;
 	/* Backlight on/off flag for supend/resume */
 	int bkl_on;
+	/* lauch camer default bkl */
+	int cam_launch_bkl_value;
 
 #define BL_CORE_SUSPENDED	(1 << 0)	/* backlight is suspended */
 #define BL_CORE_FBBLANK		(1 << 1)	/* backlight is under an fb blank event */

@@ -16,6 +16,7 @@
 #include <linux/earlysuspend.h>
 #include <linux/module.h>
 #include <linux/wait.h>
+#include <mach/mfootprint.h>
 
 #include "power.h"
 
@@ -32,17 +33,24 @@ static void stop_drawing_early_suspend(struct early_suspend *h)
 {
 	int ret;
 	unsigned long irq_flags;
+
+	MF_DEBUG("00000000");
 	spin_lock_irqsave(&fb_state_lock, irq_flags);
 	fb_state = FB_STATE_REQUEST_STOP_DRAWING;
+	MF_DEBUG("00000001");
 	spin_unlock_irqrestore(&fb_state_lock, irq_flags);
 
+	MF_DEBUG("00000002");
 	wake_up_all(&fb_state_wq);
+	MF_DEBUG("00000003");
 	ret = wait_event_timeout(fb_state_wq,
 				 fb_state == FB_STATE_STOPPED_DRAWING,
 				 HZ);
+	MF_DEBUG("00000004");
 	if (unlikely(fb_state != FB_STATE_STOPPED_DRAWING))
 		pr_warning("stop_drawing_early_suspend: timeout waiting for "
 			   "userspace to stop drawing\n");
+	MF_DEBUG("00000005");
 }
 
 /* tell userspace to start drawing */

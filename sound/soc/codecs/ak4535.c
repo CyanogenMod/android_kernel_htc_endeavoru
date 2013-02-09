@@ -40,11 +40,11 @@ struct ak4535_priv {
 /*
  * ak4535 register cache
  */
-static const u16 ak4535_reg[AK4535_CACHEREGNUM] = {
-    0x0000, 0x0080, 0x0000, 0x0003,
-    0x0002, 0x0000, 0x0011, 0x0001,
-    0x0000, 0x0040, 0x0036, 0x0010,
-    0x0000, 0x0000, 0x0057, 0x0000,
+static const u8 ak4535_reg[AK4535_CACHEREGNUM] = {
+	0x00, 0x80, 0x00, 0x03,
+	0x02, 0x00, 0x11, 0x01,
+	0x00, 0x40, 0x36, 0x10,
+	0x00, 0x00, 0x57, 0x00,
 };
 
 /*
@@ -230,7 +230,7 @@ static const struct snd_soc_dapm_widget ak4535_dapm_widgets[] = {
 	SND_SOC_DAPM_INPUT("AIN"),
 };
 
-static const struct snd_soc_dapm_route audio_map[] = {
+static const struct snd_soc_dapm_route ak4535_audio_map[] = {
 	/*stereo mixer */
 	{"Stereo Mixer", "Playback Switch", "DAC"},
 	{"Stereo Mixer", "Mic Sidetone Switch", "Mic"},
@@ -286,17 +286,6 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{"Input Mixer", "Mic Capture Switch", "Mic"},
 	{"Input Mixer", "Aux Capture Switch", "Aux In"},
 };
-
-static int ak4535_add_widgets(struct snd_soc_codec *codec)
-{
-	struct snd_soc_dapm_context *dapm = &codec->dapm;
-
-	snd_soc_dapm_new_controls(dapm, ak4535_dapm_widgets,
-				  ARRAY_SIZE(ak4535_dapm_widgets));
-	snd_soc_dapm_add_routes(dapm, audio_map, ARRAY_SIZE(audio_map));
-
-	return 0;
-}
 
 static int ak4535_set_dai_sysclk(struct snd_soc_dai *codec_dai,
 	int clk_id, unsigned int freq, int dir)
@@ -457,8 +446,6 @@ static int ak4535_probe(struct snd_soc_codec *codec)
 
 	snd_soc_add_controls(codec, ak4535_snd_controls,
 				ARRAY_SIZE(ak4535_snd_controls));
-	ak4535_add_widgets(codec);
-
 	return 0;
 }
 
@@ -480,6 +467,10 @@ static struct snd_soc_codec_driver soc_codec_dev_ak4535 = {
 	.reg_cache_size = ARRAY_SIZE(ak4535_reg),
 	.reg_word_size = sizeof(u8),
 	.reg_cache_default = ak4535_reg,
+	.dapm_widgets = ak4535_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(ak4535_dapm_widgets),
+	.dapm_routes = ak4535_audio_map,
+	.num_dapm_routes = ARRAY_SIZE(ak4535_audio_map),
 };
 
 #if defined(CONFIG_I2C) || defined(CONFIG_I2C_MODULE)

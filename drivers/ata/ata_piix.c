@@ -113,6 +113,8 @@ enum {
 	PIIX_PATA_FLAGS		= ATA_FLAG_SLAVE_POSS,
 	PIIX_SATA_FLAGS		= ATA_FLAG_SATA | PIIX_FLAG_CHECKINTR,
 
+	PIIX_FLAG_PIO16		= (1 << 30), /*support 16bit PIO only*/
+
 	PIIX_80C_PRI		= (1 << 5) | (1 << 4),
 	PIIX_80C_SEC		= (1 << 7) | (1 << 6),
 
@@ -147,6 +149,7 @@ enum piix_controller_ids {
 	ich8m_apple_sata,	/* locks up on second port enable */
 	tolapai_sata,
 	piix_pata_vmw,			/* PIIX4 for VMware, spurious DMA_ERR */
+	ich8_sata_snb,
 };
 
 struct piix_map_db {
@@ -177,6 +180,7 @@ static int piix_sidpr_scr_write(struct ata_link *link,
 static int piix_sidpr_set_lpm(struct ata_link *link, enum ata_lpm_policy policy,
 			      unsigned hints);
 static bool piix_irq_check(struct ata_port *ap);
+static int piix_port_start(struct ata_port *ap);
 #ifdef CONFIG_PM
 static int piix_pci_device_suspend(struct pci_dev *pdev, pm_message_t mesg);
 static int piix_pci_device_resume(struct pci_dev *pdev);
@@ -298,21 +302,21 @@ static const struct pci_device_id piix_pci_tbl[] = {
 	/* SATA Controller IDE (PCH) */
 	{ 0x8086, 0x3b2e, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata },
 	/* SATA Controller IDE (CPT) */
-	{ 0x8086, 0x1c00, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata },
+	{ 0x8086, 0x1c00, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata_snb },
 	/* SATA Controller IDE (CPT) */
-	{ 0x8086, 0x1c01, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata },
+	{ 0x8086, 0x1c01, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata_snb },
 	/* SATA Controller IDE (CPT) */
 	{ 0x8086, 0x1c08, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_2port_sata },
 	/* SATA Controller IDE (CPT) */
 	{ 0x8086, 0x1c09, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_2port_sata },
 	/* SATA Controller IDE (PBG) */
-	{ 0x8086, 0x1d00, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata },
+	{ 0x8086, 0x1d00, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata_snb },
 	/* SATA Controller IDE (PBG) */
 	{ 0x8086, 0x1d08, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_2port_sata },
 	/* SATA Controller IDE (Panther Point) */
-	{ 0x8086, 0x1e00, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata },
+	{ 0x8086, 0x1e00, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata_snb },
 	/* SATA Controller IDE (Panther Point) */
-	{ 0x8086, 0x1e01, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata },
+	{ 0x8086, 0x1e01, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_sata_snb },
 	/* SATA Controller IDE (Panther Point) */
 	{ 0x8086, 0x1e08, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_2port_sata },
 	/* SATA Controller IDE (Panther Point) */
@@ -338,6 +342,7 @@ static struct scsi_host_template piix_sht = {
 static struct ata_port_operations piix_sata_ops = {
 	.inherits		= &ata_bmdma32_port_ops,
 	.sff_irq_check		= piix_irq_check,
+	.port_start		= piix_port_start,
 };
 
 static struct ata_port_operations piix_pata_ops = {
@@ -478,6 +483,7 @@ static const struct piix_map_db *piix_map_db_table[] = {
 	[ich8_2port_sata]	= &ich8_2port_map_db,
 	[ich8m_apple_sata]	= &ich8m_apple_map_db,
 	[tolapai_sata]		= &tolapai_map_db,
+	[ich8_sata_snb]		= &ich8_map_db,
 };
 
 static struct ata_port_info piix_port_info[] = {
@@ -606,6 +612,19 @@ static struct ata_port_info piix_port_info[] = {
 		.port_ops	= &piix_vmw_ops,
 	},
 
+	/*
+	 * some Sandybridge chipsets have broken 32 mode up to now,
+	 * see https://bugzilla.kernel.org/show_bug.cgi?id=40592
+	 */
+	[ich8_sata_snb] =
+	{
+		.flags		= PIIX_SATA_FLAGS | PIIX_FLAG_SIDPR | PIIX_FLAG_PIO16,
+		.pio_mask	= ATA_PIO4,
+		.mwdma_mask	= ATA_MWDMA2,
+		.udma_mask	= ATA_UDMA6,
+		.port_ops	= &piix_sata_ops,
+	},
+
 };
 
 static struct pci_bits piix_enable_bits[] = {
@@ -648,6 +667,14 @@ static const struct ich_laptop ich_laptop[] = {
 	/* end marker */
 	{ 0, }
 };
+
+static int piix_port_start(struct ata_port *ap)
+{
+	if (!(ap->flags & PIIX_FLAG_PIO16))
+		ap->pflags |= ATA_PFLAG_PIO32 | ATA_PFLAG_PIO32CHANGE;
+
+	return ata_bmdma_port_start(ap);
+}
 
 /**
  *	ich_pata_cable_detect - Probe host controller cable detect info
@@ -1225,8 +1252,9 @@ static int piix_pci_device_resume(struct pci_dev *pdev)
 		 */
 		rc = pci_reenable_device(pdev);
 		if (rc)
-			dev_printk(KERN_ERR, &pdev->dev, "failed to enable "
-				   "device after resume (%d)\n", rc);
+			dev_err(&pdev->dev,
+				"failed to enable device after resume (%d)\n",
+				rc);
 	} else
 		rc = ata_pci_device_do_resume(pdev);
 
@@ -1303,9 +1331,11 @@ static int __devinit piix_check_450nx_errata(struct pci_dev *ata_dev)
 			no_piix_dma = 2;
 	}
 	if (no_piix_dma)
-		dev_printk(KERN_WARNING, &ata_dev->dev, "450NX errata present, disabling IDE DMA.\n");
-	if (no_piix_dma == 2)
-		dev_printk(KERN_WARNING, &ata_dev->dev, "A BIOS update may resolve this.\n");
+		dev_warn(&ata_dev->dev,
+			 "450NX errata present, disabling IDE DMA%s\n",
+			 no_piix_dma == 2 ? " - a BIOS update may resolve this"
+			 : "");
+
 	return no_piix_dma;
 }
 
@@ -1338,37 +1368,36 @@ static const int *__devinit piix_init_sata_map(struct pci_dev *pdev,
 
 	map = map_db->map[map_value & map_db->mask];
 
-	dev_printk(KERN_INFO, &pdev->dev, "MAP [");
+	dev_info(&pdev->dev, "MAP [");
 	for (i = 0; i < 4; i++) {
 		switch (map[i]) {
 		case RV:
 			invalid_map = 1;
-			printk(" XX");
+			pr_cont(" XX");
 			break;
 
 		case NA:
-			printk(" --");
+			pr_cont(" --");
 			break;
 
 		case IDE:
 			WARN_ON((i & 1) || map[i + 1] != IDE);
 			pinfo[i / 2] = piix_port_info[ich_pata_100];
 			i++;
-			printk(" IDE IDE");
+			pr_cont(" IDE IDE");
 			break;
 
 		default:
-			printk(" P%d", map[i]);
+			pr_cont(" P%d", map[i]);
 			if (i & 1)
 				pinfo[i / 2].flags |= ATA_FLAG_SLAVE_POSS;
 			break;
 		}
 	}
-	printk(" ]\n");
+	pr_cont(" ]\n");
 
 	if (invalid_map)
-		dev_printk(KERN_ERR, &pdev->dev,
-			   "invalid MAP value %u\n", map_value);
+		dev_err(&pdev->dev, "invalid MAP value %u\n", map_value);
 
 	return map;
 }
@@ -1398,8 +1427,8 @@ static bool piix_no_sidpr(struct ata_host *host)
 	if (pdev->vendor == PCI_VENDOR_ID_INTEL && pdev->device == 0x2920 &&
 	    pdev->subsystem_vendor == PCI_VENDOR_ID_SAMSUNG &&
 	    pdev->subsystem_device == 0xb049) {
-		dev_printk(KERN_WARNING, host->dev,
-			   "Samsung DB-P70 detected, disabling SIDPR\n");
+		dev_warn(host->dev,
+			 "Samsung DB-P70 detected, disabling SIDPR\n");
 		return true;
 	}
 
@@ -1451,8 +1480,8 @@ static int __devinit piix_init_sidpr(struct ata_host *host)
 		piix_sidpr_scr_read(link0, SCR_CONTROL, &scontrol);
 
 		if ((scontrol & 0xf00) != 0x300) {
-			dev_printk(KERN_INFO, host->dev, "SCR access via "
-				   "SIDPR is available but doesn't work\n");
+			dev_info(host->dev,
+				 "SCR access via SIDPR is available but doesn't work\n");
 			return 0;
 		}
 	}
@@ -1501,8 +1530,7 @@ static void piix_iocfg_bit18_quirk(struct ata_host *host)
 	 * affected systems.
 	 */
 	if (hpriv->saved_iocfg & (1 << 18)) {
-		dev_printk(KERN_INFO, &pdev->dev,
-			   "applying IOCFG bit18 quirk\n");
+		dev_info(&pdev->dev, "applying IOCFG bit18 quirk\n");
 		pci_write_config_dword(pdev, PIIX_IOCFG,
 				       hpriv->saved_iocfg & ~(1 << 18));
 	}
@@ -1561,7 +1589,6 @@ static bool piix_broken_system_poweroff(struct pci_dev *pdev)
 static int __devinit piix_init_one(struct pci_dev *pdev,
 				   const struct pci_device_id *ent)
 {
-	static int printed_version;
 	struct device *dev = &pdev->dev;
 	struct ata_port_info port_info[2];
 	const struct ata_port_info *ppi[] = { &port_info[0], &port_info[1] };
@@ -1571,9 +1598,7 @@ static int __devinit piix_init_one(struct pci_dev *pdev,
 	struct piix_host_priv *hpriv;
 	int rc;
 
-	if (!printed_version++)
-		dev_printk(KERN_DEBUG, &pdev->dev,
-			   "version " DRV_VERSION "\n");
+	ata_print_version_once(&pdev->dev, DRV_VERSION);
 
 	/* no hotplugging support for later devices (FIXME) */
 	if (!in_module_init && ent->driver_data >= ich5_sata)

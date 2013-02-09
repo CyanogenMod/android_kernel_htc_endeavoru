@@ -16,48 +16,24 @@
 # CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ccflags-y :=			\
-	-DARP_OFFLOAD_SUPPORT	\
-	-DBCMLXSDMMC		\
-	-DBCMPLATFORM_BUS	\
-	-DBCMSDIO		\
-	-DBDC			\
-	-DBRCM_FULLMAC		\
-	-DDHD_FIRSTREAD=64	\
-	-DDHD_SCHED		\
-	-DDHD_SDALIGN=64	\
-	-DEMBEDDED_PLATFORM	\
-	-DMAX_HDR_READ=64	\
-	-DMMC_SDIO_ABORT	\
-	-DPKT_FILTER_SUPPORT	\
-	-DSHOW_EVENTS		\
-	-DTOE
+	-DBRCMF_FIRSTREAD=64	\
+	-DBRCMF_SDALIGN=64	\
+	-DMAX_HDR_READ=64
 
-ccflags-$(CONFIG_BRCMDBG)	+= -DDHD_DEBUG
+ccflags-$(CONFIG_BRCMDBG)	+= -DSHOW_EVENTS
 
 ccflags-y += \
 	-Idrivers/staging/brcm80211/brcmfmac	\
-	-Idrivers/staging/brcm80211/include		\
-	-Idrivers/staging/brcm80211/util
+	-Idrivers/staging/brcm80211/include
 
 DHDOFILES = \
 	wl_cfg80211.o \
-	wl_iw.o \
 	dhd_cdc.o \
 	dhd_common.o \
-	dhd_custom_gpio.o \
 	dhd_sdio.o	\
 	dhd_linux.o \
-	dhd_linux_sched.o \
 	bcmsdh.o \
-	bcmsdh_linux.o	\
-	bcmsdh_sdmmc.o \
-	bcmsdh_sdmmc_linux.o \
-	aiutils.o \
-	siutils.o \
-	sbutils.o \
-	bcmutils.o \
-	bcmwifi.o \
-	hndpmu.o
+	bcmsdh_sdmmc.o
 
-obj-m += brcmfmac.o
+obj-$(CONFIG_BRCMFMAC) += brcmfmac.o
 brcmfmac-objs += $(DHDOFILES)

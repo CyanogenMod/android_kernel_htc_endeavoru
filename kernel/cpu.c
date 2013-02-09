@@ -15,6 +15,9 @@
 #include <linux/stop_machine.h>
 #include <linux/mutex.h>
 #include <linux/gfp.h>
+#include <linux/suspend.h>
+#include <trace/events/power.h>
+#include <mach/mfootprint.h>
 
 #ifdef CONFIG_SMP
 /* Serializes the updates to cpu_online_mask, cpu_present_mask */
@@ -107,6 +110,7 @@ static void cpu_hotplug_begin(void)
 {
 	cpu_hotplug.active_writer = current;
 
+	MF_DEBUG("00UP0004");
 	for (;;) {
 		mutex_lock(&cpu_hotplug.lock);
 		if (likely(!cpu_hotplug.refcount))
@@ -115,12 +119,15 @@ static void cpu_hotplug_begin(void)
 		mutex_unlock(&cpu_hotplug.lock);
 		schedule();
 	}
+	MF_DEBUG("00UP0005");
 }
 
 static void cpu_hotplug_done(void)
 {
+	MF_DEBUG("00UP0024");
 	cpu_hotplug.active_writer = NULL;
 	mutex_unlock(&cpu_hotplug.lock);
+	MF_DEBUG("00UP0025");
 }
 
 #else /* #if CONFIG_HOTPLUG_CPU */
@@ -143,6 +150,7 @@ static int __cpu_notify(unsigned long val, void *v, int nr_to_call,
 {
 	int ret;
 
+	MF_DEBUG("00UP0006");
 	ret = __raw_notifier_call_chain(&cpu_chain, val, v, nr_to_call,
 					nr_calls);
 
@@ -269,9 +277,13 @@ out_release:
 	return err;
 }
 
+extern void trace_cpu_down_frequency (unsigned int cpu);
+
 int __ref cpu_down(unsigned int cpu)
 {
 	int err;
+
+	trace_cpu_hotplug(cpu, POWER_CPU_DOWN_START);
 
 	cpu_maps_update_begin();
 
@@ -284,6 +296,12 @@ int __ref cpu_down(unsigned int cpu)
 
 out:
 	cpu_maps_update_done();
+	trace_cpu_hotplug(cpu, POWER_CPU_DOWN_DONE);
+
+    /* make cpu frequency seenable ASAP in systrace */
+    if (!err)
+        trace_cpu_down_frequency (cpu);
+
 	return err;
 }
 EXPORT_SYMBOL(cpu_down);
@@ -317,6 +335,7 @@ static int __cpuinit _cpu_up(unsigned int cpu, int tasks_frozen)
 	/* Now call notifier in preparation. */
 	cpu_notify(CPU_ONLINE | mod, hcpu);
 
+
 out_notify:
 	if (ret != 0)
 		__cpu_notify(CPU_UP_CANCELED | mod, hcpu, nr_calls, NULL);
@@ -324,6 +343,8 @@ out_notify:
 
 	return ret;
 }
+
+extern void trace_cpu_up_frequency (unsigned int cpu);
 
 int __cpuinit cpu_up(unsigned int cpu)
 {
@@ -333,6 +354,8 @@ int __cpuinit cpu_up(unsigned int cpu)
 	int nid;
 	pg_data_t	*pgdat;
 #endif
+
+	trace_cpu_hotplug(cpu, POWER_CPU_UP_START);
 
 	if (!cpu_possible(cpu)) {
 		printk(KERN_ERR "can't online cpu %d because it is not "
@@ -373,10 +396,21 @@ int __cpuinit cpu_up(unsigned int cpu)
 		goto out;
 	}
 
+	MF_DEBUG("00UP0003");
 	err = _cpu_up(cpu, 0);
 
 out:
+	MF_DEBUG("00UP0026");
 	cpu_maps_update_done();
+	MF_DEBUG("00UP0027");
+	trace_cpu_hotplug(cpu, POWER_CPU_UP_DONE);
+
+	MF_DEBUG("00UP0028");
+
+    /* make cpu frequency seenable ASAP in systrace */
+    if (!err)
+        trace_cpu_up_frequency (cpu);
+
 	return err;
 }
 
@@ -476,6 +510,79 @@ static int alloc_frozen_cpus(void)
 	return 0;
 }
 core_initcall(alloc_frozen_cpus);
+
+/*
+ * Prevent regular CPU hotplug from racing with the freezer, by disabling CPU
+ * hotplug when tasks are about to be frozen. Also, don't allow the freezer
+ * to continue until any currently running CPU hotplug operation gets
+ * completed.
+ * To modify the 'cpu_hotplug_disabled' flag, we need to acquire the
+ * 'cpu_add_remove_lock'. And this same lock is also taken by the regular
+ * CPU hotplug path and released only after it is complete. Thus, we
+ * (and hence the freezer) will block here until any currently running CPU
+ * hotplug operation gets completed.
+ */
+void cpu_hotplug_disable_before_freeze(void)
+{
+	cpu_maps_update_begin();
+	cpu_hotplug_disabled = 1;
+	cpu_maps_update_done();
+}
+
+
+/*
+ * When tasks have been thawed, re-enable regular CPU hotplug (which had been
+ * disabled while beginning to freeze tasks).
+ */
+void cpu_hotplug_enable_after_thaw(void)
+{
+	cpu_maps_update_begin();
+	cpu_hotplug_disabled = 0;
+	cpu_maps_update_done();
+}
+
+/*
+ * When callbacks for CPU hotplug notifications are being executed, we must
+ * ensure that the state of the system with respect to the tasks being frozen
+ * or not, as reported by the notification, remains unchanged *throughout the
+ * duration* of the execution of the callbacks.
+ * Hence we need to prevent the freezer from racing with regular CPU hotplug.
+ *
+ * This synchronization is implemented by mutually excluding regular CPU
+ * hotplug and Suspend/Hibernate call paths by hooking onto the Suspend/
+ * Hibernate notifications.
+ */
+static int
+cpu_hotplug_pm_callback(struct notifier_block *nb,
+			unsigned long action, void *ptr)
+{
+	switch (action) {
+
+	case PM_SUSPEND_PREPARE:
+	case PM_HIBERNATION_PREPARE:
+		cpu_hotplug_disable_before_freeze();
+		break;
+
+	case PM_POST_SUSPEND:
+	case PM_POST_HIBERNATION:
+		cpu_hotplug_enable_after_thaw();
+		break;
+
+	default:
+		return NOTIFY_DONE;
+	}
+
+	return NOTIFY_OK;
+}
+
+
+int cpu_hotplug_pm_sync_init(void)
+{
+	pm_notifier(cpu_hotplug_pm_callback, 0);
+	return 0;
+}
+core_initcall(cpu_hotplug_pm_sync_init);
+
 #endif /* CONFIG_PM_SLEEP_SMP */
 
 /**
@@ -599,18 +706,18 @@ static ATOMIC_NOTIFIER_HEAD(idle_notifier);
 
 void idle_notifier_register(struct notifier_block *n)
 {
-  atomic_notifier_chain_register(&idle_notifier, n);
+	atomic_notifier_chain_register(&idle_notifier, n);
 }
 EXPORT_SYMBOL_GPL(idle_notifier_register);
 
 void idle_notifier_unregister(struct notifier_block *n)
 {
-  atomic_notifier_chain_unregister(&idle_notifier, n);
+	atomic_notifier_chain_unregister(&idle_notifier, n);
 }
 EXPORT_SYMBOL_GPL(idle_notifier_unregister);
 
 void idle_notifier_call_chain(unsigned long val)
 {
-  atomic_notifier_call_chain(&idle_notifier, val, NULL);
+	atomic_notifier_call_chain(&idle_notifier, val, NULL);
 }
 EXPORT_SYMBOL_GPL(idle_notifier_call_chain);

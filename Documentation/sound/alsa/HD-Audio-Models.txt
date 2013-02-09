@@ -94,7 +94,7 @@ ALC662/663/272
   3stack-dig	3-stack (2-channel) with SPDIF
   3stack-6ch	 3-stack (6-channel)
   3stack-6ch-dig 3-stack (6-channel) with SPDIF
-  6stack-dig	 6-stack with SPDIF
+  5stack-dig	 5-stack with SPDIF
   lenovo-101e	 Lenovo laptop
   eeepc-p701	ASUS Eeepc P701
   eeepc-ep20	ASUS Eeepc EP20
@@ -408,6 +408,7 @@ STAC92HD83*
   ref		Reference board
   mic-ref	Reference board with power management for ports
   dell-s14	Dell laptop
+  dell-vostro-3500	Dell Vostro 3500 laptop
   hp		HP laptops with (inverted) mute-LED
   hp-dv7-4000	HP dv-7 4000
   auto		BIOS setup (default)

@@ -26,8 +26,8 @@
 #include "psb_drv.h"
 #include "psb_reg.h"
 #include "psb_intel_reg.h"
-#include "psb_powermgmt.h"
-
+#include "power.h"
+#include "mdfld_output.h"
 
 /*
  * inline functions
@@ -88,13 +88,12 @@ psb_enable_pipestat(struct drm_psb_private *dev_priv, int pipe, u32 mask)
 		u32 reg = psb_pipestat(pipe);
 		dev_priv->pipestat[pipe] |= mask;
 		/* Enable the interrupt, clear any pending status */
-		if (ospm_power_using_hw_begin(OSPM_DISPLAY_ISLAND,
-							OSPM_UHB_ONLY_IF_ON)) {
+		if (gma_power_begin(dev_priv->dev, false)) {
 			u32 writeVal = PSB_RVDC32(reg);
 			writeVal |= (mask | (mask >> 16));
 			PSB_WVDC32(writeVal, reg);
 			(void) PSB_RVDC32(reg);
-			ospm_power_using_hw_end(OSPM_DISPLAY_ISLAND);
+			gma_power_end(dev_priv->dev);
 		}
 	}
 }
@@ -105,39 +104,36 @@ psb_disable_pipestat(struct drm_psb_private *dev_priv, int pipe, u32 mask)
 	if ((dev_priv->pipestat[pipe] & mask) != 0) {
 		u32 reg = psb_pipestat(pipe);
 		dev_priv->pipestat[pipe] &= ~mask;
-		if (ospm_power_using_hw_begin(OSPM_DISPLAY_ISLAND,
-							OSPM_UHB_ONLY_IF_ON)) {
+		if (gma_power_begin(dev_priv->dev, false)) {
 			u32 writeVal = PSB_RVDC32(reg);
 			writeVal &= ~mask;
 			PSB_WVDC32(writeVal, reg);
 			(void) PSB_RVDC32(reg);
-			ospm_power_using_hw_end(OSPM_DISPLAY_ISLAND);
+			gma_power_end(dev_priv->dev);
 		}
 	}
 }
 
 void mid_enable_pipe_event(struct drm_psb_private *dev_priv, int pipe)
 {
-	if (ospm_power_using_hw_begin(OSPM_DISPLAY_ISLAND,
-							OSPM_UHB_ONLY_IF_ON)) {
+	if (gma_power_begin(dev_priv->dev, false)) {
 		u32 pipe_event = mid_pipe_event(pipe);
 		dev_priv->vdc_irq_mask |= pipe_event;
 		PSB_WVDC32(~dev_priv->vdc_irq_mask, PSB_INT_MASK_R);
 		PSB_WVDC32(dev_priv->vdc_irq_mask, PSB_INT_ENABLE_R);
-		ospm_power_using_hw_end(OSPM_DISPLAY_ISLAND);
+		gma_power_end(dev_priv->dev);
 	}
 }
 
 void mid_disable_pipe_event(struct drm_psb_private *dev_priv, int pipe)
 {
 	if (dev_priv->pipestat[pipe] == 0) {
-		if (ospm_power_using_hw_begin(OSPM_DISPLAY_ISLAND,
-							OSPM_UHB_ONLY_IF_ON)) {
+		if (gma_power_begin(dev_priv->dev, false)) {
 			u32 pipe_event = mid_pipe_event(pipe);
 			dev_priv->vdc_irq_mask &= ~pipe_event;
 			PSB_WVDC32(~dev_priv->vdc_irq_mask, PSB_INT_MASK_R);
 			PSB_WVDC32(dev_priv->vdc_irq_mask, PSB_INT_ENABLE_R);
-			ospm_power_using_hw_end(OSPM_DISPLAY_ISLAND);
+			gma_power_end(dev_priv->dev);
 		}
 	}
 }
@@ -191,7 +187,8 @@ static void mid_pipe_event_handler(struct drm_device *dev, uint32_t pipe)
 	}
 
 	if (i == WAIT_STATUS_CLEAR_LOOP_COUNT)
-		DRM_ERROR("%s, can't clear the status bits in pipe_stat_reg, its value = 0x%x.\n",
+		dev_err(dev->dev,
+	"%s, can't clear the status bits in pipe_stat_reg, its value = 0x%x.\n",
 			__func__, PSB_RVDC32(pipe_stat_reg));
 
 	if (pipe_stat_val & PIPE_VBLANK_STATUS)
@@ -223,26 +220,16 @@ irqreturn_t psb_irq_handler(DRM_IRQ_ARGS)
 
 	vdc_stat = PSB_RVDC32(PSB_INT_IDENTITY_R);
 
-	if (vdc_stat & _MDFLD_DISP_ALL_IRQ_FLAG) {
-		PSB_DEBUG_IRQ("Got DISP interrupt\n");
+	if (vdc_stat & _MDFLD_DISP_ALL_IRQ_FLAG)
 		dsp_int = 1;
-	}
 
-	if (vdc_stat & _PSB_IRQ_SGX_FLAG) {
-		PSB_DEBUG_IRQ("Got SGX interrupt\n");
+	if (vdc_stat & _PSB_IRQ_SGX_FLAG)
 		sgx_int = 1;
-	}
-	if (vdc_stat & _PSB_IRQ_MSVDX_FLAG)
-		PSB_DEBUG_IRQ("Got MSVDX interrupt\n");
-
-	if (vdc_stat & _LNC_IRQ_TOPAZ_FLAG)
-		PSB_DEBUG_IRQ("Got TOPAZ interrupt\n");
-
 
 	vdc_stat &= dev_priv->vdc_irq_mask;
 	spin_unlock(&dev_priv->irqmask_lock);
 
-	if (dsp_int && ospm_power_is_hw_on(OSPM_DISPLAY_ISLAND)) {
+	if (dsp_int && gma_power_is_on(dev)) {
 		psb_vdc_interrupt(dev, vdc_stat);
 		handled = 1;
 	}
@@ -271,145 +258,88 @@ irqreturn_t psb_irq_handler(DRM_IRQ_ARGS)
 
 void psb_irq_preinstall(struct drm_device *dev)
 {
-	psb_irq_preinstall_islands(dev, OSPM_ALL_ISLANDS);
-}
-
-/**
- * FIXME: should I remove display irq enable here??
- */
-void psb_irq_preinstall_islands(struct drm_device *dev, int hw_islands)
-{
 	struct drm_psb_private *dev_priv =
 	    (struct drm_psb_private *) dev->dev_private;
 	unsigned long irqflags;
 
-	PSB_DEBUG_ENTRY("\n");
-
 	spin_lock_irqsave(&dev_priv->irqmask_lock, irqflags);
 
-	if (hw_islands & OSPM_DISPLAY_ISLAND) {
-		if (ospm_power_is_hw_on(OSPM_DISPLAY_ISLAND)) {
-			PSB_WVDC32(0xFFFFFFFF, PSB_HWSTAM);
-			if (dev->vblank_enabled[0])
-				dev_priv->vdc_irq_mask |=
-						_PSB_PIPEA_EVENT_FLAG;
-			if (dev->vblank_enabled[1])
-				dev_priv->vdc_irq_mask |=
-						_MDFLD_PIPEB_EVENT_FLAG;
-			if (dev->vblank_enabled[2])
-				dev_priv->vdc_irq_mask |=
-						_MDFLD_PIPEC_EVENT_FLAG;
-		}
-	}
-/* NO I DONT WANT ANY IRQS GRRR FIXMEAC */
-	if (hw_islands & OSPM_GRAPHICS_ISLAND)
-		dev_priv->vdc_irq_mask |= _PSB_IRQ_SGX_FLAG;
-/* */
+	if (gma_power_is_on(dev))
+		PSB_WVDC32(0xFFFFFFFF, PSB_HWSTAM);
+	if (dev->vblank_enabled[0])
+		dev_priv->vdc_irq_mask |= _PSB_PIPEA_EVENT_FLAG;
+	if (dev->vblank_enabled[1])
+		dev_priv->vdc_irq_mask |= _MDFLD_PIPEB_EVENT_FLAG;
+	if (dev->vblank_enabled[2])
+		dev_priv->vdc_irq_mask |= _MDFLD_PIPEC_EVENT_FLAG;
+
 	/*This register is safe even if display island is off*/
 	PSB_WVDC32(~dev_priv->vdc_irq_mask, PSB_INT_MASK_R);
-
 	spin_unlock_irqrestore(&dev_priv->irqmask_lock, irqflags);
 }
 
 int psb_irq_postinstall(struct drm_device *dev)
 {
-	return psb_irq_postinstall_islands(dev, OSPM_ALL_ISLANDS);
-}
-
-int psb_irq_postinstall_islands(struct drm_device *dev, int hw_islands)
-{
-
 	struct drm_psb_private *dev_priv =
 	    (struct drm_psb_private *) dev->dev_private;
 	unsigned long irqflags;
 
-	PSB_DEBUG_ENTRY("\n");
-
 	spin_lock_irqsave(&dev_priv->irqmask_lock, irqflags);
 
-	/*This register is safe even if display island is off*/
+	/* This register is safe even if display island is off */
 	PSB_WVDC32(dev_priv->vdc_irq_mask, PSB_INT_ENABLE_R);
+	PSB_WVDC32(0xFFFFFFFF, PSB_HWSTAM);
 
-	if (hw_islands & OSPM_DISPLAY_ISLAND) {
-		if (true/*powermgmt_is_hw_on(dev->pdev, PSB_DISPLAY_ISLAND)*/) {
-			PSB_WVDC32(0xFFFFFFFF, PSB_HWSTAM);
+	if (dev->vblank_enabled[0])
+		psb_enable_pipestat(dev_priv, 0, PIPE_VBLANK_INTERRUPT_ENABLE);
+	else
+		psb_disable_pipestat(dev_priv, 0, PIPE_VBLANK_INTERRUPT_ENABLE);
 
-			if (dev->vblank_enabled[0])
-				psb_enable_pipestat(dev_priv, 0,
-				    PIPE_VBLANK_INTERRUPT_ENABLE);
-			else
-				psb_disable_pipestat(dev_priv, 0,
-				    PIPE_VBLANK_INTERRUPT_ENABLE);
+	if (dev->vblank_enabled[1])
+		psb_enable_pipestat(dev_priv, 1, PIPE_VBLANK_INTERRUPT_ENABLE);
+	else
+		psb_disable_pipestat(dev_priv, 1, PIPE_VBLANK_INTERRUPT_ENABLE);
 
-			if (dev->vblank_enabled[1])
-					psb_enable_pipestat(dev_priv, 1,
-					    PIPE_VBLANK_INTERRUPT_ENABLE);
-			else
-				psb_disable_pipestat(dev_priv, 1,
-				    PIPE_VBLANK_INTERRUPT_ENABLE);
-
-			if (dev->vblank_enabled[2])
-				psb_enable_pipestat(dev_priv, 2,
-				    PIPE_VBLANK_INTERRUPT_ENABLE);
-			else
-				psb_disable_pipestat(dev_priv, 2,
-				    PIPE_VBLANK_INTERRUPT_ENABLE);
-		}
-	}
+	if (dev->vblank_enabled[2])
+		psb_enable_pipestat(dev_priv, 2, PIPE_VBLANK_INTERRUPT_ENABLE);
+	else
+		psb_disable_pipestat(dev_priv, 2, PIPE_VBLANK_INTERRUPT_ENABLE);
 
 	spin_unlock_irqrestore(&dev_priv->irqmask_lock, irqflags);
-
 	return 0;
 }
 
 void psb_irq_uninstall(struct drm_device *dev)
 {
-	psb_irq_uninstall_islands(dev, OSPM_ALL_ISLANDS);
-}
-
-void psb_irq_uninstall_islands(struct drm_device *dev, int hw_islands)
-{
 	struct drm_psb_private *dev_priv =
 	    (struct drm_psb_private *) dev->dev_private;
 	unsigned long irqflags;
 
-	PSB_DEBUG_ENTRY("\n");
-
 	spin_lock_irqsave(&dev_priv->irqmask_lock, irqflags);
 
-	if (hw_islands & OSPM_DISPLAY_ISLAND) {
-		if (true/*powermgmt_is_hw_on(dev->pdev, PSB_DISPLAY_ISLAND)*/) {
-			PSB_WVDC32(0xFFFFFFFF, PSB_HWSTAM);
+	PSB_WVDC32(0xFFFFFFFF, PSB_HWSTAM);
 
-			if (dev->vblank_enabled[0])
-				psb_disable_pipestat(dev_priv, 0,
-				    PIPE_VBLANK_INTERRUPT_ENABLE);
+	if (dev->vblank_enabled[0])
+		psb_disable_pipestat(dev_priv, 0, PIPE_VBLANK_INTERRUPT_ENABLE);
 
-			if (dev->vblank_enabled[1])
-				psb_disable_pipestat(dev_priv, 1,
-				    PIPE_VBLANK_INTERRUPT_ENABLE);
+	if (dev->vblank_enabled[1])
+		psb_disable_pipestat(dev_priv, 1, PIPE_VBLANK_INTERRUPT_ENABLE);
 
-			if (dev->vblank_enabled[2])
-				psb_disable_pipestat(dev_priv, 2,
-				    PIPE_VBLANK_INTERRUPT_ENABLE);
-		}
-		dev_priv->vdc_irq_mask &= _PSB_IRQ_SGX_FLAG |
-					  _PSB_IRQ_MSVDX_FLAG |
-					  _LNC_IRQ_TOPAZ_FLAG;
-	}
-	/*TODO: remove following code*/
-	if (hw_islands & OSPM_GRAPHICS_ISLAND)
-		dev_priv->vdc_irq_mask &= ~_PSB_IRQ_SGX_FLAG;
+	if (dev->vblank_enabled[2])
+		psb_disable_pipestat(dev_priv, 2, PIPE_VBLANK_INTERRUPT_ENABLE);
 
-	/*These two registers are safe even if display island is off*/
+	dev_priv->vdc_irq_mask &= _PSB_IRQ_SGX_FLAG |
+				  _PSB_IRQ_MSVDX_FLAG |
+				  _LNC_IRQ_TOPAZ_FLAG;
+
+	/* These two registers are safe even if display island is off */
 	PSB_WVDC32(~dev_priv->vdc_irq_mask, PSB_INT_MASK_R);
 	PSB_WVDC32(dev_priv->vdc_irq_mask, PSB_INT_ENABLE_R);
 
 	wmb();
 
-	/*This register is safe even if display island is off*/
+	/* This register is safe even if display island is off */
 	PSB_WVDC32(PSB_RVDC32(PSB_INT_IDENTITY_R), PSB_INT_IDENTITY_R);
-
 	spin_unlock_irqrestore(&dev_priv->irqmask_lock, irqflags);
 }
 
@@ -420,8 +350,7 @@ void psb_irq_turn_on_dpst(struct drm_device *dev)
 	u32 hist_reg;
 	u32 pwm_reg;
 
-	if (ospm_power_using_hw_begin(OSPM_DISPLAY_ISLAND,
-							OSPM_UHB_ONLY_IF_ON)) {
+	if (gma_power_begin(dev, false)) {
 		PSB_WVDC32(1 << 31, HISTOGRAM_LOGIC_CONTROL);
 		hist_reg = PSB_RVDC32(HISTOGRAM_LOGIC_CONTROL);
 		PSB_WVDC32(1 << 31, HISTOGRAM_INT_CONTROL);
@@ -443,7 +372,7 @@ void psb_irq_turn_on_dpst(struct drm_device *dev)
 		PSB_WVDC32(pwm_reg | 0x80010100 | PWM_PHASEIN_ENABLE,
 							PWM_CONTROL_LOGIC);
 
-		ospm_power_using_hw_end(OSPM_DISPLAY_ISLAND);
+		gma_power_end(dev);
 	}
 }
 
@@ -452,8 +381,6 @@ int psb_irq_enable_dpst(struct drm_device *dev)
 	struct drm_psb_private *dev_priv =
 		(struct drm_psb_private *) dev->dev_private;
 	unsigned long irqflags;
-
-	PSB_DEBUG_ENTRY("\n");
 
 	spin_lock_irqsave(&dev_priv->irqmask_lock, irqflags);
 
@@ -472,8 +399,7 @@ void psb_irq_turn_off_dpst(struct drm_device *dev)
 	u32 hist_reg;
 	u32 pwm_reg;
 
-	if (ospm_power_using_hw_begin(OSPM_DISPLAY_ISLAND,
-							OSPM_UHB_ONLY_IF_ON)) {
+	if (gma_power_begin(dev, false)) {
 		PSB_WVDC32(0x00000000, HISTOGRAM_INT_CONTROL);
 		hist_reg = PSB_RVDC32(HISTOGRAM_INT_CONTROL);
 
@@ -484,7 +410,7 @@ void psb_irq_turn_off_dpst(struct drm_device *dev)
 							PWM_CONTROL_LOGIC);
 		pwm_reg = PSB_RVDC32(PWM_CONTROL_LOGIC);
 
-		ospm_power_using_hw_end(OSPM_DISPLAY_ISLAND);
+		gma_power_end(dev);
 	}
 }
 
@@ -493,8 +419,6 @@ int psb_irq_disable_dpst(struct drm_device *dev)
 	struct drm_psb_private *dev_priv =
 	    (struct drm_psb_private *) dev->dev_private;
 	unsigned long irqflags;
-
-	PSB_DEBUG_ENTRY("\n");
 
 	spin_lock_irqsave(&dev_priv->irqmask_lock, irqflags);
 
@@ -526,18 +450,20 @@ static int psb_vblank_do_wait(struct drm_device *dev,
  */
 int psb_enable_vblank(struct drm_device *dev, int pipe)
 {
-	struct drm_psb_private *dev_priv =
-	    (struct drm_psb_private *) dev->dev_private;
+	struct drm_psb_private *dev_priv = dev->dev_private;
 	unsigned long irqflags;
 	uint32_t reg_val = 0;
 	uint32_t pipeconf_reg = mid_pipeconf(pipe);
 
-	PSB_DEBUG_ENTRY("\n");
-
-	if (ospm_power_using_hw_begin(OSPM_DISPLAY_ISLAND,
-							OSPM_UHB_ONLY_IF_ON)) {
+#if defined(CONFIG_DRM_PSB_MFLD)
+	/* Medfield is different - we should perhaps extract out vblank
+	   and blacklight etc ops */
+	if (IS_MFLD(dev) && !mdfld_panel_dpi(dev))
+		return mdfld_enable_te(dev, pipe);
+#endif
+	if (gma_power_begin(dev, false)) {
 		reg_val = REG_READ(pipeconf_reg);
-		ospm_power_using_hw_end(OSPM_DISPLAY_ISLAND);
+		gma_power_end(dev);
 	}
 
 	if (!(reg_val & PIPEACONF_ENABLE))
@@ -545,7 +471,6 @@ int psb_enable_vblank(struct drm_device *dev, int pipe)
 
 	spin_lock_irqsave(&dev_priv->irqmask_lock, irqflags);
 
-	drm_psb_disable_vsync = 0;
 	mid_enable_pipe_event(dev_priv, pipe);
 	psb_enable_pipestat(dev_priv, pipe, PIPE_VBLANK_INTERRUPT_ENABLE);
 
@@ -559,19 +484,71 @@ int psb_enable_vblank(struct drm_device *dev, int pipe)
  */
 void psb_disable_vblank(struct drm_device *dev, int pipe)
 {
-	struct drm_psb_private *dev_priv =
-	    (struct drm_psb_private *) dev->dev_private;
+	struct drm_psb_private *dev_priv = dev->dev_private;
 	unsigned long irqflags;
 
-	PSB_DEBUG_ENTRY("\n");
-
+#if defined(CONFIG_DRM_PSB_MFLD)
+	if (IS_MFLD(dev) && !mdfld_panel_dpi(dev))
+		mdfld_disable_te(dev, pipe);
+#endif
 	spin_lock_irqsave(&dev_priv->irqmask_lock, irqflags);
 
-	drm_psb_disable_vsync = 1;
 	mid_disable_pipe_event(dev_priv, pipe);
 	psb_disable_pipestat(dev_priv, pipe, PIPE_VBLANK_INTERRUPT_ENABLE);
 
 	spin_unlock_irqrestore(&dev_priv->irqmask_lock, irqflags);
+}
+
+/**
+ *	mdfld_enable_te		-	enable TE events
+ *	@dev: our DRM device
+ *	@pipe: which pipe to work on
+ *
+ *	Enable TE events on a Medfield display pipe. Medfield specific.
+ */
+int mdfld_enable_te(struct drm_device *dev, int pipe)
+{
+	struct drm_psb_private *dev_priv = dev->dev_private;
+	unsigned long flags;
+	uint32_t reg_val = 0;
+	uint32_t pipeconf_reg = mid_pipeconf(pipe);
+
+	if (gma_power_begin(dev, false)) {
+		reg_val = REG_READ(pipeconf_reg);
+		gma_power_end(dev);
+	}
+
+	if (!(reg_val & PIPEACONF_ENABLE))
+		return -EINVAL;
+
+	spin_lock_irqsave(&dev_priv->irqmask_lock, flags);
+
+	mid_enable_pipe_event(dev_priv, pipe);
+	psb_enable_pipestat(dev_priv, pipe, PIPE_TE_ENABLE);
+
+	spin_unlock_irqrestore(&dev_priv->irqmask_lock, flags);
+
+	return 0;
+}
+
+/**
+ *	mdfld_disable_te		-	disable TE events
+ *	@dev: our DRM device
+ *	@pipe: which pipe to work on
+ *
+ *	Disable TE events on a Medfield display pipe. Medfield specific.
+ */
+void mdfld_disable_te(struct drm_device *dev, int pipe)
+{
+	struct drm_psb_private *dev_priv = dev->dev_private;
+	unsigned long flags;
+
+	spin_lock_irqsave(&dev_priv->irqmask_lock, flags);
+
+	mid_disable_pipe_event(dev_priv, pipe);
+	psb_disable_pipestat(dev_priv, pipe, PIPE_TE_ENABLE);
+
+	spin_unlock_irqrestore(&dev_priv->irqmask_lock, flags);
 }
 
 /* Called from drm generic code, passed a 'crtc', which
@@ -599,17 +576,17 @@ u32 psb_get_vblank_counter(struct drm_device *dev, int pipe)
 		pipeconf_reg = PIPECCONF;
 		break;
 	default:
-		DRM_ERROR("%s, invalded pipe.\n", __func__);
+		dev_err(dev->dev, "%s, invalid pipe.\n", __func__);
 		return 0;
 	}
 
-	if (!ospm_power_using_hw_begin(OSPM_DISPLAY_ISLAND, false))
+	if (!gma_power_begin(dev, false))
 		return 0;
 
 	reg_val = REG_READ(pipeconf_reg);
 
 	if (!(reg_val & PIPEACONF_ENABLE)) {
-		DRM_ERROR("trying to get vblank count for disabled pipe %d\n",
+		dev_err(dev->dev, "trying to get vblank count for disabled pipe %d\n",
 								pipe);
 		goto psb_get_vblank_counter_exit;
 	}
@@ -632,7 +609,7 @@ u32 psb_get_vblank_counter(struct drm_device *dev, int pipe)
 
 psb_get_vblank_counter_exit:
 
-	ospm_power_using_hw_end(OSPM_DISPLAY_ISLAND);
+	gma_power_end(dev);
 
 	return count;
 }

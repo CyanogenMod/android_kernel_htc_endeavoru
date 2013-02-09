@@ -24,11 +24,13 @@ config BLACKFIN
 	select HAVE_FUNCTION_TRACER
 	select HAVE_FUNCTION_TRACE_MCOUNT_TEST
 	select HAVE_IDE
+	select HAVE_IRQ_WORK
 	select HAVE_KERNEL_GZIP if RAMKERNEL
 	select HAVE_KERNEL_BZIP2 if RAMKERNEL
 	select HAVE_KERNEL_LZMA if RAMKERNEL
 	select HAVE_KERNEL_LZO if RAMKERNEL
 	select HAVE_OPROFILE
+	select HAVE_PERF_EVENTS
 	select ARCH_WANT_OPTIONAL_GPIOLIB
 	select HAVE_GENERIC_HARDIRQS
 	select GENERIC_ATOMIC64
@@ -43,9 +45,6 @@ config GENERIC_BUG
 	depends on BUG
 
 config ZONE_DMA
-	def_bool y
-
-config GENERIC_FIND_NEXT_BIT
 	def_bool y
 
 config GENERIC_GPIO
@@ -953,6 +952,16 @@ config BFIN_GPTIMERS
 
 	  To compile this driver as a module, choose M here: the module
 	  will be called gptimers.
+
+config HAVE_PWM
+	tristate "Enable PWM API support"
+	depends on BFIN_GPTIMERS
+	help
+	  Enable support for the Pulse Width Modulation framework (as
+	  found in linux/pwm.h).
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called pwm.
 
 choice
 	prompt "Uncached DMA region"

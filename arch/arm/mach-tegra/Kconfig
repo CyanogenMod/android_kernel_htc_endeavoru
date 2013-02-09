@@ -1,15 +1,20 @@
+# Copyright (c) 2012, NVIDIA CORPORATION.  All rights reserved.
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms and conditions of the GNU General Public License,
+# version 2, as published by the Free Software Foundation.
+#
+# This program is distributed in the hope it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+# more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 if ARCH_TEGRA
 
 comment "NVIDIA Tegra options"
-
-config SHARK_TD_WORKSHOP
-	bool "Shark TD Project Workshop"
-	default n
-	depends on ARCH_TEGRA_3x_SOC
-	help
-	  Support for Shark TD workshop. Tegra AP30 integration with STE
-	  M6718 baseband processor.
-	  Select "y" to enable.
 
 config ARCH_TEGRA_2x_SOC
 	bool "Tegra 2 family SOC"
@@ -18,6 +23,7 @@ config ARCH_TEGRA_2x_SOC
 	select ARCH_TEGRA_HAS_PCIE
 	select CPU_V7
 	select ARM_GIC
+	select ARM_SAVE_DEBUG_CONTEXT if PM_SLEEP
 	select ARCH_REQUIRE_GPIOLIB
 	select USB_ARCH_HAS_EHCI if USB_SUPPORT
 	select USB_ULPI if USB_SUPPORT
@@ -28,7 +34,11 @@ config ARCH_TEGRA_2x_SOC
 	select USB_ULPI_VIEWPORT if USB_SUPPORT
 	select ARCH_SUPPORTS_MSI if TEGRA_PCI
 	select PCI_MSI if TEGRA_PCI
-	select ARM_ERRATA_754322
+	select CPA
+	select ARM_ERRATA_716044
+	select ARM_ERRATA_764369 if SMP
+	select ARCH_HAS_SUSPEND_PAGETABLE
+	select NVMAP_CACHE_MAINT_BY_SET_WAYS
 	help
 	  Support for NVIDIA Tegra AP20 and T20 processors, based on the
 	  ARM CortexA9MP CPU and the ARM PL310 L2 cache controller
@@ -41,7 +51,8 @@ config ARCH_TEGRA_3x_SOC
 	select ARCH_TEGRA_HAS_DUAL_CPU_CLUSTERS
 	select CPU_V7
 	select ARM_GIC
-	select GIC_SET_MULTIPLE_CPUS
+	select ARM_SAVE_DEBUG_CONTEXT if PM_SLEEP
+	select GIC_SET_MULTIPLE_CPUS if SMP
 	select ARCH_REQUIRE_GPIOLIB
 	select USB_ARCH_HAS_EHCI if USB_SUPPORT
 	select USB_EHCI_TEGRA if USB_SUPPORT
@@ -51,6 +62,11 @@ config ARCH_TEGRA_3x_SOC
 	select ARCH_SUPPORTS_MSI if TEGRA_PCI
 	select PCI_MSI if TEGRA_PCI
 	select ARM_ERRATA_754322
+	select ARM_ERRATA_764369 if SMP
+	select TEGRA_LP2_ARM_TWD if HAVE_ARM_TWD && !TEGRA_RAIL_OFF_MULTIPLE_CPUS
+	select CPA
+	select ARCH_HAS_SUSPEND_PAGETABLE
+	select NVMAP_CACHE_MAINT_BY_SET_WAYS
 	help
 	  Support for NVIDIA Tegra 3 family of SoCs, based upon the
 	  ARM CortexA9MP CPU and the ARM PL310 L2 cache controller
@@ -113,6 +129,12 @@ config MACH_SEABOARD
 	 also be included for some of the derivative boards that
 	 have large similarities with the seaboard design.
 
+config MACH_TEGRA_DT
+	bool "Generic Tegra board (FDT support)"
+	select USE_OF
+	help
+	  Support for generic nVidia Tegra boards using Flattened Device Tree
+
 config MACH_TRIMSLICE
        bool "TrimSlice board"
        depends on ARCH_TEGRA_2x_SOC
@@ -146,46 +168,154 @@ config MACH_CARDHU
        bool "Cardhu board"
        depends on ARCH_TEGRA_3x_SOC
        select MACH_HAS_SND_SOC_TEGRA_WM8903 if SND_SOC
-       select MACH_HAS_SND_SOC_TEGRA_RT5640 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_TLV320AIC326X if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_MAX98095 if SND_SOC
        help
          Support for NVIDIA Cardhu development platform
+
+config MACH_P1852
+       bool "P1852 board"
+       depends on ARCH_TEGRA_3x_SOC
+       help
+         Support for NVIDIA P1852 development platform
 
 config MACH_TEGRA_ENTERPRISE
        bool "Enterprise board"
        depends on ARCH_TEGRA_3x_SOC
        select MACH_HAS_SND_SOC_TEGRA_MAX98088 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_TLV320AIC326X if SND_SOC
+       select TEGRA_SLOW_CSITE
        help
          Support for NVIDIA Enterprise development platform
 
-config MACH_VERTEXF
-       bool "Quattro#F board"
+config MACH_KAI
+       bool "Kai board"
        depends on ARCH_TEGRA_3x_SOC
+       select MACH_HAS_SND_SOC_TEGRA_RT5639 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_RT5640 if SND_SOC
        help
-         Support for HTC Quattro#F tablet
-
-config MACH_VERTEXFP
-       bool "Quattro#F PRM board"
-       depends on ARCH_TEGRA_3x_SOC
-       help
-         Support for HTC Quattro#F PRM tablet
-
-config MACH_ENDEAVORU
-	bool "Edge board"
-	default n
-	depends on ARCH_TEGRA_3x_SOC
-	help
-		Support for HTC EDGE#U phone
-
-config MACH_ENDEAVORTD
-	bool "Edge#TD board"
-	default n
-	depends on ARCH_TEGRA_3x_SOC
-	help
-		Support for HTC EDGE#TD phone
+         Support for NVIDIA KAI development platform
 
 config BATTERY_TPS80032
-	depends on HTC_BATT_CORE && ADC_TPS80032 && VSYS_ALARM_TPS80032
-	bool "HTC battery driver for tps80032"
+       bool "HTC battery driver for tps80032"
+       depends on HTC_BATT_CORE && ADC_TPS80032 && VSYS_ALARM_TPS80032
+
+config HTC_BATT_CORE
+	depends on POWER_SUPPLY
+	bool "HTC battery core driver"
+
+config HTC_POWER_OFF
+       bool "HTC Power Off"
+       help
+          Switch power off to reboot if cable attached
+
+config HTC_PROJECT
+       bool "HTC Project"
+       select HTC_DEBUG_FILE_NODE
+       select WATCHDOG
+       select TEGRA_WATCHDOG
+       select TEGRA_WATCHDOG_ENABLE_ON_PROBE
+       select BOOTPARAM_SOFTLOCKUP_PANIC
+       select ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
+       select DEBUG_MUTEXES
+       select HTC_POWER_OFF
+       help
+         HTC Project
+
+config MACH_ENDEAVORU
+       bool "ENDEAVORU board"
+       depends on ARCH_TEGRA_3x_SOC
+       depends on HTC_PROJECT
+       select MACH_HAS_SND_SOC_TEGRA_MAX98088 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_TLV320AIC326X if SND_SOC
+       select TEGRA_SLOW_CSITE
+       select VIDEO_CHANGE_IN_AD5823
+       select RAWCHIP_ENABLE
+       select TEGRA_CPU_AP33
+       help
+         Support for HTC Endeavor#U platform
+         jj
+config MACH_ENDEAVORTD
+       bool "ENDEAVORTD board"
+       depends on ARCH_TEGRA_3x_SOC
+       depends on HTC_PROJECT
+       select MACH_HAS_SND_SOC_TEGRA_MAX98088 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_TLV320AIC326X if SND_SOC
+       select TEGRA_SLOW_CSITE
+       select VIDEO_CHANGE_IN_AD5823
+       select RAWCHIP_ENABLE
+       select TEGRA_CPU_AP33
+       help
+         Support for HTC Endeavor#TD platform
+
+config MACH_ENRC2U
+       bool "EndeavorC2#U board"
+       depends on ARCH_TEGRA_3x_SOC
+       depends on HTC_PROJECT
+       select MACH_HAS_SND_SOC_TEGRA_MAX98088 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_TLV320AIC326X if SND_SOC
+       select TEGRA_SLOW_CSITE
+       select VIDEO_CHANGE_IN_AD5823
+       select RAWCHIP_ENABLE
+       select RAWCHIP_ENABLE_FRONT
+       help
+         Support for HTC EndeavorC2#U platform
+
+config MACH_ENRC2B
+       bool "EndeavorC2#U board"
+       depends on ARCH_TEGRA_3x_SOC
+       depends on HTC_PROJECT
+       select MACH_HAS_SND_SOC_TEGRA_MAX98088 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_TLV320AIC326X if SND_SOC
+       select TEGRA_SLOW_CSITE
+       select VIDEO_CHANGE_IN_AD5823
+       select RAWCHIP_ENABLE
+       select RAWCHIP_ENABLE_FRONT
+       help
+         Support for HTC EndeavorC2#B platform
+
+config MACH_EVITAREUL
+       bool "EvitaRE#UL board"
+       depends on ARCH_TEGRA_3x_SOC
+       depends on HTC_PROJECT
+       select MACH_HAS_SND_SOC_TEGRA_MAX98088 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_TLV320AIC326X if SND_SOC
+       select TEGRA_SLOW_CSITE
+       select VIDEO_CHANGE_IN_AD5823
+       select RAWCHIP_ENABLE
+       select RAWCHIP_ENABLE_FRONT
+       select QCT_9K_MODEM
+       help
+         Support for HTC EvitaRE#UL platform
+
+config MACH_OPERAUL
+       bool "Opera#UL board"
+       depends on ARCH_TEGRA_3x_SOC
+       depends on HTC_PROJECT
+       select MACH_HAS_SND_SOC_TEGRA_MAX98088 if SND_SOC
+       select MACH_HAS_SND_SOC_TEGRA_TLV320AIC326X if SND_SOC
+       select TEGRA_SLOW_CSITE
+       select VIDEO_CHANGE_IN_AD5823
+       select RAWCHIP_ENABLE
+       select RAWCHIP_ENABLE_FRONT
+       select QCT_9K_MODEM
+       select SENSORS_CAPSENSE_HSNR
+       help
+         Support for HTC Opera#UL platform
+
+choice
+       prompt "Tegra cpu family"
+       default TEGRA_CPU_AP37
+
+config TEGRA_CPU_AP33
+       bool "AP33/1.5GHz"
+       depends on MACH_ENDEAVORU || MACH_ENDEAVORTD
+
+config TEGRA_CPU_AP37
+       bool "AP37/1.7GHz"
+       depends on MACH_ENRC2B || MACH_ENRC2U || MACH_EVITAREUL
+
+endchoice
 
 choice
        prompt "Tegra platform type"
@@ -261,12 +391,27 @@ config TEGRA_FIQ_DEBUGGER
 	help
 	  Enables the FIQ serial debugger on Tegra
 
+config TEGRA_P1852_TDM
+	bool "Enable TDM mode for P1852 SKUs"
+	default n
+	depends on MACH_P1852
+	help
+		Enables TDM mode driver for P1852 SKUs. If this
+		is not defined then I2S mode is selected by default.
+
 config TEGRA_CARDHU_DSI
 	bool "Support DSI panel on Cardhu"
 	depends on MACH_CARDHU
 	select TEGRA_DSI
 	help
 		Support for DSI Panel on Nvidia Cardhu
+
+config TEGRA_CARDHU_DUAL_DSI_PANEL
+	bool "Support Dual DSI panel on Cardhu"
+	default n
+	depends on TEGRA_CARDHU_DSI
+	help
+		Support for Dual DSI Panel on Nvidia Cardhu
 
 config TEGRA_EMC_SCALING_ENABLE
 	bool "Enable scaling the memory frequency"
@@ -286,7 +431,7 @@ config TEGRA_CORE_DVFS
 
 config TEGRA_IOVMM_GART
 	bool "Enable I/O virtual memory manager for GART"
-	depends on ARCH_TEGRA_2x_SOC
+	depends on ARCH_TEGRA_2x_SOC && !TEGRA_IOMMU_GART
 	default y
 	select TEGRA_IOVMM
 	help
@@ -297,7 +442,7 @@ config TEGRA_IOVMM_GART
 
 config TEGRA_IOVMM_SMMU
 	bool "Enable I/O virtual memory manager for SMMU"
-	depends on ARCH_TEGRA_3x_SOC
+	depends on ARCH_TEGRA_3x_SOC && !TEGRA_IOMMU_SMMU
 	default y
 	select TEGRA_IOVMM
 	help
@@ -305,14 +450,6 @@ config TEGRA_IOVMM_SMMU
 	  shared with the operating system into contiguous I/O virtual
 	  space through the SMMU (System Memory Management Unit)
 	  hardware included on Tegra SoCs.
-
-config TEGRA_SMMU_BASE_AT_E0000000
-	bool "Force SMMU IOVA base to 0xe0000000"
-	depends on TEGRA_IOVMM_SMMU
-	default n
-	help
-	  Forces SMMU IOVA base address to 0xe0000000 for debug purposes
-	  only. Select n for production systems.
 
 config TEGRA_IOVMM_SMMU_SYSFS
 	bool "Enable SMMU register access for debugging"
@@ -322,6 +459,7 @@ config TEGRA_IOVMM_SMMU_SYSFS
 	  Enables SMMU register access through /sys/devices/smmu/* files.
 
 config TEGRA_IOVMM
+	depends on TEGRA_IOVMM_GART || TEGRA_IOVMM_SMMU
 	bool
 
 config TEGRA_AVP_KERNEL_ON_MMU
@@ -333,7 +471,7 @@ config TEGRA_AVP_KERNEL_ON_MMU
 
 config TEGRA_AVP_KERNEL_ON_SMMU
 	bool "Use SMMU to relocate AVP kernel"
-	depends on TEGRA_IOVMM_SMMU
+	depends on TEGRA_IOVMM_SMMU || TEGRA_IOMMU_SMMU
 	default y
 	help
 	  Use SMMU to relocate AVP kernel (nvrm_avp.bin).
@@ -345,6 +483,7 @@ config TEGRA_THERMAL_THROTTLE
 	bool "Enable throttling of CPU speed on overtemp"
 	depends on TEGRA_SILICON_PLATFORM
 	depends on CPU_FREQ
+	depends on THERMAL
 	default y
 	help
 	  Also requires enabling a temperature sensor such as NCT1008.
@@ -353,11 +492,6 @@ config WIFI_CONTROL_FUNC
 	bool "Enable WiFi control function abstraction"
 	help
 	  Enables Power/Reset/Carddetect function abstraction
-
-config WIFI_NVS_PROC_CREATE
-	bool "Store nvs data into /proc/calibration"
-	help
-	  store nvs data into /proc/calibration
 
 config TEGRA_CLOCK_DEBUG_WRITE
 	bool "Enable debugfs write access to clock tree"
@@ -378,6 +512,26 @@ config TEGRA_AUTO_HOTPLUG
 	  high/low power CPU clusters automatically, corresponding to
 	  CPU frequency scaling.
 
+config BEST_TRADE_HOTPLUG
+	bool "Hotplug depends on power-performance tradeoff"
+	depends on HOTPLUG_CPU && SMP
+	default n
+	help
+	  This option enables making decision of CPU hotplug
+	  bases on the tradeoff between power vs. performance.
+	  A good trade would retain overall system performance,
+	  as well as save battery life.
+
+
+config TEGRA_MC_EARLY_ACK
+	bool "Enable early acknowledgement from mermory controller"
+	depends on ARCH_TEGRA_3x_SOC
+	default y
+	help
+	  This option enables early acknowledgement from memory
+	  controller. This feature is used to improve CPU memory
+	  write performance.
+
 config TEGRA_MC_PROFILE
 	tristate "Enable profiling memory controller utilization"
 	default y
@@ -397,13 +551,6 @@ config TEGRA_EDP_LIMITS
 	  of on-line CPUs to keep CPU rail current within power supply
 	  capabilities.
 
-config TEGRA_INTERNAL_TSENSOR_EDP_SUPPORT
-	bool "Enable EDP and thermal throttling using internal TSensor"
-	depends on TEGRA_EDP_LIMITS && ARCH_TEGRA_3x_SOC
-	help
-	  When enabled, uses internal tsensor to support EDP and
-	  thermal throttling on tegra platform
-
 config TEGRA_EMC_TO_DDR_CLOCK
 	int "EMC to DDR clocks ratio"
 	default "2" if ARCH_TEGRA_2x_SOC
@@ -416,19 +563,22 @@ config TEGRA_INTERACTIVE_GOV_ON_EARLY_SUSPEND
 	help
 	 Also will restore to original cpu frequency governor when device is resumed
 
-config TEGRA_CONSERVATIVE_GOV_ON_EARLY_SUSPEND
+config TEGRA_SE_ON_CBUS
+	bool "To Drive SE clock from cbus"
+	default y
+	help
+	  This option enables SE clock to be derived from cbus
+
+config TEGRA_CBUS_CLOCK_DIVIDER
+        int "CBUS clock divider"
+        default "2"
+
+config TEGRA_CONVSERVATIVE_GOV_ON_EARLYSUPSEND
 	bool "Use conservative cpu frequency governor when device enters early suspend"
 	depends on HAS_EARLYSUSPEND && CPU_FREQ
 	default n
 	help
 	 Also will restore to original cpu frequency governor when device is resumed
-
-config TEGRA_LEGACY_AUDIO
-	bool "Enable Tegra Legacy Audio APIs"
-	default n
-	help
-	  Say Y if you want to add support legacy (non-ALSA) audio APIs on
-	  Tegra. This will disable ALSA (ASoC) support.
 
 config TEGRA_STAT_MON
         bool "Enable H/W statistics monitor"
@@ -441,12 +591,17 @@ config USB_HOTPLUG
 	bool "Enabling the USB hotplug"
 	default n
 
-config TIWLAN_SDIO
-        bool "TI WLAN Enhanced SDIO Contoller support"
-        depends on MACH_ENDEAVORU || MACH_ENDEAVORTD || MACH_BLUE
-        help
-           Say Y here if you want to be able to use TI's WLAN device using the
-           SDIO interface. If unsure, say N.
+config TEGRA_GADGET_BOOST_CPU_FREQ
+	int "Boost cpu frequency for tegra usb gadget (0-1300 mhz)"
+	range 0 1300
+	default 0
+	help
+	  Devices need to boost frequency of CPU when they are connected
+	  to host pc through usb cable for better performance. This value
+	  is the amount of the frequency (in mhz) to be boosted. If it is
+	  zero boosting frequency will not be enabled. This value will be
+	  used only by usb gadget driver.
+
 config TEGRA_DYNAMIC_PWRDET
 	bool "Enable dynamic activation of IO level auto-detection"
 	depends on TEGRA_SILICON_PLATFORM
@@ -488,22 +643,18 @@ config TEGRA_BB_XMM_POWER2
 	  insert this LKM to initiate 2nd USB enumeration power sequence
 	  - after modem software has been downloaded to flashless device.
 
-config TEGRA_THERMAL_SYSFS
-	bool "Enable Thermal driver to use Thermal Sysfs infrastructure"
-	depends on THERMAL
-	default y
+config HTC_SIMHOTSWAP
+       bool "Enable sim hotswap driver for sim detect"
+       default n
+       help
+         Enables sim hotswap driver for sim detect.
 
-config MICROP_COMMON
-    bool "MICROP COMMON Driver"
-    depends on I2C
-    help
-      HTC Microp-P support.
+config REMOVE_HSIC_L3_STATE
+	bool "Remove HSIC L3 suspend state"
+	default n
+	help
+	  Remove HSIC L3 suspend state.
 
-config MICROP_COMMON_QUATTRO
-    bool "MICROP COMMON Driver"
-    depends on I2C
-    help
-      HTC Microp-P support.
 config HTC_HEADSET_MGR
 	tristate "HTC headset manager driver"
 	default n
@@ -552,20 +703,19 @@ config HTC_HEADSET_8X60
 	help
 	  Provides support of HTC 8X60 headset detection.
 
-config HTC_USB_NOTIFIER
-	tristate "HTC usb notifier register"
+config HTC_HEADSET_ONE_WIRE
+	tristate "HTC 1-wire headset detection driver"
+	depends on HTC_HEADSET_MGR
 	default n
 	help
-	  If usb status are change, a usb notifier will callback to 
-	  registered function.
+	  Provides support of HTC 1-wire headset detection.
 
-config HTC_BATT_CORE
-	depends on POWER_SUPPLY
-	bool "HTC battery core driver"
+config RAWCHIP_ENABLE
+    bool "Enable rawchip driver"
+    default n
 
-config RESET_REASON
-    bool "Enable reset reason for Quattro / Blue"
-    depends on MACH_ENDEAVORU || MACH_ENDEAVORTD || MACH_BLUE || MACH_VERTEXF || MACH_QUATTRO_U
+config RAWCHIP_ENABLE_FRONT
+    bool "Enable rawchip driver for front camera"
     default n
 
 config TEGRA_PLLM_RESTRICTED
@@ -577,19 +727,6 @@ config TEGRA_PLLM_RESTRICTED
 	  capable of dividing maximum PLLM frequency at minimum voltage. When
 	  disabled, PLLM is used as a clock source with no restrictions (which
 	  may effectively increase lower limit for core voltage).
-
-config DEBUG_LL_DYNAMIC
-	bool "Dynamically enable low Level debug"
-	depends on DEBUG_LL
-	default n
-
-config USB_CDROM
-	bool "Enable USB CD-ROM"
-	depends on USB_STORAGE
-
-config USB_DRV
-	bool "Enable USB Drive Strength"
-	depends on USB
 
 config TEGRA_WDT_RECOVERY
 	bool "Enable suspend/resume watchdog recovery mechanism"
@@ -605,10 +742,106 @@ config ANDROID_RAM_CONSOLE_APPEND_PMIC_STATUS_BITS
 	  Append PMIC status bits to end of /proc/last_kmsg for
 	  checking the boot / reset reason in detail
 
-config CMDLINE_OPTIONS
-	bool "Enable cmdline options command parsing"
+config TEGRA_LP2_ARM_TWD
+	bool
+
+config TEGRA_RAIL_OFF_MULTIPLE_CPUS
+	bool
+
+config TEGRA_SLOW_CSITE
+	bool "lower csite clock to 1 Mhz to reduce its power consumption"
 	default n
 	help
-	  This enables the parsing of cmdline options.
+	  When enabled, csite will be running at 1 Mhz and the performance of
+	  jtag, lauterbach and other debugger will be extremely slow.
+
+config TEGRA_PREINIT_CLOCKS
+	bool "Preinitialize Tegra clocks to known states"
+	default n
+	help
+	  Preinitialize Tegra clocks to known states before actual full-
+	  scale clock initialization starts.
+
+config TEGRA_PREPOWER_WIFI
+	bool "Pre-power up WiFi "
+	default n
+	help
+	  Pre-power up the on board WiFi chip
+
+config HTC_USB_NOTIFIER
+	tristate "HTC usb notifier register"
+	default y
+	help
+	  If usb status are change, a usb notifier will callback to
+	  registered function.
+config MSM_SUBSYSTEM_RESTART
+	bool "MSM Subsystem Restart Driver"
+	default n
+	help
+	  This option enables the MSM subsystem restart driver, which provides
+	  a framework to handle subsystem crashes.
+
+config HTC_QCT_9K_MDM_HSIC_PM_DBG
+	bool "HTC_QCT_9K_MDM_HSIC_PM_DBG"
+	default n
+	help
+	  This option enables the HTC_QCT_9K_MDM_HSIC_PM_DBG log
+
+config MSM_NONSMD_PACKET_FILTER
+	bool "Non-SMD based Packet Filter"
+	default n
+	help
+	  The white TCP port list is updated in attribute
+	  repying on RIL to notify modem.
+
+config LARGE_TCP_INITIAL_BUFFER
+	bool "Large TCP initial Buffer"
+	default n
+	help
+	  Enlarge TCP initial buffer size.
+
+config QCT_9K_MODEM
+	bool "Enable Qualcomm 9K modem"
+	select MSM_RMNET_USB
+	select USB_QCOM_DIAG_BRIDGE
+	select USB_QCOM_MDM_BRIDGE
+	select MSM_SUBSYSTEM_RESTART
+	select USB_SERIAL_QUALCOMM
+	select DIAG_CHAR
+	select DIAG_OVER_USB
+	select DIAG_HSIC_PIPE
+	select USB_ANDROID_DIAG
+	select USB_ANDROID_RMNET
+	select MSM_RMNET_BAM
+	select MODEM_SUPPORT
+	select MSM_NONSMD_PACKET_FILTER
+	select LARGE_TCP_INITIAL_BUFFER
+	select HTC_QCT_9K_MDM_HSIC_PM_DBG
+	help
+	  Qualcomm 9K modem
+
+config TEGRA_SKIN_THROTTLE
+	bool "Skin Temperature throttling"
+	depends on TEGRA_THERMAL_THROTTLE
+	depends on THERM_EST
+	default n
+	help
+	  Enable throttling to control the temperature of the skin/case
+	  of the device.
 endif
 
+config RIL_FTRACE_DEBUG_SOCK_IOCTL
+	bool "Enable ftrace debug for socket io-control"
+	default n
+	help
+	  Debug for rmnet ioctl no response.
+
+config SENSE_4_PLUS
+	depends on ARCH_TEGRA_3x_SOC
+	bool "SENSE 4 PLUS"
+	help
+	  Support for SENSE 4 PLUS.
+
+config MEMORY_FOOTPRINT_DEBUGGING
+	bool "footprint for debugging"
+	default n

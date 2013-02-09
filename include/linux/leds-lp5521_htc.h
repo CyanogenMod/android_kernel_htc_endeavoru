@@ -18,13 +18,14 @@
 
 struct led_i2c_config {
 	const char *name;
+	int led_cur;
+	int led_lux;
 };
 
 struct led_i2c_platform_data {
 	struct led_i2c_config *led_config;
 	int num_leds;
 	int ena_gpio;
-	int tri_gpio;
 };
 
 void led_behavior(struct i2c_client *client, int val);

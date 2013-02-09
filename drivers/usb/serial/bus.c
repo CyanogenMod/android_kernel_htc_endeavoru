@@ -94,6 +94,8 @@ static int usb_serial_device_remove(struct device *dev)
 	int retval = 0;
 	int minor;
 
+pr_info("+%s\n", __func__);
+
 	port = to_usb_serial_port(dev);
 	if (!port)
 		return -ENODEV;
@@ -108,10 +110,11 @@ static int usb_serial_device_remove(struct device *dev)
 		retval = driver->port_remove(port);
 
 	minor = port->number;
+	pr_info("+%s:tty_unregister_device\n", __func__);
 	tty_unregister_device(usb_serial_tty_driver, minor);
 	dev_info(dev, "%s converter now disconnected from ttyUSB%d\n",
 		 driver->description, minor);
-
+pr_info("-%s\n", __func__);
 	return retval;
 }
 

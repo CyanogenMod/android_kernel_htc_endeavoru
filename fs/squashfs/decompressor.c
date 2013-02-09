@@ -2,7 +2,7 @@
  * Squashfs - a compressed read only filesystem for Linux
  *
  * Copyright (c) 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
- * Phillip Lougher <phillip@lougher.demon.co.uk>
+ * Phillip Lougher <phillip@squashfs.org.uk>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -49,6 +49,12 @@ static const struct squashfs_decompressor squashfs_lzo_comp_ops = {
 #ifndef CONFIG_SQUASHFS_XZ
 static const struct squashfs_decompressor squashfs_xz_comp_ops = {
 	NULL, NULL, NULL, XZ_COMPRESSION, "xz", 0
+};
+#endif
+
+#ifndef CONFIG_SQUASHFS_ZLIB
+static const struct squashfs_decompressor squashfs_zlib_comp_ops = {
+	NULL, NULL, NULL, ZLIB_COMPRESSION, "zlib", 0
 };
 #endif
 

@@ -1,7 +1,7 @@
 /*
  * drivers/video/tegra/dc/nvhdcp.c
  *
- * Copyright (c) 2010-2011, NVIDIA Corporation.
+ * Copyright (c) 2010-2012, NVIDIA CORPORATION, All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -78,6 +78,7 @@ struct tegra_nvhdcp {
 	struct tegra_dc_hdmi_data	*hdmi;
 	struct workqueue_struct		*downstream_wq;
 	struct mutex			lock;
+	struct mutex			state_lock;
 	struct miscdevice		miscdev;
 	char				name[12];
 	unsigned			id;
@@ -981,7 +982,9 @@ static void nvhdcp_downstream_worker(struct work_struct *work)
 
 	nvhdcp_vdbg("CRYPT enabled\n");
 
+	mutex_lock(&nvhdcp->state_lock);
 	nvhdcp->state = STATE_LINK_VERIFY;
+	mutex_unlock(&nvhdcp->state_lock);
 	nvhdcp_info("link verified!\n");
 
 	while (1) {
@@ -1008,30 +1011,38 @@ failure:
 	if(nvhdcp->fail_count > 5) {
 	        nvhdcp_err("nvhdcp failure - too many failures, giving up!\n");
 	} else {
-		nvhdcp_err("nvhdcp failure - renegotiating in 1 second\n");
-		if (!nvhdcp_is_plugged(nvhdcp))
+		if (!nvhdcp_is_plugged(nvhdcp)) {
+			nvhdcp_err("nvhdcp failure\n");
 			goto lost_hdmi;
+		}
+		nvhdcp_err("nvhdcp failure - renegotiating in 1 second\n");
 		queue_delayed_work(nvhdcp->downstream_wq, &nvhdcp->work,
 						msecs_to_jiffies(1000));
 	}
 
 lost_hdmi:
+	mutex_lock(&nvhdcp->state_lock);
 	nvhdcp->state = STATE_UNAUTHENTICATED;
+	mutex_unlock(&nvhdcp->state_lock);
 	hdcp_ctrl_run(hdmi, 0);
 
 err:
 	mutex_unlock(&nvhdcp->lock);
 	return;
 disable:
+	mutex_lock(&nvhdcp->state_lock);
 	nvhdcp->state = STATE_OFF;
 	nvhdcp_set_plugged(nvhdcp, false);
+	mutex_unlock(&nvhdcp->state_lock);
 	mutex_unlock(&nvhdcp->lock);
 	return;
 }
 
 static int tegra_nvhdcp_on(struct tegra_nvhdcp *nvhdcp)
 {
+	mutex_lock(&nvhdcp->state_lock);
 	nvhdcp->state = STATE_UNAUTHENTICATED;
+	mutex_unlock(&nvhdcp->state_lock);
 	if (nvhdcp_is_plugged(nvhdcp)) {
 		nvhdcp->fail_count = 0;
 		queue_delayed_work(nvhdcp->downstream_wq, &nvhdcp->work,
@@ -1042,10 +1053,10 @@ static int tegra_nvhdcp_on(struct tegra_nvhdcp *nvhdcp)
 
 static int tegra_nvhdcp_off(struct tegra_nvhdcp *nvhdcp)
 {
-	mutex_lock(&nvhdcp->lock);
+	mutex_lock(&nvhdcp->state_lock);
 	nvhdcp->state = STATE_OFF;
 	nvhdcp_set_plugged(nvhdcp, false);
-	mutex_unlock(&nvhdcp->lock);
+	mutex_unlock(&nvhdcp->state_lock);
 	wake_up_interruptible(&wq_worker);
 	flush_workqueue(nvhdcp->downstream_wq);
 	return 0;
@@ -1081,9 +1092,9 @@ int tegra_nvhdcp_set_policy(struct tegra_nvhdcp *nvhdcp, int pol)
 
 static int tegra_nvhdcp_renegotiate(struct tegra_nvhdcp *nvhdcp)
 {
-	mutex_lock(&nvhdcp->lock);
+	mutex_lock(&nvhdcp->state_lock);
 	nvhdcp->state = STATE_RENEGOTIATE;
-	mutex_unlock(&nvhdcp->lock);
+	mutex_unlock(&nvhdcp->state_lock);
 	tegra_nvhdcp_on(nvhdcp);
 	return 0;
 }
@@ -1152,7 +1163,7 @@ static long nvhdcp_dev_ioctl(struct file *filp,
 	case TEGRAIO_HDCP_STATUE:
 		status = arg;
 		switch_set_state(&nvhdcp->hdcp_switch, status);
-		printk("[DHCP] HDCP_STATUS:%d\r\n", status);
+		printk("[HDCP] HDCP_STATUS:%d\r\n", status);
 		return true;
 
 	case TEGRAIO_NVHDCP_RENEGOTIATE:
@@ -1208,6 +1219,7 @@ struct tegra_nvhdcp *tegra_nvhdcp_create(struct tegra_dc_hdmi_data *hdmi,
 	snprintf(nvhdcp->name, sizeof(nvhdcp->name), "nvhdcp%u", id);
 	nvhdcp->hdmi = hdmi;
 	mutex_init(&nvhdcp->lock);
+	mutex_init(&nvhdcp->state_lock);
 
 	strlcpy(nvhdcp->info.type, nvhdcp->name, sizeof(nvhdcp->info.type));
 	nvhdcp->bus = bus;
@@ -1231,7 +1243,9 @@ struct tegra_nvhdcp *tegra_nvhdcp_create(struct tegra_dc_hdmi_data *hdmi,
 		goto free_nvhdcp;
 	}
 
+	mutex_lock(&nvhdcp->state_lock);
 	nvhdcp->state = STATE_UNAUTHENTICATED;
+	mutex_unlock(&nvhdcp->state_lock);
 
 	nvhdcp->downstream_wq = create_singlethread_workqueue(nvhdcp->name);
 	INIT_DELAYED_WORK(&nvhdcp->work, nvhdcp_downstream_worker);

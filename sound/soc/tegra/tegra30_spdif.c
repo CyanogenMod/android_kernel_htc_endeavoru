@@ -46,6 +46,7 @@
 #include "tegra30_spdif.h"
 
 #define DRV_NAME "tegra30-spdif"
+#define HDMI_DEBUG 1
 
 static inline void tegra30_spdif_write(struct tegra30_spdif *spdif,
 						u32 reg, u32 val)
@@ -211,6 +212,9 @@ static int tegra30_spdif_hw_params(struct snd_pcm_substream *substream,
 	int ret, srate, spdifclock;
 
 	if (substream->stream != SNDRV_PCM_STREAM_PLAYBACK) {
+#if HDMI_DEBUG
+		printk("HDMI_DEBUG: spdif capture is not supported\n");
+#endif
 		dev_err(dev, "spdif capture is not supported\n");
 		return -EINVAL;
 	}
@@ -284,6 +288,9 @@ static int tegra30_spdif_hw_params(struct snd_pcm_substream *substream,
 
 	ret = clk_set_rate(spdif->clk_spdif_out, spdifclock);
 	if (ret) {
+#if HDMI_DEBUG
+		printk("HDMI_DEBUG: Can't set SPDIF clock rate: %d\n", ret);
+#endif
 		dev_err(dev, "Can't set SPDIF clock rate: %d\n", ret);
 		return ret;
 	}
@@ -299,6 +306,9 @@ static int tegra30_spdif_hw_params(struct snd_pcm_substream *substream,
 
 	ret = tegra_hdmi_setup_audio_freq_source(srate, SPDIF);
 	if (ret) {
+#if HDMI_DEBUG
+		printk("HDMI_DEBUG: Can't set HDMI audio freq source: %d\n", ret);
+#endif
 		dev_err(dev, "Can't set HDMI audio freq source: %d\n", ret);
 		return ret;
 	}
@@ -386,6 +396,9 @@ static __devinit int tegra30_spdif_platform_probe(struct platform_device *pdev)
 
 	spdif = kzalloc(sizeof(struct tegra30_spdif), GFP_KERNEL);
 	if (!spdif) {
+#if HDMI_DEBUG
+		printk("HDMI_DEBUG: Can't allocate tegra30_spdif\n");
+#endif
 		dev_err(&pdev->dev, "Can't allocate tegra30_spdif\n");
 		ret = -ENOMEM;
 		goto exit;
@@ -394,6 +407,9 @@ static __devinit int tegra30_spdif_platform_probe(struct platform_device *pdev)
 
 	spdif->clk_spdif_out = clk_get(&pdev->dev, "spdif_out");
 	if (IS_ERR(spdif->clk_spdif_out)) {
+#if HDMI_DEBUG
+		printk("HDMI_DEBUG: Can't retrieve spdif clock\n");
+#endif
 		dev_err(&pdev->dev, "Can't retrieve spdif clock\n");
 		ret = PTR_ERR(spdif->clk_spdif_out);
 		goto err_free;
@@ -401,6 +417,9 @@ static __devinit int tegra30_spdif_platform_probe(struct platform_device *pdev)
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!mem) {
+#if HDMI_DEBUG
+		printk("HDMI_DEBUG: No memory resource\n");
+#endif
 		dev_err(&pdev->dev, "No memory resource\n");
 		ret = -ENODEV;
 		goto err_clk_put_spdif;
@@ -409,6 +428,9 @@ static __devinit int tegra30_spdif_platform_probe(struct platform_device *pdev)
 	memregion = request_mem_region(mem->start, resource_size(mem),
 					DRV_NAME);
 	if (!memregion) {
+#if HDMI_DEBUG
+		printk("HDMI_DEBUG: Memory region already claimed\n");
+#endif
 		dev_err(&pdev->dev, "Memory region already claimed\n");
 		ret = -EBUSY;
 		goto err_clk_put_spdif;
@@ -416,6 +438,9 @@ static __devinit int tegra30_spdif_platform_probe(struct platform_device *pdev)
 
 	spdif->regs = ioremap(mem->start, resource_size(mem));
 	if (!spdif->regs) {
+#if HDMI_DEBUG
+		printk("HDMI_DEBUG: ioremap failed\n");
+#endif
 		dev_err(&pdev->dev, "ioremap failed\n");
 		ret = -ENOMEM;
 		goto err_release;
@@ -436,6 +461,9 @@ static __devinit int tegra30_spdif_platform_probe(struct platform_device *pdev)
 
 	ret = snd_soc_register_dai(&pdev->dev, &tegra30_spdif_dai);
 	if (ret) {
+#if HDMI_DEBUG
+		printk("HDMI_DEBUG: Could not register DAI: %d\n", ret);
+#endif
 		dev_err(&pdev->dev, "Could not register DAI: %d\n", ret);
 		ret = -ENOMEM;
 		goto err_unmap;
@@ -469,7 +497,8 @@ static int __devexit tegra30_spdif_platform_remove(struct platform_device *pdev)
 	iounmap(spdif->regs);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	release_mem_region(res->start, resource_size(res));
+	if(res != NULL)
+		release_mem_region(res->start, resource_size(res));
 
 	clk_put(spdif->clk_spdif_out);
 

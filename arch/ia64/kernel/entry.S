@@ -1614,7 +1614,7 @@ sys_call_table:
 	data8 sys_sched_get_priority_min
 	data8 sys_sched_rr_get_interval
 	data8 sys_nanosleep
-	data8 sys_nfsservctl
+	data8 sys_ni_syscall			// old nfsservctl
 	data8 sys_prctl				// 1170
 	data8 sys_getpagesize
 	data8 sys_mmap2
@@ -1775,6 +1775,8 @@ sys_call_table:
 	data8 sys_open_by_handle_at
 	data8 sys_clock_adjtime
 	data8 sys_syncfs
+	data8 sys_setns				// 1330
+	data8 sys_sendmmsg
 
 	.org sys_call_table + 8*NR_syscalls	// guard against failures to increase NR_syscalls
 #endif /* __IA64_ASM_PARAVIRTUALIZED_NATIVE */

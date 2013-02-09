@@ -32,7 +32,7 @@
 
 #define DRV_NAME		"enic"
 #define DRV_DESCRIPTION		"Cisco VIC Ethernet NIC Driver"
-#define DRV_VERSION		"2.1.1.12"
+#define DRV_VERSION		"2.1.1.24"
 #define DRV_COPYRIGHT		"Copyright 2008-2011 Cisco Systems, Inc"
 
 #define ENIC_BARS_MAX		6
@@ -74,6 +74,7 @@ struct enic {
 	struct vnic_dev *vdev;
 	struct timer_list notify_timer;
 	struct work_struct reset;
+	struct work_struct change_mtu_work;
 	struct msix_entry msix_entry[ENIC_INTR_MAX];
 	struct enic_msix_entry msix[ENIC_INTR_MAX];
 	u32 msg_enable;
@@ -84,7 +85,6 @@ struct enic {
 	unsigned int flags;
 	unsigned int mc_count;
 	unsigned int uc_count;
-	int csum_rx_enabled;
 	u32 port_mtu;
 	u32 rx_coalesce_usecs;
 	u32 tx_coalesce_usecs;
@@ -94,7 +94,6 @@ struct enic {
 	____cacheline_aligned struct vnic_wq wq[ENIC_WQ_MAX];
 	spinlock_t wq_lock[ENIC_WQ_MAX];
 	unsigned int wq_count;
-	struct vlan_group *vlan_group;
 	u16 loop_enable;
 	u16 loop_tag;
 
@@ -119,5 +118,7 @@ static inline struct device *enic_get_dev(struct enic *enic)
 {
 	return &(enic->pdev->dev);
 }
+
+void enic_reset_addr_lists(struct enic *enic);
 
 #endif /* _ENIC_H_ */

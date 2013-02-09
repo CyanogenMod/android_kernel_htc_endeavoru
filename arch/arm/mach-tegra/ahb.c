@@ -87,9 +87,10 @@ static inline void gizmo_writel(unsigned long value, unsigned long offset)
 	writel(value, IO_TO_VIRT(TEGRA_AHB_GIZMO_BASE + offset));
 }
 
+#ifdef CONFIG_PM
+
 static u32 ahb_gizmo[29];
 
-#ifdef CONFIG_PM
 int tegra_ahbgizmo_suspend(void)
 {
 	ahb_gizmo[0] = gizmo_readl(AHB_ARBITRATION_DISABLE);
@@ -193,14 +194,12 @@ static int __init tegra_init_ahb_gizmo_settings(void)
 
 	val = gizmo_readl(AHB_MEM_PREFETCH_CFG1);
 	val &= ~MST_ID(~0);
-	val |= PREFETCH_ENB | AHBDMA_MST_ID | ADDR_BNDRY(0xc)
-				| INACTIVITY_TIMEOUT(0x800);
+	val |= PREFETCH_ENB | AHBDMA_MST_ID | ADDR_BNDRY(0xc) | INACTIVITY_TIMEOUT(0x1000);
 	gizmo_writel(val, AHB_MEM_PREFETCH_CFG1);
 
 	val = gizmo_readl(AHB_MEM_PREFETCH_CFG2);
 	val &= ~MST_ID(~0);
-	val |= PREFETCH_ENB | USB_MST_ID | ADDR_BNDRY(0xc)
-				| INACTIVITY_TIMEOUT(0x800);
+	val |= PREFETCH_ENB | USB_MST_ID | ADDR_BNDRY(0xc) | INACTIVITY_TIMEOUT(0x1000);
 	gizmo_writel(val, AHB_MEM_PREFETCH_CFG2);
 
 	val = gizmo_readl(AHB_MEM_PREFETCH_CFG3);

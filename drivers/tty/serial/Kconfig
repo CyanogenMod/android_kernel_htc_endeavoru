@@ -457,7 +457,6 @@ config SERIAL_SAMSUNG_UARTS_4
 config SERIAL_SAMSUNG_UARTS
 	int
 	depends on ARM && PLAT_SAMSUNG
-	default 2 if ARCH_S3C2400
 	default 6 if ARCH_S5P6450
 	default 4 if SERIAL_SAMSUNG_UARTS_4
 	default 3
@@ -489,13 +488,6 @@ config SERIAL_SAMSUNG_CONSOLE
 	  your boot loader about how to pass options to the kernel at
 	  boot time.)
 
-config SERIAL_S3C2400
-	tristate "Samsung S3C2410 Serial port support"
-	depends on ARM && SERIAL_SAMSUNG && CPU_S3C2400
-	default y if CPU_S3C2400
-	help
-	  Serial port support for the Samsung S3C2400 SoC
-
 config SERIAL_S3C2410
 	tristate "Samsung S3C2410 Serial port support"
 	depends on SERIAL_SAMSUNG && CPU_S3C2410
@@ -519,13 +511,6 @@ config SERIAL_S3C2440
 	help
 	  Serial port support for the Samsung S3C2440, S3C2416 and S3C2442 SoC
 
-config SERIAL_S3C24A0
-	tristate "Samsung S3C24A0 Serial port support"
-	depends on SERIAL_SAMSUNG && CPU_S3C24A0
-	default y if CPU_S3C24A0
-	help
-	  Serial port support for the Samsung S3C24A0 SoC
-
 config SERIAL_S3C6400
 	tristate "Samsung S3C6400/S3C6410/S5P6440/S5P6450/S5PC100 Serial port support"
 	depends on SERIAL_SAMSUNG && (CPU_S3C6400 || CPU_S3C6410 || CPU_S5P6440 || CPU_S5P6450 || CPU_S5PC100)
@@ -537,7 +522,7 @@ config SERIAL_S3C6400
 
 config SERIAL_S5PV210
 	tristate "Samsung S5PV210 Serial port support"
-	depends on SERIAL_SAMSUNG && (CPU_S5PV210 || CPU_S5P6442 || CPU_EXYNOS4210)
+	depends on SERIAL_SAMSUNG && (CPU_S5PV210 || CPU_EXYNOS4210)
 	select SERIAL_SAMSUNG_UARTS_4 if (CPU_S5PV210 || CPU_EXYNOS4210)
 	default y
 	help
@@ -557,7 +542,6 @@ config SERIAL_TEGRA_BRCM
        depends on SERIAL_TEGRA=y
        help
          Enable a Broadcom UART port
-
 config SERIAL_SC8800G
        tristate "Spreadtrum SC8800G support"
        depends on SPI
@@ -994,7 +978,7 @@ config SERIAL_IP22_ZILOG_CONSOLE
 
 config SERIAL_SH_SCI
 	tristate "SuperH SCI(F) serial port support"
-	depends on HAVE_CLK && (SUPERH || H8300 || ARCH_SHMOBILE)
+	depends on HAVE_CLK && (SUPERH || ARCH_SHMOBILE)
 	select SERIAL_CORE
 
 config SERIAL_SH_SCI_NR_UARTS
@@ -1411,6 +1395,14 @@ config SERIAL_OF_PLATFORM_NWPSERIAL_CONSOLE
 	help
 	  Support for Console on the NWP serial ports.
 
+config SERIAL_LANTIQ
+	bool "Lantiq serial driver"
+	depends on LANTIQ
+	select SERIAL_CORE
+	select SERIAL_CORE_CONSOLE
+	help
+	  Support for console and UART on Lantiq SoCs.
+
 config SERIAL_QE
 	tristate "Freescale QUICC Engine serial port support"
 	depends on QUICC_ENGINE
@@ -1431,7 +1423,7 @@ config SERIAL_SC26XX
 
 config SERIAL_SC26XX_CONSOLE
 	bool "Console on SC2681/SC2692 serial port"
-	depends on SERIAL_SC26XX
+	depends on SERIAL_SC26XX=y
 	select SERIAL_CORE_CONSOLE
 	help
 	  Support for Console on SC2681/SC2692 serial ports.
@@ -1597,7 +1589,7 @@ config SERIAL_IFX6X60
 	  Support for the IFX6x60 modem devices on Intel MID platforms.
 
 config SERIAL_PCH_UART
-	tristate "Intel EG20T PCH UART/OKI SEMICONDUCTOR ML7213 IOH"
+	tristate "Intel EG20T PCH/LAPIS Semicon IOH(ML7213/ML7223/ML7831) UART"
 	depends on PCI
 	select SERIAL_CORE
 	help
@@ -1605,10 +1597,12 @@ config SERIAL_PCH_UART
 	  which is an IOH(Input/Output Hub) for x86 embedded processor.
 	  Enabling PCH_DMA, this PCH UART works as DMA mode.
 
-	  This driver also can be used for OKI SEMICONDUCTOR ML7213 IOH(Input/
-	  Output Hub) which is for IVI(In-Vehicle Infotainment) use.
-	  ML7213 is companion chip for Intel Atom E6xx series.
-	  ML7213 is completely compatible for Intel EG20T PCH.
+	  This driver also can be used for LAPIS Semiconductor IOH(Input/
+	  Output Hub), ML7213, ML7223 and ML7831.
+	  ML7213 IOH is for IVI(In-Vehicle Infotainment) use, ML7223 IOH is
+	  for MP(Media Phone) use and ML7831 IOH is for general purpose use.
+	  ML7213/ML7223/ML7831 is companion chip for Intel Atom E6xx series.
+	  ML7213/ML7223/ML7831 is completely compatible for Intel EG20T PCH.
 
 config SERIAL_MSM_SMD
 	bool "Enable tty device interface for some SMD ports"
@@ -1631,5 +1625,18 @@ config SERIAL_MXS_AUART_CONSOLE
 	select SERIAL_CORE_CONSOLE
 	help
 	  Enable a MXS AUART port to be the system console.
+
+config SERIAL_XILINX_PS_UART
+	tristate "Xilinx PS UART support"
+	select SERIAL_CORE
+	help
+	  This driver supports the Xilinx PS UART port.
+
+config SERIAL_XILINX_PS_UART_CONSOLE
+	bool "Xilinx PS UART console support"
+	depends on SERIAL_XILINX_PS_UART=y
+	select SERIAL_CORE_CONSOLE
+	help
+	  Enable a Xilinx PS UART port to be the system console.
 
 endmenu

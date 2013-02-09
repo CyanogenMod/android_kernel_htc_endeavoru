@@ -15,7 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
-#include <linux/sysdev.h>
+#include <linux/syscore_ops.h>
 #include <linux/major.h>
 #include <linux/fb.h>
 #include <linux/interrupt.h>
@@ -176,31 +176,22 @@ static void __init lubbock_init_irq(void)
 
 #ifdef CONFIG_PM
 
-static int lubbock_irq_resume(struct sys_device *dev)
+static void lubbock_irq_resume(void)
 {
 	LUB_IRQ_MASK_EN = lubbock_irq_enabled;
-	return 0;
 }
 
-static struct sysdev_class lubbock_irq_sysclass = {
-	.name = "cpld_irq",
+static struct syscore_ops lubbock_irq_syscore_ops = {
 	.resume = lubbock_irq_resume,
-};
-
-static struct sys_device lubbock_irq_device = {
-	.cls = &lubbock_irq_sysclass,
 };
 
 static int __init lubbock_irq_device_init(void)
 {
-	int ret = -ENODEV;
-
 	if (machine_is_lubbock()) {
-		ret = sysdev_class_register(&lubbock_irq_sysclass);
-		if (ret == 0)
-			ret = sysdev_register(&lubbock_irq_device);
+		register_syscore_ops(&lubbock_irq_syscore_ops);
+		return 0;
 	}
-	return ret;
+	return -ENODEV;
 }
 
 device_initcall(lubbock_irq_device_init);
@@ -562,6 +553,7 @@ MACHINE_START(LUBBOCK, "Intel DBPXA250 Development Platform (aka Lubbock)")
 	.map_io		= lubbock_map_io,
 	.nr_irqs	= LUBBOCK_NR_IRQS,
 	.init_irq	= lubbock_init_irq,
+	.handle_irq	= pxa25x_handle_irq,
 	.timer		= &pxa_timer,
 	.init_machine	= lubbock_init,
 MACHINE_END

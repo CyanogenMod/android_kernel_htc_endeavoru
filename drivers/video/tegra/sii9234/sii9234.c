@@ -32,6 +32,7 @@
 #include <linux/wakelock.h>
 #include <mach/mhl.h>
 #include <mach/cable_detect.h>
+#include <mach/mfootprint.h>
 //#include <mach/debug_display.h>
 //#include <mach/board.h>
 #include "defs.h"
@@ -55,10 +56,8 @@ typedef struct {
 	void (*mhl_1v2_power)(bool enable);
 	struct delayed_work init_delay_work;
 	struct delayed_work init_complete_work;
+	struct delayed_work irq_timeout_work;
 	struct delayed_work mhl_on_delay_work;
-#ifdef CONFIG_INTERNAL_CHARGING_SUPPORT
-	struct delayed_work detect_charger_work;
-#endif
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend early_suspend;
 #endif
@@ -107,6 +106,7 @@ int TPID_SLAVE_ADDR;
    Variable & Extern variable
 **********************************************************************/
 static T_MHL_SII9234_INFO *sii9234_info_ptr;
+extern bool g_bMhlRsenLow;
 /*********************************************************************
   Prototype & Extern function
 **********************************************************************/
@@ -115,12 +115,15 @@ static DECLARE_WORK(sii9234_irq_work, sii9234_irq_do_work);
 
 static DEFINE_MUTEX(mhl_early_suspend_sem);
 bool g_bEnterEarlySuspend = false;
+bool g_bMhlProbe = false;
 static bool g_bGotUsbBus = false;
 static bool g_bNeedSimulateCableOut = false;
 //static bool g_bInitCompleted = false;
 bool g_bInitCompleted = false;
 static bool sii9244_interruptable = false;
+static bool need_simulate_cable_out = false;
 #define MHL_RCP_KEYEVENT
+#define MHL_ISR_TIMEOUT 5
 
 #ifdef MHL_RCP_KEYEVENT
 struct input_dev *input_dev;
@@ -135,32 +138,22 @@ static bool g_touch_pressed[MHL_SII9234_TOUCH_FINGER_NUM_MAX] = {false};
 static void Mhl_Proc_Remote_Event(T_MHL_SII9234_INFO *pInfo);
 static void Mhl_Proc_Reset_Key_Status(void);
 #endif
+
+extern void hdmi_hdcp_early_suspend();
+extern void hdmi_hdcp_late_resume();
+
 /*********************************************************************
 	Functions
 **********************************************************************/
 #ifdef CONFIG_CABLE_DETECT_ACCESSORY
 static DEFINE_MUTEX(mhl_notify_sem);
-#ifdef CONFIG_INTERNAL_CHARGING_SUPPORT
-static bool gPollDetect = false;
-static void detect_charger_handler(struct work_struct *w)
-{
-	T_MHL_SII9234_INFO *pInfo = container_of(
-			w, T_MHL_SII9234_INFO, detect_charger_work.work);
-
-	mutex_lock(&mhl_early_suspend_sem);
-
-	PR_DISP_DEBUG("%s: query status every 2 second\n", __func__);
-	SiiMhlTxReadDevcap(0x02);
-
-	mutex_unlock(&mhl_early_suspend_sem);
-
-	queue_delayed_work(pInfo->wq, &pInfo->detect_charger_work, HZ*2);
-}
-#endif
 
 void update_mhl_status(bool isMHL, enum usb_connect_type statMHL)
 {
 	T_MHL_SII9234_INFO *pInfo = sii9234_info_ptr;
+
+	if (!pInfo)
+		return;
 
 	PR_DISP_DEBUG("%s: -+-+-+-+- MHL is %sconnected, status = %d -+-+-+-+-\n",
 		__func__, isMHL?"":"NOT ", statMHL);
@@ -168,18 +161,6 @@ void update_mhl_status(bool isMHL, enum usb_connect_type statMHL)
 	pInfo->statMHL = statMHL;
 
 	queue_work(pInfo->wq, &pInfo->mhl_notifier_work);
-
-#ifdef CONFIG_INTERNAL_CHARGING_SUPPORT
-	if (isMHL && statMHL == CONNECT_TYPE_NONE) {
-		if (!gPollDetect) {
-			gPollDetect = true;
-			queue_delayed_work(pInfo->wq, &pInfo->detect_charger_work, HZ/2);
-		}
-	} else {
-		gPollDetect = false;
-		cancel_delayed_work(&pInfo->detect_charger_work);
-	}
-#endif
 
 #ifdef CONFIG_TEGRA_HDMI_MHL_SUPERDEMO
 	Mhl_Proc_Reset_Key_Status();
@@ -195,7 +176,8 @@ static void send_mhl_connect_notify(struct work_struct *w)
 	if (!pInfo)
 		return;
 
-	PR_DISP_DEBUG("%s: %d\n", __func__, pInfo->isMHL);
+	PR_DISP_DEBUG("%s: isMHL(%d), charging_type(%d)\n", __func__, pInfo->isMHL, pInfo->statMHL);
+
 	mutex_lock(&mhl_notify_sem);
 	list_for_each_entry(mhl_notifier,
 		&g_lh_mhl_detect_notifier_list,
@@ -416,6 +398,10 @@ static void sii9234_irq_do_work(struct work_struct *work)
 		uint8_t		eventParameter;
 
 		PR_DISP_DEBUG("MHL ISR\n");
+
+		need_simulate_cable_out = false;
+		cancel_delayed_work(&pInfo->irq_timeout_work);
+
 		SiiMhlTxGetEvents(&event, &eventParameter);
 #ifdef CONFIG_TEGRA_HDMI_MHL_SUPERDEMO
 		Mhl_Proc_Remote_Event(pInfo);
@@ -430,12 +416,17 @@ static void sii9234_irq_do_work(struct work_struct *work)
 void sii9234_disableIRQ(void)
 {
 	T_MHL_SII9234_INFO *pInfo = sii9234_info_ptr;
-	pInfo->isMHL = false;
 	cancel_work_sync(&sii9234_irq_work);
 	if (sii9244_interruptable) {
 		PR_DISP_INFO("Disable Sii9244 IRQ\n");
 		disable_irq_nosync(pInfo->irq);
 		sii9244_interruptable = false;
+	}
+	if (g_bMhlRsenLow) {
+		PR_DISP_INFO("RSEN low triggered TPI_Init\n");
+		int err = TPI_Init();
+		if (err != 1)
+			PR_DISP_INFO("TPI can't init\n");
 	}
 }
 
@@ -524,6 +515,7 @@ static DEVICE_ATTR(rcp_event, 0644, NULL, write_keyevent);
 void sii9234_mhl_device_wakeup(void)
 {
 	int err;
+	int ret = 0 ;
 	T_MHL_SII9234_INFO *pInfo = sii9234_info_ptr;
 
 	PR_DISP_INFO("%s\n", __func__);
@@ -534,8 +526,6 @@ void sii9234_mhl_device_wakeup(void)
 		return;
 	}
 
-	pInfo->isMHL = true;
-
 	/* Power ON */
 	if (pInfo->pwrCtrl)
 		pInfo->pwrCtrl(1);
@@ -543,13 +533,21 @@ void sii9234_mhl_device_wakeup(void)
 	/* MHL_RST set O(H) */
 	gpio_set_value(pInfo->reset_pin, 1);
 
-	err = TPI_Init(sii9234_info_ptr->board_params);
+	err = TPI_Init();
 	if (err != 1)
 		PR_DISP_INFO("TPI can't init\n");
 
 	sii9244_interruptable = true;
 	PR_DISP_INFO("Enable Sii9244 IRQ\n");
+
 	enable_irq(pInfo->irq);
+
+	/* switch to D0, we now depends on Sii9244 to detect the connection by MHL interrupt */
+	/* if there is no IRQ in the following steps , the status of connect will be in-correct and cannot be recovered */
+	/* add a mechanism to simulate cable out to prevent this case. */
+	need_simulate_cable_out = true;
+	queue_delayed_work(pInfo->wq, &pInfo->irq_timeout_work, HZ * MHL_ISR_TIMEOUT);
+
 }
 
 static void init_delay_handler(struct work_struct *w)
@@ -564,6 +562,27 @@ static void init_complete_handler(struct work_struct *w)
 	PR_DISP_INFO("init_complete_handler()\n");
 
 	g_bInitCompleted = true;
+}
+
+static void irq_timeout_handler(struct work_struct *w)
+{
+	if(need_simulate_cable_out) {
+		T_MHL_SII9234_INFO *pInfo = sii9234_info_ptr;
+		int ret = 0 ;
+		/*need to request_irq again on 8960 VLE, or this prevention is not working*/
+		PR_DISP_INFO("%s , There is no MHL ISR simulate cable out.\n", __func__);
+		disable_irq_nosync(pInfo->irq);
+		TPI_Init();
+		free_irq(pInfo->irq, pInfo);
+		ret = request_irq(pInfo->irq, sii9234_irq_handler, IRQF_TRIGGER_LOW, "mhl_sii9234_evt", pInfo);
+		if (ret < 0) {
+			PR_DISP_DEBUG("%s: request_irq(%d) failed for gpio %d (%d)\n",
+				__func__, pInfo->irq, pInfo->intr_pin, ret);
+			ret = -EIO;
+		}
+		enable_irq(pInfo->irq);
+		update_mhl_status(false, CONNECT_TYPE_UNKNOWN);
+	}
 }
 
 static int sii9234_resume(struct i2c_client *client)
@@ -612,13 +631,17 @@ static void sii9234_early_suspend(struct early_suspend *h)
 	/* Cancel the previous TMDS on delay work...*/
 	cancel_delayed_work(&pInfo->mhl_on_delay_work);
 	if (pInfo->isMHL) {
-		/* Turn-off the TMDS output...*/
-		sii9234_suspend(pInfo->i2c_client, PMSG_SUSPEND);
+		if(!tpi_get_hpd_state()) {
+			/* Turn-off the TMDS output...*/
+			sii9234_suspend(pInfo->i2c_client, PMSG_SUSPEND);
 
-		/* Disable Sii IRQ */
-		PR_DISP_INFO("Disable Sii9244 IRQ\n");
-		disable_irq_nosync(pInfo->irq);
-		sii9244_interruptable = false;
+			/* Disable Sii IRQ */
+			PR_DISP_INFO("Disable Sii9244 IRQ\n");
+			disable_irq_nosync(pInfo->irq);
+			sii9244_interruptable = false;
+
+			hdmi_hdcp_early_suspend();
+		}
 	}
 
 	/* Check already power on or not?*/
@@ -639,10 +662,13 @@ static void sii9234_late_resume(struct early_suspend *h)
 	mutex_lock(&mhl_early_suspend_sem);
 
 	if (pInfo->isMHL) {
-		/* Enable Sii IRQ */
-		PR_DISP_INFO("Enable Sii9244 IRQ\n");
-		enable_irq(pInfo->irq);
-		sii9244_interruptable = true;
+		if(!tpi_get_hpd_state()) {
+			/* Enable Sii IRQ */
+			PR_DISP_INFO("Enable Sii9244 IRQ\n");
+			enable_irq(pInfo->irq);
+			sii9244_interruptable = true;
+			hdmi_hdcp_late_resume();
+		}
 	}
 
 	queue_delayed_work(pInfo->wq, &pInfo->mhl_on_delay_work, HZ);
@@ -653,29 +679,24 @@ static void sii9234_late_resume(struct early_suspend *h)
 
 static void mhl_on_delay_handler(struct work_struct *w)
 {
+	T_MHL_SII9234_INFO *pInfo = sii9234_info_ptr;
 	PR_DISP_DEBUG("%s(%d, %d)\n", __func__, g_bEnterEarlySuspend, g_bNeedSimulateCableOut);
 
 	mutex_lock(&mhl_early_suspend_sem);
 	if (IsMHLConnection()) {
 		//fill_black_screen();
-#ifdef CONFIG_FB_MSM_HDMI_MSM_PANEL_HDCP_SUPPORT
-		hdcp_deauthenticate();
-#endif
-		g_bNeedSimulateCableOut = false;
-		sii9234_EnableTMDS();
+		//sii9234_EnableTMDS();
 		PR_DISP_DEBUG("MHL has connected. No SimulateCableOut!!!\n");
 		mutex_unlock(&mhl_early_suspend_sem);
 		return;
 	}
-
-	if (!g_bEnterEarlySuspend && g_bNeedSimulateCableOut) {
-#if 0
-		if (pInfo->mhl_1v2_power)
-			pInfo->mhl_1v2_power(0);
-		update_mhl_status(false, CONNECT_TYPE_UNKNOWN);
-#endif
-		g_bNeedSimulateCableOut = false;
-		g_bGotUsbBus = false;
+	else {
+		if(pInfo->isMHL){
+			/*MHL dongle plugged but no HDMI calbe*/
+			PR_DISP_DEBUG("notify cable out, re-init cable & mhl\n");
+			update_mhl_status(false, CONNECT_TYPE_UNKNOWN);
+			TPI_Init();
+		}
 	}
 	mutex_unlock(&mhl_early_suspend_sem);
 }
@@ -731,6 +752,8 @@ static int sii9234_probe(struct i2c_client *client,
 	pInfo->ddc_clk_pin    = pdata->gpio_ddc_clk;
 	pInfo->ddc_data_pin   = pdata->gpio_ddc_data;
 	pInfo->enMhlD3Guard   = pdata->enMhlD3Guard;
+	/* make sure TPI_Init() works fine with pInfo */
+	g_bMhlProbe = true;
 	/* Power ON */
 	if (pInfo->pwrCtrl)
 		pInfo->pwrCtrl(1);
@@ -740,7 +763,7 @@ static int sii9234_probe(struct i2c_client *client,
 	gpio_direction_output(pInfo->reset_pin, 0);
 	gpio_request(pInfo->intr_pin, "mhl_sii9234_gpio_intr");
 	gpio_direction_input(pInfo->intr_pin);
-	rv = TPI_Init(sii9234_info_ptr->board_params);
+	rv = TPI_Init();
 	if (rv != TRUE) {
 		PR_DISP_DEBUG("%s: can't init\n", __func__);
 		ret = -ENOMEM;
@@ -749,11 +772,9 @@ static int sii9234_probe(struct i2c_client *client,
 
 	INIT_DELAYED_WORK(&pInfo->init_delay_work, init_delay_handler);
 	INIT_DELAYED_WORK(&pInfo->init_complete_work, init_complete_handler);
+	INIT_DELAYED_WORK(&pInfo->irq_timeout_work, irq_timeout_handler);
 	INIT_DELAYED_WORK(&pInfo->mhl_on_delay_work, mhl_on_delay_handler);
 
-#ifdef CONFIG_INTERNAL_CHARGING_SUPPORT
-	INIT_DELAYED_WORK(&pInfo->detect_charger_work, detect_charger_handler);
-#endif
 	ret = request_irq(pInfo->irq, sii9234_irq_handler, IRQF_TRIGGER_LOW, "mhl_sii9234_evt", pInfo);
 	if (ret < 0) {
 		PR_DISP_DEBUG("%s: request_irq(%d) failed for gpio %d (%d)\n",
@@ -881,6 +902,7 @@ err_create_workqueue:
 	gpio_free(pInfo->reset_pin);
 	gpio_free(pInfo->intr_pin);
 err_init:
+	g_bMhlProbe = false;
 err_request_intr_pin:
 err_platform_data_null:
 	kfree(pInfo);
@@ -888,7 +910,7 @@ err_check_functionality_failed:
 
 	if (sii9234_get_ci2ca() == 0) {
 		/* Power OFF */
-		if (pInfo->pwrCtrl)
+		if (pInfo && pInfo->pwrCtrl)
 			pInfo->pwrCtrl(0);
 	}
 

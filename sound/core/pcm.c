@@ -985,6 +985,29 @@ static int snd_pcm_dev_register(struct snd_device *device)
 	if (snd_BUG_ON(!device || !device->device_data))
 		return -ENXIO;
 	pcm = device->device_data;
+
+	/* Fix Klocwork Issue - Start */
+	if(pcm->card->number<0) {
+		printk(KERN_DEBUG "snd_pcm_dev_register: pcm->card->number < 0\n");
+		pcm->card->number = -(pcm->card->number);
+	}
+	else if(pcm->card->number>9999){
+	    printk(KERN_DEBUG "snd_pcm_dev_register: pcm->card->number > 9999\n");
+	}
+	//Set MAX number as 4-digital number.
+	pcm->card->number = pcm->card->number % 10000;
+
+	if(pcm->device<0) {
+		printk(KERN_DEBUG "snd_pcm_dev_register: pcm->device < 0\n");
+		pcm->device = -(pcm->device);
+	}
+	else if(pcm->device>9999){
+	    printk(KERN_DEBUG "snd_pcm_dev_register: pcm->device > 9999\n");
+	}
+	//Set MAX number as 4-digital number.
+	pcm->device = pcm->device % 10000;
+	/* Fix Klocwork Issue - End */
+
 	mutex_lock(&register_mutex);
 	err = snd_pcm_add(pcm);
 	if (err) {

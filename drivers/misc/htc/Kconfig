@@ -1,0 +1,9 @@
+#
+# Htc specific module
+#
+
+config HTC_DEBUG_FILE_NODE
+	bool "HTC debug file node"
+	default n
+	help
+	    add a file node for userspace to read / store debug flag

@@ -62,8 +62,6 @@
 #include <linux/unistd.h>
 #include <linux/types.h>
 
-#define FD(e, x, y) (*(int *)xyarray__entry(e->fd, x, y))
-
 static struct perf_top top = {
 	.count_filter		= 5,
 	.delay_secs		= 2,
@@ -82,6 +80,8 @@ static bool			use_tui, use_stdio;
 
 static int			default_interval		=      0;
 
+static bool			kptr_restrict_warned;
+static bool			vmlinux_warned;
 static bool			inherit				=  false;
 static int			realtime_prio			=      0;
 static bool			group				=  false;
@@ -191,7 +191,8 @@ static void __zero_source_counters(struct sym_entry *syme)
 	symbol__annotate_zero_histograms(sym);
 }
 
-static void record_precise_ip(struct sym_entry *syme, int counter, u64 ip)
+static void record_precise_ip(struct sym_entry *syme, struct map *map,
+			      int counter, u64 ip)
 {
 	struct annotation *notes;
 	struct symbol *sym;
@@ -205,8 +206,8 @@ static void record_precise_ip(struct sym_entry *syme, int counter, u64 ip)
 	if (pthread_mutex_trylock(&notes->lock))
 		return;
 
-	ip = syme->map->map_ip(syme->map, ip);
-	symbol__inc_addr_samples(sym, syme->map, counter, ip);
+	ip = map->map_ip(map, ip);
+	symbol__inc_addr_samples(sym, map, counter, ip);
 
 	pthread_mutex_unlock(&notes->lock);
 }
@@ -740,7 +741,22 @@ static void perf_event__process_sample(const union perf_event *event,
 	    al.filtered)
 		return;
 
+	if (!kptr_restrict_warned &&
+	    symbol_conf.kptr_restrict &&
+	    al.cpumode == PERF_RECORD_MISC_KERNEL) {
+		ui__warning(
+"Kernel address maps (/proc/{kallsyms,modules}) are restricted.\n\n"
+"Check /proc/sys/kernel/kptr_restrict.\n\n"
+"Kernel%s samples will not be resolved.\n",
+			  !RB_EMPTY_ROOT(&al.map->dso->symbols[MAP__FUNCTION]) ?
+			  " modules" : "");
+		if (use_browser <= 0)
+			sleep(5);
+		kptr_restrict_warned = true;
+	}
+
 	if (al.sym == NULL) {
+		const char *msg = "Kernel samples will not be resolved.\n";
 		/*
 		 * As we do lazy loading of symtabs we only will know if the
 		 * specified vmlinux file is invalid when we actually have a
@@ -752,12 +768,20 @@ static void perf_event__process_sample(const union perf_event *event,
 		 * --hide-kernel-symbols, even if the user specifies an
 		 * invalid --vmlinux ;-)
 		 */
-		if (al.map == machine->vmlinux_maps[MAP__FUNCTION] &&
+		if (!kptr_restrict_warned && !vmlinux_warned &&
+		    al.map == machine->vmlinux_maps[MAP__FUNCTION] &&
 		    RB_EMPTY_ROOT(&al.map->dso->symbols[MAP__FUNCTION])) {
-			ui__warning("The %s file can't be used\n",
-				    symbol_conf.vmlinux_name);
-			exit_browser(0);
-			exit(1);
+			if (symbol_conf.vmlinux_name) {
+				ui__warning("The %s file can't be used.\n%s",
+					    symbol_conf.vmlinux_name, msg);
+			} else {
+				ui__warning("A vmlinux file was not found.\n%s",
+					    msg);
+			}
+
+			if (use_browser <= 0)
+				sleep(5);
+			vmlinux_warned = true;
 		}
 
 		return;
@@ -787,7 +811,7 @@ static void perf_event__process_sample(const union perf_event *event,
 		evsel = perf_evlist__id2evsel(top.evlist, sample->id);
 		assert(evsel != NULL);
 		syme->count[evsel->idx]++;
-		record_precise_ip(syme, evsel->idx, ip);
+		record_precise_ip(syme, al.map, evsel->idx, ip);
 		pthread_mutex_lock(&top.active_symbols_lock);
 		if (list_empty(&syme->node) || !syme->node.next) {
 			static bool first = true;
@@ -805,9 +829,14 @@ static void perf_session__mmap_read_idx(struct perf_session *self, int idx)
 {
 	struct perf_sample sample;
 	union perf_event *event;
+	int ret;
 
 	while ((event = perf_evlist__mmap_read(top.evlist, idx)) != NULL) {
-		perf_session__parse_sample(self, event, &sample);
+		ret = perf_session__parse_sample(self, event, &sample);
+		if (ret) {
+			pr_err("Can't parse sample, err = %d\n", ret);
+			continue;
+		}
 
 		if (event->header.type == PERF_RECORD_SAMPLE)
 			perf_event__process_sample(event, &sample, self);
@@ -962,7 +991,7 @@ static const char * const top_usage[] = {
 static const struct option options[] = {
 	OPT_CALLBACK('e', "event", &top.evlist, "event",
 		     "event selector. use 'perf list' to list available events",
-		     parse_events),
+		     parse_events_option),
 	OPT_INTEGER('c', "count", &default_interval,
 		    "event period to sample"),
 	OPT_INTEGER('p', "pid", &top.target_pid,

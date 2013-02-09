@@ -20,10 +20,11 @@
 #include "TypeDefs.h"
 //#include <mach/board.h>
 #include <mach/cable_detect.h>
-bool TPI_Init(mhl_board_params);			/* Document purpose, usage */
+bool TPI_Init(void);			/* Document purpose, usage */
 void TPI_Poll(void);			/* Document purpose, usage, rename */
 byte Status_Query(void);
 void D2ToD3(void);
+bool tpi_get_hpd_state(void);
 void SwitchToD3_Force(void);
 #define	POWER_STATE_D3				3
 #define	POWER_STATE_D0_NO_MHL		2

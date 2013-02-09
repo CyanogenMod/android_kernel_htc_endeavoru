@@ -1,7 +1,7 @@
 /*
  * arch/arch/mach-tegra/timer-t3.c
  *
- * Copyright (c) 2011, NVIDIA Corporation.
+ * Copyright (c) 2011-2012, NVIDIA Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -69,6 +69,13 @@
 #define TIMER6_OFFSET (TEGRA_TMR6_BASE-TEGRA_TMR1_BASE)
 
 static void __iomem *timer_reg_base = IO_ADDRESS(TEGRA_TMR1_BASE);
+
+#if defined(CONFIG_PM_SLEEP)
+static cpumask_t wake_timer_canceled;
+#if defined(CONFIG_HOTPLUG_CPU)
+static cpumask_t wake_timer_ready;
+#endif
+#endif
 
 #define timer_writel(value, reg) \
 	__raw_writel(value, (u32)timer_reg_base + (reg))
@@ -156,6 +163,21 @@ static void test_lp2_wake_timer(unsigned int cpu)
 static inline void test_lp2_wake_timer(unsigned int cpu) {}
 #endif
 
+static int tegra3_resume_wake_timer(unsigned int cpu)
+{
+#ifdef CONFIG_SMP
+	int ret = irq_set_affinity(tegra_lp2wake_irq[cpu].irq, cpumask_of(cpu));
+	if (ret) {
+		pr_err("Failed to set affinity for LP2 timer IRQ to "
+			"CPU %d: irq=%d, ret=%d\n", cpu,
+			tegra_lp2wake_irq[cpu].irq, ret);
+		return ret;
+	}
+#endif
+	cpumask_set_cpu(cpu, &wake_timer_ready);
+	return 0;
+}
+
 static void tegra3_register_wake_timer(unsigned int cpu)
 {
 	int ret;
@@ -168,15 +190,9 @@ static void tegra3_register_wake_timer(unsigned int cpu)
 		goto fail;
 	}
 
-#ifdef CONFIG_SMP
-	ret = irq_set_affinity(tegra_lp2wake_irq[cpu].irq, cpumask_of(cpu));
-	if (ret) {
-		pr_err("Failed to set affinity for LP2 timer IRQ to "
-			"CPU %d: irq=%d, ret=%d\n", cpu,
-			tegra_lp2wake_irq[cpu].irq, ret);
+	ret = tegra3_resume_wake_timer(cpu);
+	if (ret)
 		goto fail;
-	}
-#endif
 
 	test_lp2_wake_timer(cpu);
 	return;
@@ -185,12 +201,18 @@ fail:
 }
 
 #if defined(CONFIG_PM_SLEEP) && defined(CONFIG_HOTPLUG_CPU)
-static void tegra3_unregister_wake_timer(unsigned int cpu)
+static void tegra3_suspend_wake_timer(unsigned int cpu)
 {
+	cpumask_clear_cpu(cpu, &wake_timer_ready);
 #ifdef CONFIG_SMP
 	/* Reassign the affinity of the wake IRQ to CPU 0. */
 	(void)irq_set_affinity(tegra_lp2wake_irq[cpu].irq, cpumask_of(0));
 #endif
+}
+
+static void tegra3_unregister_wake_timer(unsigned int cpu)
+{
+	tegra3_suspend_wake_timer(cpu);
 
 	/* Dispose of this IRQ. */
 	remove_irq(tegra_lp2wake_irq[cpu].irq, &tegra_lp2wake_irq[cpu]);
@@ -215,13 +237,34 @@ unsigned long tegra3_lp2_timer_remain(void)
 {
 	int cpu = cpu_number();
 
+	if (cpumask_test_and_clear_cpu(cpu, &wake_timer_canceled))
+		return -ETIME;
+
 	return timer_readl(lp2_wake_timers[cpu] + TIMER_PCR) & 0x1ffffffful;
+}
+
+int tegra3_is_lp2_timer_ready(unsigned int cpu)
+{
+	return cpumask_test_cpu(cpu, &wake_timer_ready);
+}
+
+void tegra3_lp2_timer_cancel_secondary(void)
+{
+	int cpu;
+	int base;
+
+	for (cpu = 1; cpu < ARRAY_SIZE(lp2_wake_timers); cpu++) {
+		base = lp2_wake_timers[cpu];
+		cpumask_set_cpu(cpu, &wake_timer_canceled);
+		timer_writel(0, base + TIMER_PTV);
+		timer_writel(1<<30, base + TIMER_PCR);
+	}
 }
 #endif
 
 void __init tegra3_init_timer(u32 *offset, int *irq)
 {
-	unsigned long rate = clk_measure_input_freq();
+	unsigned long rate = tegra_clk_measure_input_freq();
 
 	switch (rate) {
 	case 12000000:
@@ -268,10 +311,22 @@ void __init tegra3_init_timer(u32 *offset, int *irq)
 static int hotplug_notify(struct notifier_block *self,
 				      unsigned long action, void *cpu)
 {
-	if (action == CPU_ONLINE)
+	switch (action) {
+	case CPU_ONLINE:
 		tegra3_register_wake_timer((unsigned int)cpu);
-	else if (action == CPU_DOWN_PREPARE)
+		break;
+	case CPU_ONLINE_FROZEN:
+		tegra3_resume_wake_timer((unsigned int)cpu);
+		break;
+	case CPU_DOWN_PREPARE:
 		tegra3_unregister_wake_timer((unsigned int)cpu);
+		break;
+	case CPU_DOWN_PREPARE_FROZEN:
+		tegra3_suspend_wake_timer((unsigned int)cpu);
+		break;
+	default:
+		break;
+	}
 
 	return NOTIFY_OK;
 }

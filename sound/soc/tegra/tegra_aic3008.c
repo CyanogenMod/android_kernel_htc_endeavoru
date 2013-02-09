@@ -44,7 +44,7 @@
 #include "tegra_asoc_utils.h"
 #include "../codecs/tlv320aic3008.h"
 #if (defined(CONFIG_TEGRA_ES305))
-#include "../../../include/sound/es305.h"
+#include "sound/es305.h"
 #endif
 
 #undef LOG_TAG
@@ -55,12 +55,11 @@
 #undef AUDIO_DEBUG
 #define AUDIO_DEBUG 0
 
-#define AUD_ERR(fmt, ...) pr_tag_err(LOG_TAG, fmt, ##__VA_ARGS__);
-#define AUD_INFO(fmt, ...) pr_tag_info(LOG_TAG, fmt, ##__VA_ARGS__);
-
 #if AUDIO_DEBUG
+#undef AUD_DBG
 #define AUD_DBG(fmt, ...) pr_tag_info(LOG_TAG, fmt, ##__VA_ARGS__);
 #else
+#undef AUD_DBG
 #define AUD_DBG(fmt, ...) do { } while (0)
 #endif
 
@@ -69,10 +68,13 @@
 #define TEGRA_AUDIO_DEVICE_NONE	0x00000000
 #define TEGRA_AUDIO_DEVICE_MAX	0x7FFFFFFF
 
+extern struct aic3008_power *aic3008_power_ctl;
+
 struct tegra_asoc_utils_data  *util_data;
 
 struct tegra_aic3008 {
 	struct tegra_asoc_utils_data util_data;
+	struct htc_asoc_platform_data *pdata;
 };
 
 /*******************************************************************/
@@ -81,7 +83,6 @@ struct tegra_aic3008 {
 static int tegra_hifi_hw_params(struct snd_pcm_substream *substream,
 		struct snd_pcm_hw_params *params)
 {
-	AUD_DBG("Start tegra_hifi_hw_params()\n");
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
@@ -91,6 +92,7 @@ static int tegra_hifi_hw_params(struct snd_pcm_substream *substream,
 	int dai_flag = 0, mclk, srate;
 	int err;
 
+	AUD_DBG("Start tegra_hifi_hw_params()\n");
 	AUD_DBG("set I2S Master\n");
 
 	dai_flag |= SND_SOC_DAIFMT_I2S; 	// i2s mode
@@ -176,7 +178,7 @@ static struct snd_soc_ops tegra_spdif_ops = { .hw_params =
 /*******************************************************************/
 int tegra_i2sloopback_func = 0;	//OFF
 
-static void tegra_audio_route(struct snd_soc_codec *audio_data,
+static void tegra_audio_route(struct aic3008_priv *audio_data,
 		int cmd, int idx)
 {
 	switch (cmd) {
@@ -193,6 +195,14 @@ static void tegra_audio_route(struct snd_soc_codec *audio_data,
 		break;
 
 	case AIC3008_IO_CONFIG_MEDIA:
+// maxwen TODO
+#if 0
+        if (idx == 20 ){
+            idx = 9;
+        } else if( idx == 7 ){
+            return;
+        }
+#endif
 		AUD_DBG("tegra_audio_route, AIC3008_IO_CONFIG_MEDIA, idx = %d, call mode %d \n",
 				idx, audio_data->is_call_mode);
 		aic3008_setMode(cmd, idx, audio_data->is_call_mode);
@@ -222,7 +232,8 @@ static int tegra_play_route_info(struct snd_kcontrol *kcontrol,
 static int tegra_play_route_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 
 	ucontrol->value.integer.value[0] = DOWNLINK_PATH_OFF;
 	if (audio_data) {
@@ -235,7 +246,8 @@ static int tegra_play_route_get(struct snd_kcontrol *kcontrol,
 static int tegra_play_route_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 	int downlink;
 
 	AUD_DBG("tegra_play_route_put\n");
@@ -266,7 +278,8 @@ static int tegra_capture_route_info(struct snd_kcontrol *kcontrol,
 static int tegra_capture_route_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 
 	ucontrol->value.integer.value[0] = UPLINK_PATH_OFF;
 	if (audio_data) {
@@ -279,7 +292,8 @@ static int tegra_capture_route_get(struct snd_kcontrol *kcontrol,
 static int tegra_capture_route_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 	int uplink;
 
 	AUD_DBG("tegra_capture_route_put\n");
@@ -310,7 +324,8 @@ static int tegra_call_mode_info(struct snd_kcontrol *kcontrol,
 static int tegra_call_mode_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 
 	ucontrol->value.integer.value[0] = false;
 	if (audio_data) {
@@ -323,7 +338,8 @@ static int tegra_call_mode_get(struct snd_kcontrol *kcontrol,
 static int tegra_call_mode_put(struct snd_kcontrol *kcontrol,
 				   struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 	int is_call_mode_new;
 
 	if (audio_data) {
@@ -364,7 +380,8 @@ static int tegra_config_aic3008_dsp_info(struct snd_kcontrol *kcontrol,
 static int tegra_config_aic3008_dsp_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 
 	ucontrol->value.integer.value[0] = MFG;
 	if (audio_data) {
@@ -377,8 +394,8 @@ static int tegra_config_aic3008_dsp_get(struct snd_kcontrol *kcontrol,
 static int tegra_config_aic3008_dsp_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 	int aic3008_dsp_id;
 
 	if (audio_data) {
@@ -410,7 +427,8 @@ static int tegra_config_es305_info(struct snd_kcontrol *kcontrol,
 static int tegra_config_es305_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 
 	ucontrol->value.integer.value[0] = ES305_PATH_SUSPEND; /* -1 */
 	if (audio_data) {
@@ -423,7 +441,8 @@ static int tegra_config_es305_get(struct snd_kcontrol *kcontrol,
 static int tegra_config_es305_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *audio_data = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct aic3008_priv *audio_data = snd_soc_codec_get_drvdata(codec);
 	int new_es305_cfg_id;
 	if (audio_data) {
 		new_es305_cfg_id = ucontrol->value.integer.value[0];
@@ -528,19 +547,10 @@ static const struct snd_kcontrol_new tegra_controls[] = {
 static int tegra_aic3008_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_soc_codec *codec = rtd->codec;
-	struct snd_soc_card *card = codec->card;
 
 	int err = 0;
 	AUD_DBG("tegra_codec_init().\n");
 
-	err = tegra_asoc_utils_clk_enable(util_data);
-	if (err) {
-		AUD_ERR("Failed to enable dap mclk \n");
-		err = -ENODEV;
-		goto aic3008_init_fail;
-	}
-	AUD_DBG("Get tegra mclk handle util_data %p.\n", util_data);
-	
 	/* calls tegra_controls_init() in tegra_soc_controls.c
 	* to set up playback, capture, mode, i2s loop back
 	* routes controls. tegra_soc_controls handles the ALSA
@@ -556,11 +566,6 @@ static int tegra_aic3008_init(struct snd_soc_pcm_runtime *rtd)
 	AUD_DBG("DONE aic3008_CodecInit().\n");
 
 	return err;
-	
-aic3008_init_fail:
-	
-	tegra_asoc_utils_clk_disable(util_data);
-	return err;
 }
 
 /*******************************************************************/
@@ -574,16 +579,12 @@ int tegra_suspend_pre(struct platform_device *pdev, pm_message_t state)
 int tegra_suspend_post(struct platform_device *pdev, pm_message_t state)
 {
 	AUD_DBG("tegra_soc_suspend_post - disable mclk through DAS\n");
-	tegra_asoc_utils_clk_disable(util_data);
-	pr_device_clk_off();
 	return 0;
 }
 
 int tegra_resume_pre(struct platform_device *pdev)
 {
 	AUD_DBG("tagra_soc_resume_pre - enable mclk through DAS\n");
-	tegra_asoc_utils_clk_enable(util_data);
-	pr_device_clk_on();
 	return 0;
 }
 
@@ -616,18 +617,28 @@ static struct snd_soc_card snd_soc_tegra_aic3008 = {
 	.name = "tegra-aic3008",
 	.dai_link = tegra_soc_dai,
 	.num_links = ARRAY_SIZE(tegra_soc_dai),
-	.suspend_pre = tegra_suspend_pre,
-	.suspend_post = tegra_suspend_post,
-	.resume_pre = tegra_resume_pre,
-	.resume_post = tegra_resume_post,
+	.suspend_pre = (int (*)(struct snd_soc_card *))tegra_suspend_pre,
+	.suspend_post = (int (*)(struct snd_soc_card *))tegra_suspend_post,
+	.resume_pre = (int (*)(struct snd_soc_card *))tegra_resume_pre,
+	.resume_post = (int (*)(struct snd_soc_card *))tegra_resume_post,
 };
 
 static __devinit int tegra_aic3008_driver_probe(struct platform_device *pdev)
 {
-	AUD_INFO("starting tegra_aic3008_driver_probe...\n");
 	struct snd_soc_card *card = &snd_soc_tegra_aic3008;
 	struct tegra_aic3008 *machine;
+	struct htc_asoc_platform_data *pdata;
 	int ret;
+
+	AUD_INFO("starting tegra_aic3008_driver_probe...\n");
+
+	pdata = pdev->dev.platform_data;
+	if (!pdata) {
+		dev_err(&pdev->dev, "No platform data supplied\n");
+		return -EINVAL;
+	}
+	AUD_INFO("starting tegra_aic3008_driver_probe...%p %p\n", &pdata->aic3008_power, &aic3008_power_ctl);
+	aic3008_power_ctl = &pdata->aic3008_power;
 
 	machine = kzalloc(sizeof(struct tegra_aic3008), GFP_KERNEL);
 	if (!machine) {
@@ -635,7 +646,9 @@ static __devinit int tegra_aic3008_driver_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	ret = tegra_asoc_utils_init(&machine->util_data, &pdev->dev);
+	machine->pdata = pdata;
+
+	ret = tegra_asoc_utils_init(&machine->util_data, &pdev->dev, card);
 	util_data = &machine->util_data;
 	if (ret)
 		goto err_free_machine;
@@ -656,7 +669,6 @@ static __devinit int tegra_aic3008_driver_probe(struct platform_device *pdev)
 
 err_unregister_switch:
 
-err_fini_utils:
 	tegra_asoc_utils_fini(&machine->util_data);
 err_free_machine:
 	kfree(machine);

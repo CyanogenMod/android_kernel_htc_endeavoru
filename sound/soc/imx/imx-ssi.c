@@ -388,10 +388,11 @@ static int imx_pcm_preallocate_dma_buffer(struct snd_pcm *pcm, int stream)
 
 static u64 imx_pcm_dmamask = DMA_BIT_MASK(32);
 
-int imx_pcm_new(struct snd_card *card, struct snd_soc_dai *dai,
-	struct snd_pcm *pcm)
+int imx_pcm_new(struct snd_soc_pcm_runtime *rtd)
 {
-
+	struct snd_card *card = rtd->card->snd_card;
+	struct snd_soc_dai *dai = rtd->cpu_dai;
+	struct snd_pcm *pcm = rtd->pcm;
 	int ret = 0;
 
 	if (!card->dev->dma_mask)
@@ -667,12 +668,6 @@ static int imx_ssi_probe(struct platform_device *pdev)
 	if (res)
 		ssi->dma_params_rx.dma = res->start;
 
-	if ((cpu_is_mx27() || cpu_is_mx21()) &&
-			!(ssi->flags & IMX_SSI_USE_AC97) &&
-			(ssi->flags & IMX_SSI_DMA)) {
-		ssi->flags |= IMX_SSI_DMA;
-	}
-
 	platform_set_drvdata(pdev, ssi);
 
 	ret = snd_soc_register_dai(&pdev->dev, dai);
@@ -780,4 +775,4 @@ module_exit(imx_ssi_exit);
 MODULE_AUTHOR("Sascha Hauer, <s.hauer@pengutronix.de>");
 MODULE_DESCRIPTION("i.MX I2S/ac97 SoC Interface");
 MODULE_LICENSE("GPL");
-
+MODULE_ALIAS("platform:imx-ssi");

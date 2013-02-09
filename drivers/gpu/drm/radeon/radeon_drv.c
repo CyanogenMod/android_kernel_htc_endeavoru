@@ -50,9 +50,11 @@
  *   2.7.0 - fixups for r600 2D tiling support. (no external ABI change), add eg dyn gpr regs
  *   2.8.0 - pageflip support, r500 US_FORMAT regs. r500 ARGB2101010 colorbuf, r300->r500 CMASK, clock crystal query
  *   2.9.0 - r600 tiling (s3tc,rgtc) working, SET_PREDICATION packet 3 on r600 + eg, backend query
+ *   2.10.0 - fusion 2D tiling
+ *   2.11.0 - backend map, initial compute support for the CS checker
  */
 #define KMS_DRIVER_MAJOR	2
-#define KMS_DRIVER_MINOR	9
+#define KMS_DRIVER_MINOR	11
 #define KMS_DRIVER_PATCHLEVEL	0
 int radeon_driver_load_kms(struct drm_device *dev, unsigned long flags);
 int radeon_driver_unload_kms(struct drm_device *dev);
@@ -112,10 +114,11 @@ int radeon_benchmarking = 0;
 int radeon_testing = 0;
 int radeon_connector_table = 0;
 int radeon_tv = 1;
-int radeon_audio = 1;
+int radeon_audio = 0;
 int radeon_disp_priority = 0;
 int radeon_hw_i2c = 0;
 int radeon_pcie_gen2 = 0;
+int radeon_msi = -1;
 
 MODULE_PARM_DESC(no_wb, "Disable AGP writeback for scratch registers");
 module_param_named(no_wb, radeon_no_wb, int, 0444);
@@ -150,7 +153,7 @@ module_param_named(connector_table, radeon_connector_table, int, 0444);
 MODULE_PARM_DESC(tv, "TV enable (0 = disable)");
 module_param_named(tv, radeon_tv, int, 0444);
 
-MODULE_PARM_DESC(audio, "Audio enable (0 = disable)");
+MODULE_PARM_DESC(audio, "Audio enable (1 = enable)");
 module_param_named(audio, radeon_audio, int, 0444);
 
 MODULE_PARM_DESC(disp_priority, "Display Priority (0 = auto, 1 = normal, 2 = high)");
@@ -161,6 +164,9 @@ module_param_named(hw_i2c, radeon_hw_i2c, int, 0444);
 
 MODULE_PARM_DESC(pcie_gen2, "PCIE Gen2 mode (1 = enable)");
 module_param_named(pcie_gen2, radeon_pcie_gen2, int, 0444);
+
+MODULE_PARM_DESC(msi, "MSI support (1 = enable, 0 = disable, -1 = auto)");
+module_param_named(msi, radeon_msi, int, 0444);
 
 static int radeon_suspend(struct drm_device *dev, pm_message_t state)
 {

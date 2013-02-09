@@ -382,7 +382,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry, int mode,
 	struct fuse_entry_out outentry;
 	struct fuse_file *ff;
 	struct file *file;
-	int flags = nd->intent.open.flags - 1;
+	int flags = nd->intent.open.flags;
 
 	if (fc->no_create)
 		return -ENOSYS;
@@ -576,7 +576,7 @@ static int fuse_mknod(struct inode *dir, struct dentry *entry, int mode,
 static int fuse_create(struct inode *dir, struct dentry *entry, int mode,
 		       struct nameidata *nd)
 {
-	if (nd && (nd->flags & LOOKUP_OPEN)) {
+	if (nd) {
 		int err = fuse_create_open(dir, entry, mode, nd);
 		if (err != -ENOSYS)
 			return err;
@@ -691,6 +691,7 @@ static int fuse_rename(struct inode *olddir, struct dentry *oldent,
 	struct fuse_rename_in inarg;
 	struct fuse_conn *fc = get_fuse_conn(olddir);
 	struct fuse_req *req = fuse_get_req(fc);
+
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 
@@ -970,9 +971,9 @@ static int fuse_access(struct inode *inode, int mask)
 	return err;
 }
 
-static int fuse_perm_getattr(struct inode *inode, int flags)
+static int fuse_perm_getattr(struct inode *inode, int mask)
 {
-	if (flags & IPERM_FLAG_RCU)
+	if (mask & MAY_NOT_BLOCK)
 		return -ECHILD;
 
 	return fuse_do_getattr(inode, NULL, NULL);
@@ -991,7 +992,7 @@ static int fuse_perm_getattr(struct inode *inode, int flags)
  * access request is sent.  Execute permission is still checked
  * locally based on file mode.
  */
-static int fuse_permission(struct inode *inode, int mask, unsigned int flags)
+static int fuse_permission(struct inode *inode, int mask)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	bool refreshed = false;
@@ -1010,23 +1011,22 @@ static int fuse_permission(struct inode *inode, int mask, unsigned int flags)
 		if (fi->i_time < get_jiffies_64()) {
 			refreshed = true;
 
-			err = fuse_perm_getattr(inode, flags);
+			err = fuse_perm_getattr(inode, mask);
 			if (err)
 				return err;
 		}
 	}
 
 	if (fc->flags & FUSE_DEFAULT_PERMISSIONS) {
-		err = generic_permission(inode, mask, flags, NULL);
+		err = generic_permission(inode, mask);
 
 		/* If permission is denied, try to refresh file
 		   attributes.  This is also needed, because the root
 		   node will at first have no permissions */
 		if (err == -EACCES && !refreshed) {
-			err = fuse_perm_getattr(inode, flags);
+			err = fuse_perm_getattr(inode, mask);
 			if (!err)
-				err = generic_permission(inode, mask,
-							flags, NULL);
+				err = generic_permission(inode, mask);
 		}
 
 		/* Note: the opposite of the above test does not
@@ -1034,7 +1034,7 @@ static int fuse_permission(struct inode *inode, int mask, unsigned int flags)
 		   noticed immediately, only after the attribute
 		   timeout has expired */
 	} else if (mask & (MAY_ACCESS | MAY_CHDIR)) {
-		if (flags & IPERM_FLAG_RCU)
+		if (mask & MAY_NOT_BLOCK)
 			return -ECHILD;
 
 		err = fuse_access(inode, mask);
@@ -1043,7 +1043,7 @@ static int fuse_permission(struct inode *inode, int mask, unsigned int flags)
 			if (refreshed)
 				return -EACCES;
 
-			err = fuse_perm_getattr(inode, flags);
+			err = fuse_perm_getattr(inode, mask);
 			if (!err && !(inode->i_mode & S_IXUGO))
 				return -EACCES;
 		}
@@ -1176,9 +1176,10 @@ static int fuse_dir_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static int fuse_dir_fsync(struct file *file, int datasync)
+static int fuse_dir_fsync(struct file *file, loff_t start, loff_t end,
+			  int datasync)
 {
-	return fuse_fsync_common(file, datasync, 1);
+	return fuse_fsync_common(file, start, end, datasync, 1);
 }
 
 static bool update_mtime(unsigned ivalid)
@@ -1267,6 +1268,88 @@ void fuse_release_nowrite(struct inode *inode)
 	spin_unlock(&fc->lock);
 }
 
+static bool fuse_allow_set_time(struct inode *inode)
+{
+	struct fuse_conn *fc = get_fuse_conn(inode);
+
+	mode_t allow_utime = fc->allow_utime;
+
+	if (current_fsuid() == inode->i_uid)
+		return true;
+
+	if (capable(CAP_FOWNER))
+		return true;
+
+	if (in_group_p(inode->i_gid))
+		allow_utime >>= 3;
+	if (allow_utime & MAY_WRITE)
+		return true;
+
+	return false;
+}
+
+/**
+ * fuse_inode_change_ok - check if attribute changes to an inode are allowed
+ * @inode:	inode to check
+ * @attr:	attributes to change
+ *
+ * Check if we are allowed to change the attributes contained in @attr
+ * in the given inode.  This includes the normal unix access permission
+ * checks, as well as checks for rlimits and others.
+ *
+ * Should be called as the first thing in ->setattr implementations,
+ * possibly after taking additional locks.
+ */
+static int fuse_inode_change_ok(struct inode *inode, struct iattr *attr)
+{
+	unsigned int ia_valid = attr->ia_valid;
+
+	/*
+	 * First check size constraints.  These can't be overriden using
+	 * ATTR_FORCE.
+	 */
+	if (ia_valid & ATTR_SIZE) {
+		int error = inode_newsize_ok(inode, attr->ia_size);
+		if (error)
+			return error;
+	}
+
+	/* If force is set do it anyway. */
+	if (ia_valid & ATTR_FORCE)
+		return 0;
+
+	/* Make sure a caller can chown. */
+	if ((ia_valid & ATTR_UID) &&
+	    (current_fsuid() != inode->i_uid ||
+	     attr->ia_uid != inode->i_uid) && !capable(CAP_CHOWN))
+		return -EPERM;
+
+	/* Make sure caller can chgrp. */
+	if ((ia_valid & ATTR_GID) &&
+	    (current_fsuid() != inode->i_uid ||
+	    (!in_group_p(attr->ia_gid) && attr->ia_gid != inode->i_gid)) &&
+	    !capable(CAP_CHOWN))
+		return -EPERM;
+
+	/* Make sure a caller can chmod. */
+	if (ia_valid & ATTR_MODE) {
+		if (!inode_owner_or_capable(inode))
+			return -EPERM;
+		/* Also check the setgid bit! */
+		if (!in_group_p((ia_valid & ATTR_GID) ? attr->ia_gid :
+				inode->i_gid) && !capable(CAP_FSETID))
+			attr->ia_mode &= ~S_ISGID;
+	}
+
+	/* Check for setting the inode time. */
+	if (ia_valid & (ATTR_MTIME_SET | ATTR_ATIME_SET | ATTR_TIMES_SET)) {
+		if (!fuse_allow_set_time(inode))
+			return -EPERM;
+	}
+
+	return 0;
+}
+
 /*
  * Set attributes, and at the same time refresh them.
  *
@@ -1293,7 +1376,7 @@ static int fuse_do_setattr(struct dentry *entry, struct iattr *attr,
 	if (!(fc->flags & FUSE_DEFAULT_PERMISSIONS))
 		attr->ia_valid |= ATTR_FORCE;
 
-	err = inode_change_ok(inode, attr);
+	err = fuse_inode_change_ok(inode, attr);
 	if (err)
 		return err;
 

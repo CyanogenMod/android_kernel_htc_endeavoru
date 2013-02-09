@@ -135,13 +135,14 @@ static void load_vbios_pramin(struct drm_device *dev, uint8_t *data)
 	int i;
 
 	if (dev_priv->card_type >= NV_50) {
-		uint32_t vbios_vram = (nv_rd32(dev, 0x619f04) & ~0xff) << 8;
-
-		if (!vbios_vram)
-			vbios_vram = (nv_rd32(dev, 0x1700) << 16) + 0xf0000;
+		u64 addr = (u64)(nv_rd32(dev, 0x619f04) & 0xffffff00) << 8;
+		if (!addr) {
+			addr  = (u64)nv_rd32(dev, 0x1700) << 16;
+			addr += 0xf0000;
+		}
 
 		old_bar0_pramin = nv_rd32(dev, 0x1700);
-		nv_wr32(dev, 0x1700, vbios_vram >> 16);
+		nv_wr32(dev, 0x1700, addr >> 16);
 	}
 
 	/* bail if no rom signature */
@@ -5049,11 +5050,7 @@ int get_pll_limits(struct drm_device *dev, uint32_t limit_match, struct pll_lims
 		pll_lim->vco1.max_n = record[11];
 		pll_lim->min_p = record[12];
 		pll_lim->max_p = record[13];
-		/* where did this go to?? */
-		if ((entry[0] & 0xf0) == 0x80)
-			pll_lim->refclk = 27000;
-		else
-			pll_lim->refclk = 100000;
+		pll_lim->refclk = ROM16(entry[9]) * 1000;
 	}
 
 	/*
@@ -5190,7 +5187,7 @@ static int parse_bit_A_tbl_entry(struct drm_device *dev, struct nvbios *bios, st
 	load_table_ptr = ROM16(bios->data[bitentry->offset]);
 
 	if (load_table_ptr == 0x0) {
-		NV_ERROR(dev, "Pointer to BIT loadval table invalid\n");
+		NV_DEBUG(dev, "Pointer to BIT loadval table invalid\n");
 		return -EINVAL;
 	}
 
@@ -5969,6 +5966,12 @@ apply_dcb_connector_quirks(struct nvbios *bios, int idx)
 		if (cte->type == DCB_CONNECTOR_HDMI_1)
 			cte->type = DCB_CONNECTOR_DVI_I;
 	}
+
+	/* Gigabyte GV-NX86T512H */
+	if (nv_match_device(dev, 0x0402, 0x1458, 0x3455)) {
+		if (cte->type == DCB_CONNECTOR_HDMI_1)
+			cte->type = DCB_CONNECTOR_DVI_I;
+	}
 }
 
 static const u8 hpd_gpio[16] = {
@@ -6035,6 +6038,7 @@ parse_dcb_connector_table(struct nvbios *bios)
 		case DCB_CONNECTOR_DVI_I:
 		case DCB_CONNECTOR_DVI_D:
 		case DCB_CONNECTOR_LVDS:
+		case DCB_CONNECTOR_LVDS_SPWG:
 		case DCB_CONNECTOR_DP:
 		case DCB_CONNECTOR_eDP:
 		case DCB_CONNECTOR_HDMI_0:
@@ -6373,6 +6377,37 @@ apply_dcb_encoder_quirks(struct drm_device *dev, int idx, u32 *conn, u32 *conf)
 		} else
 		if (idx == 3) {
 			*conn = 0x02022362; /* HDMI, connector 2 */
+			*conf = 0x00020010;
+		} else {
+			*conn = 0x0000000e; /* EOL */
+			*conf = 0x00000000;
+		}
+	}
+
+	/* Some other twisted XFX board (rhbz#694914)
+	 *
+	 * The DVI/VGA encoder combo that's supposed to represent the
+	 * DVI-I connector actually point at two different ones, and
+	 * the HDMI connector ends up paired with the VGA instead.
+	 *
+	 * Connector table is missing anything for VGA at all, pointing it
+	 * an invalid conntab entry 2 so we figure it out ourself.
+	 */
+	if (nv_match_device(dev, 0x0615, 0x1682, 0x2605)) {
+		if (idx == 0) {
+			*conn = 0x02002300; /* VGA, connector 2 */
+			*conf = 0x00000028;
+		} else
+		if (idx == 1) {
+			*conn = 0x01010312; /* DVI, connector 0 */
+			*conf = 0x00020030;
+		} else
+		if (idx == 2) {
+			*conn = 0x04020310; /* VGA, connector 0 */
+			*conf = 0x00000028;
+		} else
+		if (idx == 3) {
+			*conn = 0x02021322; /* HDMI, connector 1 */
 			*conf = 0x00020010;
 		} else {
 			*conn = 0x0000000e; /* EOL */

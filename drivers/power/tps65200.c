@@ -52,10 +52,12 @@
 #define TPS65200_CHECK_INTERVAL (15)
 
 static struct workqueue_struct *tps65200_wq;
-static struct work_struct chg_stat_work;
+static struct delayed_work chg_stat_work;
 
 static struct alarm tps65200_check_alarm;
 static struct work_struct check_alarm_work;
+
+static struct delayed_work check_timer_work;
 
 static int chg_stat_int;
 static unsigned int chg_stat_enabled;
@@ -80,6 +82,13 @@ static void tps65200_set_check_alarm(void)
 	ktime_t next_alarm;
 
 	CHECK_LOG();
+
+	if (!alarm_init_ready()) {
+		pr_tps_info("alarm is not ready, use timer instead\n");
+		queue_delayed_work(tps65200_wq, &check_timer_work
+				, msecs_to_jiffies(TPS65200_CHECK_INTERVAL * 1000));
+		return;
+	}
 
 	interval = ktime_set(TPS65200_CHECK_INTERVAL, 0);
 	next_alarm = ktime_add(alarm_get_elapsed_realtime(), interval);
@@ -291,9 +300,36 @@ static int tps65200_set_chg_stat(unsigned int ctrl)
 	return 0;
 }
 
+int tps_charger_dump_status(void)
+{
+	u8 regh0 = 0, regh1 = 0, regh2 = 0, regh3 = 0, regh4 = 0, regh5 = 0;
+	int result = 0;
+
+	CHECK_LOG();
+
+	if (chg_stat_enabled != 0) {
+		tps65200_i2c_read_byte(&regh0, 0x06);
+		if (!(regh0 & 0x1C)) {
+
+			tps65200_i2c_read_byte(&regh1, 0x00);
+			tps65200_i2c_read_byte(&regh2, 0x07);
+			tps65200_i2c_read_byte(&regh3, 0x08);
+			tps65200_i2c_read_byte(&regh4, 0x09);
+			tps65200_i2c_read_byte(&regh5, 0x0A);
+			pr_tps_info("regh 0x00=%x, regh 0x06=%x, regh 0x07=%x,"
+					" regh 0x08=%x, regh 0x09=%x, regh 0x0A=%x\n",
+					regh1, regh0, regh2, regh3, regh4, regh5);
+		}
+	}
+
+	return result;
+}
+EXPORT_SYMBOL_GPL(tps_charger_dump_status);
+
 static int tps65200_dump_register(void)
 {
-	u8 regh0, regh1, regh2, regh3;
+	u8 regh0 = 0, regh1 = 0, regh2 = 0, regh3 = 0;
+	int result = 0;
 
 	CHECK_LOG();
 
@@ -303,18 +339,26 @@ static int tps65200_dump_register(void)
 	tps65200_i2c_read_byte(&regh2, 0x02);
 	pr_tps_info("regh 0x00=%x, regh 0x01=%x, regh 0x02=%x, regh 0x03=%x\n",
 			regh0, regh1, regh2, regh3);
-	tps65200_i2c_read_byte(&regh0, 0x06);
-#if 0	// fixme: will clear register before interrupt handler
+	tps65200_i2c_read_byte(&regh0, 0x04);
+	tps65200_i2c_read_byte(&regh1, 0x05);
+	tps65200_i2c_read_byte(&regh2, 0x06);
+	pr_tps_info("regh 0x04=%x, regh 0x05=%x, regh 0x06=%x\n",
+			regh0, regh1, regh2);
+	tps65200_i2c_read_byte(&regh0, 0x07);
 	tps65200_i2c_read_byte(&regh1, 0x08);
 	tps65200_i2c_read_byte(&regh2, 0x09);
-	tps65200_i2c_read_byte(&regh3, 0x0A);
-	pr_tps_info("regh 0x06=%x, 0x08=%x, regh 0x09=%x, regh 0x0A=%x\n",
+	result = tps65200_i2c_read_byte(&regh3, 0x0A);
+	pr_tps_info("regh 0x07=%x, regh 0x08=%x, regh 0x09=%x, regh 0x0A=%x\n",
 			regh0, regh1, regh2, regh3);
-#else
-	pr_tps_info("regh 0x06=%x\n", regh0);
-#endif
+	tps65200_i2c_read_byte(&regh0, 0x0B);
+	tps65200_i2c_read_byte(&regh1, 0x0C);
+	tps65200_i2c_read_byte(&regh2, 0x0D);
+	result = tps65200_i2c_read_byte(&regh3, 0x0E);
+	pr_tps_info("regh 0x0B=%x, regh 0x0C=%x, regh 0x0D=%x, regh 0x0E=%x\n",
+			regh0, regh1, regh2, regh3);
 
-	return 0;
+
+	return result;
 }
 
 int tps_set_charger_ctrl(u32 ctl)
@@ -332,6 +376,7 @@ int tps_set_charger_ctrl(u32 ctl)
 	switch (ctl) {
 	case POWER_SUPPLY_DISABLE_CHARGE:
 		pr_tps_info("Switch charger OFF\n");
+		tps65200_dump_register();
 		tps65200_set_chg_stat(0);
 		tps65200_i2c_write_byte(0x29, 0x01);
 		tps65200_i2c_write_byte(0x28, 0x00);
@@ -364,6 +409,11 @@ int tps_set_charger_ctrl(u32 ctl)
 		tps65200_i2c_read_byte(&regh2, 0x02);
 		pr_tps_info("Switch charger ON (SLOW): regh 0x03=%x, "
 				"regh 0x02=%x\n", regh1, regh2);
+		tps65200_i2c_read_byte(&regh, 0x08);
+		tps65200_i2c_read_byte(&regh1, 0x09);
+		tps65200_i2c_read_byte(&regh2, 0x0A);
+		pr_tps_info("regh 0x08=%x, regh 0x09=%x, regh 0x0A=%x\n",
+				regh, regh1, regh2);
 		tps65200_set_chg_stat(1);
 		break;
 	case POWER_SUPPLY_ENABLE_FAST_CHARGE:
@@ -393,6 +443,11 @@ int tps_set_charger_ctrl(u32 ctl)
 		pr_tps_info("Switch charger ON (FAST): regh 0x01=%x, "
 				"regh 0x00=%x, regh 0x03=%x, regh 0x02=%x\n",
 				regh, regh1, regh2, regh3);
+		tps65200_i2c_read_byte(&regh, 0x08);
+		tps65200_i2c_read_byte(&regh1, 0x09);
+		tps65200_i2c_read_byte(&regh2, 0x0A);
+		pr_tps_info("regh 0x08=%x, regh 0x09=%x, regh 0x0A=%x\n",
+				regh, regh1, regh2);
 		tps65200_set_chg_stat(1);
 		break;
 	case POWER_SUPPLY_ENABLE_SLOW_HV_CHARGE:
@@ -545,7 +600,8 @@ static irqreturn_t chg_stat_handler(int irq, void *data)
 			"chg_stat_enabled:%u\n", chg_stat_enabled);
 
 	if (chg_stat_enabled)
-		queue_work(tps65200_wq, &chg_stat_work);
+		queue_delayed_work(tps65200_wq, &chg_stat_work
+					, msecs_to_jiffies(1000));
 
 	return IRQ_HANDLED;
 }
@@ -590,19 +646,21 @@ static void tps65200_int_func(struct work_struct *work)
 		}
 		break;
 	default:
-		/* CHECK_INT3 is read just in case of unknown interrupt */
-		fault_bit = tps_set_charger_ctrl(CHECK_INT3);
 		fault_bit = tps_set_charger_ctrl(CHECK_INT2);
 		pr_tps_info("Read register INT2 value: %x\n", fault_bit);
 		if (fault_bit & 0x80) {
 			fault_bit = tps_set_charger_ctrl(CHECK_INT2);
 			fault_bit = tps_set_charger_ctrl(CHECK_INT2);
+			fault_bit = tps_set_charger_ctrl(CHECK_CONTROL);
 			pr_tps_info("Reverse current protection happened.\n");
 			tps65200_set_chg_stat(0);
 			tps65200_i2c_write_byte(0x29, 0x01);
 			tps65200_i2c_write_byte(0x28, 0x00);
 			send_tps_chg_int_notify(CHECK_INT2, 1);
 			cancel_delayed_work(&chg_int_data->int_work);
+			enable_irq(chg_int_data->gpio_chg_int);
+		} else if (fault_bit & 0x01) {
+			pr_tps_info("Charger warning. Input voltage DPM loop active\n");
 			enable_irq(chg_int_data->gpio_chg_int);
 		} else {
 			fault_bit = tps_set_charger_ctrl(CHECK_INT1);
@@ -623,10 +681,7 @@ static void chg_stat_work_func(struct work_struct *work)
 {
 	CHECK_LOG();
 
-	tps65200_set_chg_stat(0);
-	tps65200_i2c_write_byte(0x29, 0x01);
-	tps65200_i2c_write_byte(0x28, 0x00);
-	return;
+	tps65200_dump_register();
 }
 
 static void tps65200_check_alarm_handler(struct alarm *alarm)
@@ -682,37 +737,41 @@ static int tps65200_probe(struct i2c_client *client,
 			ANDROID_ALARM_ELAPSED_REALTIME_WAKEUP,
 			tps65200_check_alarm_handler);
 
+	/* for boot mode safety timer either, used if alarm is not ready */
+	INIT_DELAYED_WORK(&check_timer_work,
+			check_alarm_work_func);
+
 #ifdef CONFIG_SUPPORT_DQ_BATTERY
 	htc_is_dq_pass = pdata->dq_result;
 	if (htc_is_dq_pass)
 		pr_tps_info("HV battery is detected.\n");
 #endif
+	chg_int_data = (struct tps65200_chg_int_data *)
+		kmalloc(sizeof(struct tps65200_chg_int_data),
+				GFP_KERNEL);
+	if (!chg_int_data) {
+		pr_tps_err("No memory for chg_int_data!\n");
+		return -1;
+	}
+
 	/*  For chg_stat interrupt initialization. */
 	chg_stat_int = 0;
 	if (pdata->gpio_chg_stat > 0) {
 		rc = request_any_context_irq(pdata->gpio_chg_stat,
 					chg_stat_handler,
 					IRQF_TRIGGER_RISING,
-					"chg_stat", NULL);
+					"chg_stat", chg_int_data);
 
 		if (rc < 0)
 			pr_tps_err("request chg_stat irq failed!\n");
 		else {
-			INIT_WORK(&chg_stat_work, chg_stat_work_func);
+			INIT_DELAYED_WORK(&chg_stat_work, chg_stat_work_func);
 			chg_stat_int = pdata->gpio_chg_stat;
 		}
 	}
 
 	/*  For chg_int interrupt initialization. */
 	if (pdata->gpio_chg_int > 0) {
-		chg_int_data = (struct tps65200_chg_int_data *)
-				kmalloc(sizeof(struct tps65200_chg_int_data),
-					GFP_KERNEL);
-		if (!chg_int_data) {
-			pr_tps_err("No memory for chg_int_data!\n");
-			return -1;
-		}
-
 		chg_int_data->gpio_chg_int = 0;
 		INIT_DELAYED_WORK(&chg_int_data->int_work,
 				tps65200_int_func);
@@ -721,7 +780,7 @@ static int tps65200_probe(struct i2c_client *client,
 				pdata->gpio_chg_int,
 				chg_int_handler,
 				IRQF_TRIGGER_FALLING,
-				"chg_int", NULL);
+				"chg_int", chg_int_data);
 		if (rc < 0)
 			pr_tps_err("request chg_int irq failed!\n");
 		else {
@@ -758,6 +817,8 @@ static int tps65200_remove(struct i2c_client *client)
 	if (data->client && data->client != client)
 		i2c_unregister_device(data->client);
 	tps65200_i2c_module.client = NULL;
+	if (chg_stat_int > 0)
+		free_irq(chg_stat_int, chg_int_data);
 	destroy_workqueue(tps65200_wq);
 	return 0;
 }
@@ -773,6 +834,8 @@ static void tps65200_shutdown(struct i2c_client *client)
 	/* disable shunt monitor to decrease 0.035mA of current */
 	regh &= 0xDF;
 	tps65200_i2c_write_byte(regh, 0x00);
+	if (chg_stat_int > 0)
+		free_irq(chg_stat_int, chg_int_data);
 	destroy_workqueue(tps65200_wq);
 }
 

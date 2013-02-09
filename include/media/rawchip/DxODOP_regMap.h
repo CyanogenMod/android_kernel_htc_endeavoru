@@ -180,12 +180,16 @@
 #define DxODOP_frame_number_7_0                                                 0x02a2
 #define DxODOP_frame_number_15_8                                                0x02a3
 
+#define DxODOP_af_strategy_7_0                                                  0x02a4
 /* ********************************************************************************** */
 /* User constant definition: */
 /* ********************************************************************************** */
 #define DxODOP_mode_idle                                                        0x00
-#define DxODOP_mode_stillPreview                                                0x01
+#define DxODOP_mode_still_preview                                               0x01
 #define DxODOP_mode_video                                                       0x02
+#define DxODOP_mode_edof_disabled                                               0x04
+#define DxODOP_mode_blue_fringing_disabled                                      0x08
+#define DxODOP_mode_denoising_disabled                                          0x10
 #define DxODOP_execCmd_SettingCmd                                               0x01
 #define DxODOP_focus_strategy_CW                                                0x01
 #define DxODOP_focus_strategy_SL                                                0x02
@@ -195,14 +199,14 @@
 /* ********************************************************************************** */
 /* User parameters default values: */
 /* ********************************************************************************** */
-#define DxODOP_dfltVal_ucode_id_7_0                                             0x04
-#define DxODOP_dfltVal_ucode_id_15_8                                            0x01
+#define DxODOP_dfltVal_ucode_id_7_0                                             0x00
+#define DxODOP_dfltVal_ucode_id_15_8                                            0x02
 #define DxODOP_dfltVal_hw_id_7_0                                                0xed
 #define DxODOP_dfltVal_hw_id_15_8                                               0xb4
 #define DxODOP_dfltVal_calib_id_0_7_0                                           0x00
 #define DxODOP_dfltVal_calib_id_1_7_0                                           0x00
 #define DxODOP_dfltVal_calib_id_2_7_0                                           0x00
-#define DxODOP_dfltVal_calib_id_3_7_0                                           0x00
+#define DxODOP_dfltVal_calib_id_3_7_0                                           0x01
 #define DxODOP_dfltVal_error_code_7_0                                           0x00
 #define DxODOP_dfltVal_visible_line_size_7_0                                    0x00
 #define DxODOP_dfltVal_visible_line_size_15_8                                   0x00
@@ -347,6 +351,7 @@
 #define DxODOP_dfltVal_ROI_4_stats_confidence_31_24                             0x00
 #define DxODOP_dfltVal_frame_number_7_0                                         0xff
 #define DxODOP_dfltVal_frame_number_15_8                                        0xff
+#define DxODOP_dfltVal_af_strategy_7_0                                          0x11
 
 /* ********************************************************************************** */
 /* Error constant definition: */

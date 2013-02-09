@@ -1095,7 +1095,7 @@ size_t crash_get_memory_size(void)
 	size_t size = 0;
 	mutex_lock(&kexec_mutex);
 	if (crashk_res.end != crashk_res.start)
-		size = crashk_res.end - crashk_res.start + 1;
+		size = resource_size(&crashk_res);
 	mutex_unlock(&kexec_mutex);
 	return size;
 }
@@ -1531,13 +1531,7 @@ int kernel_kexec(void)
 		if (error)
 			goto Enable_cpus;
 		local_irq_disable();
-		/* Suspend system devices */
-		error = sysdev_suspend(PMSG_FREEZE);
-		if (!error) {
-			error = syscore_suspend();
-			if (error)
-				sysdev_resume();
-		}
+		error = syscore_suspend();
 		if (error)
 			goto Enable_irqs;
 	} else
@@ -1553,7 +1547,6 @@ int kernel_kexec(void)
 #ifdef CONFIG_KEXEC_JUMP
 	if (kexec_image->preserve_context) {
 		syscore_resume();
-		sysdev_resume();
  Enable_irqs:
 		local_irq_enable();
  Enable_cpus:

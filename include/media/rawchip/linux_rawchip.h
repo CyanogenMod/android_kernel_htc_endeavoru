@@ -36,6 +36,7 @@
 
 #include <linux/types.h>
 #include <linux/ioctl.h>
+#include <media/rawchip/Yushan_API.h>
 
 #define RAWCHIP_IOCTL_MAGIC 'g'
 
@@ -62,7 +63,7 @@ struct rawchip_stats_event_ctrl {
 };
 
 /* arch/arm/mach-msm/include/mach/camera.h */
-#define CSI_RAW8    0x2A                                                                                                                                     
+#define CSI_RAW8    0x2A
 #define CSI_RAW10   0x2B
 #define CSI_RAW12   0x2C
 
@@ -71,9 +72,9 @@ enum sensor_flip_mirror_info {
     CAMERA_SENSOR_NONE,
     CAMERA_SENSOR_MIRROR,
     CAMERA_SENSOR_FLIP,
-    CAMERA_SENSOR_MIRROR_FLIP,                                                                                                                               
+    CAMERA_SENSOR_MIRROR_FLIP,
 };
-struct tegra_camera_rawchip_info {                                                                                                                             
+struct tegra_camera_rawchip_info {
     int rawchip_reset;
     int rawchip_intr0;
     int rawchip_intr1;
@@ -83,15 +84,6 @@ struct tegra_camera_rawchip_info {
     int (*camera_rawchip_power_off)(void);
     int (*rawchip_use_ext_1v2)(void);
 };
-/* AF ROI */
-typedef	struct
-{
-	uint8_t 	bXStart;
-	uint8_t 	bYStart;
-	uint8_t 	bXEnd;
-	uint8_t 	bYEnd;
-}Yushan_AF_ROI_t;
 
 
 #endif /* __LINUX_RAWCHIP_H */
-

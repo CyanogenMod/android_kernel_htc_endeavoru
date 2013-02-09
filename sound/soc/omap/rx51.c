@@ -3,9 +3,9 @@
  *
  * Copyright (C) 2008 - 2009 Nokia Corporation
  *
- * Contact: Peter Ujfalusi <peter.ujfalusi@nokia.com>
+ * Contact: Peter Ujfalusi <peter.ujfalusi@ti.com>
  *          Eduardo Valentin <eduardo.valentin@nokia.com>
- *          Jarkko Nikula <jhnikula@gmail.com>
+ *          Jarkko Nikula <jarkko.nikula@bitmer.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License

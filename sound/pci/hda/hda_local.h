@@ -131,7 +131,7 @@ int snd_hda_codec_amp_update(struct hda_codec *codec, hda_nid_t nid, int ch,
 			     int direction, int idx, int mask, int val);
 int snd_hda_codec_amp_stereo(struct hda_codec *codec, hda_nid_t nid,
 			     int dir, int idx, int mask, int val);
-#ifdef SND_HDA_NEEDS_RESUME
+#ifdef CONFIG_PM
 void snd_hda_codec_resume_amp(struct hda_codec *codec);
 #endif
 
@@ -212,7 +212,9 @@ int snd_hda_mixer_bind_tlv(struct snd_kcontrol *kcontrol, int op_flag,
 /*
  * SPDIF I/O
  */
-int snd_hda_create_spdif_out_ctls(struct hda_codec *codec, hda_nid_t nid);
+int snd_hda_create_spdif_out_ctls(struct hda_codec *codec,
+				  hda_nid_t associated_nid,
+				  hda_nid_t cvt_nid);
 int snd_hda_create_spdif_in_ctls(struct hda_codec *codec, hda_nid_t nid);
 
 /*
@@ -267,11 +269,11 @@ enum { HDA_DIG_NONE, HDA_DIG_EXCLUSIVE, HDA_DIG_ANALOG_DUP }; /* dig_out_used */
 
 struct hda_multi_out {
 	int num_dacs;		/* # of DACs, must be more than 1 */
-	hda_nid_t *dac_nids;	/* DAC list */
+	const hda_nid_t *dac_nids;	/* DAC list */
 	hda_nid_t hp_nid;	/* optional DAC for HP, 0 when not exists */
 	hda_nid_t extra_out_nid[3];	/* optional DACs, 0 when not exists */
 	hda_nid_t dig_out_nid;	/* digital out audio widget */
-	hda_nid_t *slave_dig_outs;
+	const hda_nid_t *slave_dig_outs;
 	int max_channels;	/* currently supported analog channels */
 	int dig_out_used;	/* current usage of digital out (HDA_DIG_XXX) */
 	int no_share_stream;	/* don't share a stream with multiple pins */
@@ -347,7 +349,7 @@ int snd_hda_check_board_codec_sid_config(struct hda_codec *codec,
                                int num_configs, const char * const *models,
                                const struct snd_pci_quirk *tbl);
 int snd_hda_add_new_ctls(struct hda_codec *codec,
-			 struct snd_kcontrol_new *knew);
+			 const struct snd_kcontrol_new *knew);
 
 /*
  * unsolicited event handler
@@ -443,7 +445,7 @@ struct auto_pin_cfg {
 
 int snd_hda_parse_pin_def_config(struct hda_codec *codec,
 				 struct auto_pin_cfg *cfg,
-				 hda_nid_t *ignore_nids);
+				 const hda_nid_t *ignore_nids);
 
 /* amp values */
 #define AMP_IN_MUTE(idx)	(0x7080 | ((idx)<<8))
@@ -474,7 +476,12 @@ static inline u32 get_wcaps(struct hda_codec *codec, hda_nid_t nid)
 }
 
 /* get the widget type from widget capability bits */
-#define get_wcaps_type(wcaps) (((wcaps) & AC_WCAP_TYPE) >> AC_WCAP_TYPE_SHIFT)
+static inline int get_wcaps_type(unsigned int wcaps)
+{
+	if (!wcaps)
+		return -1; /* invalid type */
+	return (wcaps & AC_WCAP_TYPE) >> AC_WCAP_TYPE_SHIFT;
+}
 
 static inline unsigned int get_wcaps_channels(u32 wcaps)
 {
@@ -492,6 +499,12 @@ int snd_hda_override_amp_caps(struct hda_codec *codec, hda_nid_t nid, int dir,
 u32 snd_hda_query_pin_caps(struct hda_codec *codec, hda_nid_t nid);
 u32 snd_hda_pin_sense(struct hda_codec *codec, hda_nid_t nid);
 int snd_hda_jack_detect(struct hda_codec *codec, hda_nid_t nid);
+
+static inline bool is_jack_detectable(struct hda_codec *codec, hda_nid_t nid)
+{
+	return (snd_hda_query_pin_caps(codec, nid) & AC_PINCAP_PRES_DETECT) &&
+		(get_wcaps(codec, nid) & AC_WCAP_UNSOL_CAP);
+}
 
 /* flags for hda_nid_item */
 #define HDA_NID_ITEM_AMP	(1<<0)
@@ -557,7 +570,6 @@ int snd_hda_get_bool_hint(struct hda_codec *codec, const char *key)
  * power-management
  */
 
-#ifdef CONFIG_SND_HDA_POWER_SAVE
 void snd_hda_schedule_power_save(struct hda_codec *codec);
 
 struct hda_amp_list {
@@ -567,14 +579,13 @@ struct hda_amp_list {
 };
 
 struct hda_loopback_check {
-	struct hda_amp_list *amplist;
+	const struct hda_amp_list *amplist;
 	int power_on;
 };
 
 int snd_hda_check_amp_list_power(struct hda_codec *codec,
 				 struct hda_loopback_check *check,
 				 hda_nid_t nid);
-#endif /* CONFIG_SND_HDA_POWER_SAVE */
 
 /*
  * AMP control callbacks
@@ -634,8 +645,8 @@ struct hdmi_eld {
 int snd_hdmi_get_eld_size(struct hda_codec *codec, hda_nid_t nid);
 int snd_hdmi_get_eld(struct hdmi_eld *, struct hda_codec *, hda_nid_t);
 void snd_hdmi_show_eld(struct hdmi_eld *eld);
-void hdmi_eld_update_pcm_info(struct hdmi_eld *eld, struct hda_pcm_stream *pcm,
-			      struct hda_pcm_stream *codec_pars);
+void snd_hdmi_eld_update_pcm_info(struct hdmi_eld *eld,
+			      struct hda_pcm_stream *hinfo);
 
 #ifdef CONFIG_PROC_FS
 int snd_hda_eld_proc_new(struct hda_codec *codec, struct hdmi_eld *eld,

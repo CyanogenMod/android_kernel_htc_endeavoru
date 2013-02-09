@@ -239,8 +239,6 @@ static int __devexit qt1070_remove(struct i2c_client *client)
 	input_unregister_device(data->input);
 	kfree(data);
 
-	i2c_set_clientdata(client, NULL);
-
 	return 0;
 }
 
@@ -248,6 +246,7 @@ static const struct i2c_device_id qt1070_id[] = {
 	{ "qt1070", 0 },
 	{ },
 };
+MODULE_DEVICE_TABLE(i2c, qt1070_id);
 
 static struct i2c_driver qt1070_driver = {
 	.driver	= {

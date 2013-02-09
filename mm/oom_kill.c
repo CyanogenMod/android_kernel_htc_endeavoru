@@ -38,6 +38,33 @@ int sysctl_oom_kill_allocating_task;
 int sysctl_oom_dump_tasks = 1;
 static DEFINE_SPINLOCK(zone_scan_lock);
 
+/**
+ * test_set_oom_score_adj() - set current's oom_score_adj and return old value
+ * @new_val: new oom_score_adj value
+ *
+ * Sets the oom_score_adj value for current to @new_val with proper
+ * synchronization and returns the old value.  Usually used to temporarily
+ * set a value, save the old value in the caller, and then reinstate it later.
+ */
+int test_set_oom_score_adj(int new_val)
+{
+	struct sighand_struct *sighand = current->sighand;
+	int old_val;
+
+	spin_lock_irq(&sighand->siglock);
+	old_val = current->signal->oom_score_adj;
+	if (new_val != old_val) {
+		if (new_val == OOM_SCORE_ADJ_MIN)
+			atomic_inc(&current->mm->oom_disable_count);
+		else if (old_val == OOM_SCORE_ADJ_MIN)
+			atomic_dec(&current->mm->oom_disable_count);
+		current->signal->oom_score_adj = new_val;
+	}
+	spin_unlock_irq(&sighand->siglock);
+
+	return old_val;
+}
+
 #ifdef CONFIG_NUMA
 /**
  * has_intersects_mems_allowed() - check task eligiblity for kill
@@ -135,7 +162,7 @@ static bool oom_unkillable_task(struct task_struct *p,
 unsigned int oom_badness(struct task_struct *p, struct mem_cgroup *mem,
 		      const nodemask_t *nodemask, unsigned long totalpages)
 {
-	int points;
+	long points;
 
 	if (oom_unkillable_task(p, mem, nodemask))
 		return 0;
@@ -152,15 +179,6 @@ unsigned int oom_badness(struct task_struct *p, struct mem_cgroup *mem,
 	if (atomic_read(&p->mm->oom_disable_count)) {
 		task_unlock(p);
 		return 0;
-	}
-
-	/*
-	 * When the PF_OOM_ORIGIN bit is set, it indicates the task should have
-	 * priority for oom killing.
-	 */
-	if (p->flags & PF_OOM_ORIGIN) {
-		task_unlock(p);
-		return 1000;
 	}
 
 	/*
@@ -323,8 +341,7 @@ static struct task_struct *select_bad_process(unsigned int *ppoints,
 				 * then wait for it to finish before killing
 				 * some other task unnecessarily.
 				 */
-				if (!(task_ptrace(p->group_leader) &
-							PT_TRACE_EXIT))
+				if (!(p->group_leader->ptrace & PT_TRACE_EXIT))
 					return ERR_PTR(-1UL);
 			}
 		}
@@ -472,7 +489,7 @@ static int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 
 	/*
 	 * If any of p's children has a different mm and is eligible for kill,
-	 * the one with the highest badness() score is sacrificed for its
+	 * the one with the highest oom_badness() score is sacrificed for its
 	 * parent.  This attempts to lose the minimal amount of work done while
 	 * still freeing memory.
 	 */

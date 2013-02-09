@@ -105,6 +105,9 @@ static int cfg80211_conn_scan(struct wireless_dev *wdev)
 	if (!request)
 		return -ENOMEM;
 
+	/* broadcom set magic number */
+	request->magic = SCAN_REQUEST_MAGIC;
+
 	if (wdev->conn->params.channel)
 		request->channels[0] = wdev->conn->params.channel;
 	else {
@@ -118,6 +121,8 @@ static int cfg80211_conn_scan(struct wireless_dev *wdev)
 			     i++, j++)
 				request->channels[i] =
 					&wdev->wiphy->bands[band]->channels[j];
+			request->rates[band] =
+				(1 << wdev->wiphy->bands[band]->n_bitrates) - 1;
 		}
 	}
 	request->n_channels = n_channels;
@@ -139,6 +144,9 @@ static int cfg80211_conn_scan(struct wireless_dev *wdev)
 		nl80211_send_scan_start(rdev, wdev->netdev);
 		dev_hold(wdev->netdev);
 	} else {
+		/* broadcom clean magci word */
+		rdev->scan_req->magic = 0;
+
 		rdev->scan_req = NULL;
 		kfree(request);
 	}
@@ -250,7 +258,8 @@ static struct cfg80211_bss *cfg80211_get_conn_bss(struct wireless_dev *wdev)
 	if (wdev->conn->params.privacy)
 		capa |= WLAN_CAPABILITY_PRIVACY;
 
-	bss = cfg80211_get_bss(wdev->wiphy, NULL, wdev->conn->params.bssid,
+	bss = cfg80211_get_bss(wdev->wiphy, wdev->conn->params.channel,
+			       wdev->conn->params.bssid,
 			       wdev->conn->params.ssid,
 			       wdev->conn->params.ssid_len,
 			       WLAN_CAPABILITY_ESS | WLAN_CAPABILITY_PRIVACY,
@@ -470,7 +479,10 @@ void __cfg80211_connect_result(struct net_device *dev, const u8 *bssid,
 	}
 
 	if (!bss)
-		bss = cfg80211_get_bss(wdev->wiphy, NULL, bssid,
+		bss = cfg80211_get_bss(wdev->wiphy,
+				       wdev->conn ? wdev->conn->params.channel :
+				       NULL,
+				       bssid,
 				       wdev->ssid, wdev->ssid_len,
 				       WLAN_CAPABILITY_ESS,
 				       WLAN_CAPABILITY_ESS);
@@ -538,7 +550,9 @@ void cfg80211_connect_result(struct net_device *dev, const u8 *bssid,
 }
 EXPORT_SYMBOL(cfg80211_connect_result);
 
-void __cfg80211_roamed(struct wireless_dev *wdev, const u8 *bssid,
+void __cfg80211_roamed(struct wireless_dev *wdev,
+		       struct ieee80211_channel *channel,
+		       const u8 *bssid,
 		       const u8 *req_ie, size_t req_ie_len,
 		       const u8 *resp_ie, size_t resp_ie_len)
 {
@@ -565,7 +579,7 @@ void __cfg80211_roamed(struct wireless_dev *wdev, const u8 *bssid,
 	cfg80211_put_bss(&wdev->current_bss->pub);
 	wdev->current_bss = NULL;
 
-	bss = cfg80211_get_bss(wdev->wiphy, NULL, bssid,
+	bss = cfg80211_get_bss(wdev->wiphy, channel, bssid,
 			       wdev->ssid, wdev->ssid_len,
 			       WLAN_CAPABILITY_ESS, WLAN_CAPABILITY_ESS);
 
@@ -603,7 +617,9 @@ void __cfg80211_roamed(struct wireless_dev *wdev, const u8 *bssid,
 #endif
 }
 
-void cfg80211_roamed(struct net_device *dev, const u8 *bssid,
+void cfg80211_roamed(struct net_device *dev,
+		     struct ieee80211_channel *channel,
+		     const u8 *bssid,
 		     const u8 *req_ie, size_t req_ie_len,
 		     const u8 *resp_ie, size_t resp_ie_len, gfp_t gfp)
 {
@@ -619,6 +635,7 @@ void cfg80211_roamed(struct net_device *dev, const u8 *bssid,
 		return;
 
 	ev->type = EVENT_ROAMED;
+	ev->rm.channel = channel;
 	memcpy(ev->rm.bssid, bssid, ETH_ALEN);
 	ev->rm.req_ie = ((u8 *)ev) + sizeof(*ev);
 	ev->rm.req_ie_len = req_ie_len;
@@ -650,8 +667,10 @@ void __cfg80211_disconnected(struct net_device *dev, const u8 *ie,
 		    wdev->iftype != NL80211_IFTYPE_P2P_CLIENT))
 		return;
 
+#ifndef CONFIG_CFG80211_ALLOW_RECONNECT
 	if (wdev->sme_state != CFG80211_SME_CONNECTED)
 		return;
+#endif
 
 	if (wdev->current_bss) {
 		cfg80211_unhold_bss(wdev->current_bss);
@@ -749,10 +768,16 @@ int __cfg80211_connect(struct cfg80211_registered_device *rdev,
 
 	ASSERT_WDEV_LOCK(wdev);
 
-	if (wdev->sme_state != CFG80211_SME_IDLE)
+#ifndef CONFIG_CFG80211_ALLOW_RECONNECT
+	if (wdev->sme_state != CFG80211_SME_IDLE){
+        printk("[WLAN] sme_state = %d \n", wdev->sme_state);
 		return -EALREADY;
+    }
 
 	if (WARN_ON(wdev->connect_keys)) {
+#else
+	if (wdev->connect_keys) {
+#endif
 		kfree(wdev->connect_keys);
 		wdev->connect_keys = NULL;
 	}
@@ -785,11 +810,15 @@ int __cfg80211_connect(struct cfg80211_registered_device *rdev,
 	}
 
 	if (!rdev->ops->connect) {
-		if (!rdev->ops->auth || !rdev->ops->assoc)
+		if (!rdev->ops->auth || !rdev->ops->assoc){
+            printk("[WLAN] EOPNOTSUPP \n");
 			return -EOPNOTSUPP;
+        }
 
-		if (WARN_ON(wdev->conn))
-			return -EINPROGRESS;
+		if (WARN_ON(wdev->conn)){
+            printk("[WLAN] wdev->conn \n");
+            return -EINPROGRESS;
+        }
 
 		wdev->conn = kzalloc(sizeof(*wdev->conn), GFP_KERNEL);
 		if (!wdev->conn)
@@ -875,6 +904,7 @@ int __cfg80211_connect(struct cfg80211_registered_device *rdev,
 		if (err) {
 			wdev->connect_keys = NULL;
 			wdev->sme_state = CFG80211_SME_IDLE;
+			printk("[WLAN] connect err =%d \n", err);
 			return err;
 		}
 

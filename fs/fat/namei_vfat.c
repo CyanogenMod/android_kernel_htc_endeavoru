@@ -82,10 +82,8 @@ static int vfat_revalidate_ci(struct dentry *dentry, struct nameidata *nd)
 	 * case sensitive name which is specified by user if this is
 	 * for creation.
 	 */
-	if (!(nd->flags & (LOOKUP_CONTINUE | LOOKUP_PARENT))) {
-		if (nd->flags & (LOOKUP_CREATE | LOOKUP_RENAME_TARGET))
-			return 0;
-	}
+	if (nd->flags & (LOOKUP_CREATE | LOOKUP_RENAME_TARGET))
+		return 0;
 
 	return vfat_revalidate_shortname(dentry);
 }
@@ -1065,6 +1063,7 @@ static const struct inode_operations vfat_dir_inode_operations = {
 
 static void setup(struct super_block *sb)
 {
+	MSDOS_SB(sb)->dir_ops = &vfat_dir_inode_operations;
 	if (MSDOS_SB(sb)->options.name_check != 's')
 		sb->s_d_op = &vfat_ci_dentry_ops;
 	else
@@ -1073,8 +1072,7 @@ static void setup(struct super_block *sb)
 
 static int vfat_fill_super(struct super_block *sb, void *data, int silent)
 {
-	return fat_fill_super(sb, data, silent, &vfat_dir_inode_operations,
-			     1, setup);
+	return fat_fill_super(sb, data, silent, 1, setup);
 }
 
 static struct dentry *vfat_mount(struct file_system_type *fs_type,

@@ -120,10 +120,10 @@ static int remove_migration_pte(struct page *new, struct vm_area_struct *vma,
 
 		ptep = pte_offset_map(pmd, addr);
 
-		if (!is_swap_pte(*ptep)) {
-			pte_unmap(ptep);
-			goto out;
-		}
+		/*
+		 * Peek to check is_swap_pte() before taking ptlock?  No, we
+		 * can race mremap's move_ptes(), which skips anon_vma lock.
+		 */
 
 		ptl = pte_lockptr(mm, pmd);
 	}
@@ -721,15 +721,11 @@ static int unmap_and_move(new_page_t get_new_page, unsigned long private,
 		 * Only page_lock_anon_vma() understands the subtleties of
 		 * getting a hold on an anon_vma from outside one of its mms.
 		 */
-		anon_vma = page_lock_anon_vma(page);
+		anon_vma = page_get_anon_vma(page);
 		if (anon_vma) {
 			/*
-			 * Take a reference count on the anon_vma if the
-			 * page is mapped so that it is guaranteed to
-			 * exist when the page is remapped later
+			 * Anon page
 			 */
-			get_anon_vma(anon_vma);
-			page_unlock_anon_vma(anon_vma);
 		} else if (PageSwapCache(page)) {
 			/*
 			 * We cannot be sure that the anon_vma of an unmapped
@@ -857,13 +853,8 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 		lock_page(hpage);
 	}
 
-	if (PageAnon(hpage)) {
-		anon_vma = page_lock_anon_vma(hpage);
-		if (anon_vma) {
-			get_anon_vma(anon_vma);
-			page_unlock_anon_vma(anon_vma);
-		}
-	}
+	if (PageAnon(hpage))
+		anon_vma = page_get_anon_vma(hpage);
 
 	try_to_unmap(hpage, TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
 

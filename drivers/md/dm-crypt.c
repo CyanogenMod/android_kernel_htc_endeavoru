@@ -26,7 +26,6 @@
 #include <linux/device-mapper.h>
 
 #define DM_MSG_PREFIX "crypt"
-#define MESG_STR(x) x, sizeof(x)
 
 /*
  * context holding the current state of a multi-part conversion
@@ -1177,11 +1176,17 @@ bad_mem:
 static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	struct crypt_config *cc;
-	unsigned int key_size;
+	unsigned int key_size, opt_params;
 	unsigned long long tmpll;
 	int ret;
+	struct dm_arg_set as;
+	const char *opt_string;
 
-	if (argc != 5) {
+	static struct dm_arg _args[] = {
+		{0, 1, "Invalid number of feature args"},
+	};
+
+	if (argc < 5) {
 		ti->error = "Not enough arguments";
 		return -EINVAL;
 	}
@@ -1251,6 +1256,30 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 	cc->start = tmpll;
 
+	argv += 5;
+	argc -= 5;
+
+	/* Optional parameters */
+	if (argc) {
+		as.argc = argc;
+		as.argv = argv;
+
+		ret = dm_read_arg_group(_args, &as, &opt_params, &ti->error);
+		if (ret)
+			goto bad;
+
+		opt_string = dm_shift_arg(&as);
+
+		if (opt_params == 1 && opt_string &&
+		    !strcasecmp(opt_string, "allow_discards"))
+			ti->num_discard_requests = 1;
+		else if (opt_params) {
+			ret = -EINVAL;
+			ti->error = "Invalid feature arguments";
+			goto bad;
+		}
+	}
+
 	ret = -ENOMEM;
 	cc->io_queue = create_singlethread_workqueue("kcryptd_io");
 	if (!cc->io_queue) {
@@ -1265,6 +1294,8 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	ti->num_flush_requests = 1;
+	ti->discard_zeroes_data_unsupported = 1;
+
 	return 0;
 
 bad:
@@ -1278,9 +1309,16 @@ static int crypt_map(struct dm_target *ti, struct bio *bio,
 	struct dm_crypt_io *io;
 	struct crypt_config *cc;
 
-	if (bio->bi_rw & REQ_FLUSH) {
+	/*
+	 * If bio is REQ_FLUSH or REQ_DISCARD, just bypass crypt queues.
+	 * - for REQ_FLUSH device-mapper core ensures that no IO is in-flight
+	 * - for REQ_DISCARD caller must use flush if IO ordering matters
+	 */
+	if (unlikely(bio->bi_rw & (REQ_FLUSH | REQ_DISCARD))) {
 		cc = ti->private;
 		bio->bi_bdev = cc->dev->bdev;
+		if (bio_sectors(bio))
+			bio->bi_sector = cc->start + dm_target_offset(ti, bio->bi_sector);
 		return DM_MAPIO_REMAPPED;
 	}
 
@@ -1322,6 +1360,10 @@ static int crypt_status(struct dm_target *ti, status_type_t type,
 
 		DMEMIT(" %llu %s %llu", (unsigned long long)cc->iv_offset,
 				cc->dev->name, (unsigned long long)cc->start);
+
+		if (ti->num_discard_requests)
+			DMEMIT(" 1 allow_discards");
+
 		break;
 	}
 	return 0;
@@ -1365,12 +1407,12 @@ static int crypt_message(struct dm_target *ti, unsigned argc, char **argv)
 	if (argc < 2)
 		goto error;
 
-	if (!strnicmp(argv[0], MESG_STR("key"))) {
+	if (!strcasecmp(argv[0], "key")) {
 		if (!test_bit(DM_CRYPT_SUSPENDED, &cc->flags)) {
 			DMWARN("not suspended during key manipulation.");
 			return -EINVAL;
 		}
-		if (argc == 3 && !strnicmp(argv[1], MESG_STR("set"))) {
+		if (argc == 3 && !strcasecmp(argv[1], "set")) {
 			ret = crypt_set_key(cc, argv[2]);
 			if (ret)
 				return ret;
@@ -1378,7 +1420,7 @@ static int crypt_message(struct dm_target *ti, unsigned argc, char **argv)
 				ret = cc->iv_gen_ops->init(cc);
 			return ret;
 		}
-		if (argc == 2 && !strnicmp(argv[1], MESG_STR("wipe"))) {
+		if (argc == 2 && !strcasecmp(argv[1], "wipe")) {
 			if (cc->iv_gen_ops && cc->iv_gen_ops->wipe) {
 				ret = cc->iv_gen_ops->wipe(cc);
 				if (ret)

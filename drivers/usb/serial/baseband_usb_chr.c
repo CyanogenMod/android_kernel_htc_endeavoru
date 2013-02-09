@@ -37,6 +37,7 @@
 #include <linux/uaccess.h>
 #include "baseband_usb_chr.h"
 #include <linux/vmalloc.h>
+#include <asm/mach-types.h>
 
 /* HTC include file */
 #include <mach/htc_hostdbg.h>
@@ -44,6 +45,8 @@
 /* HTC variables */
 extern unsigned int host_dbg_flag;
 #define MODULE_NAME "[USBCHRv1] "
+
+extern int Modem_is_6360();
 
 /* HTC: debug flag */
 /*	chrlog1: ipc write file log for modem download */
@@ -690,13 +693,13 @@ static struct baseband_ipc *baseband_ipc_open(work_func_t work_func,
 			ipc_buf);
 		list_add_tail(&ipc_buf->list, &ipc->tx_free.buf);
 	}
-	ipc->ipc_rx = kzalloc(USB_CHR_RX_BUFSIZ, GFP_KERNEL);
+	ipc->ipc_rx = kmalloc(USB_CHR_RX_BUFSIZ, GFP_KERNEL);
 	if (!ipc->ipc_rx) {
 		pr_err("baseband_ipc_open - "
 			"cannot allocate ipc->ipc_rx\n");
 		goto error_exit;
 	}
-	ipc->ipc_tx = kzalloc(USB_CHR_TX_BUFSIZ, GFP_KERNEL);
+	ipc->ipc_tx = kmalloc(USB_CHR_TX_BUFSIZ, GFP_KERNEL);
 	if (!ipc->ipc_tx) {
 		pr_err("baseband_ipc_open - "
 			"cannot allocate ipc->ipc_tx\n");
@@ -754,10 +757,16 @@ static void baseband_usb_chr_rx_urb_comp(struct urb *urb)
 	}
 
 	switch (urb->status) {
+		case 0:
+			/* success */
+			break;
 		case -ENOENT:
 		case -ESHUTDOWN:
 		case -EPROTO:
-			pr_info("%s: link down\n", __func__);
+			pr_info("%s: link down %d\n", __func__, urb->status);
+			return;
+		default:
+			pr_err("%s: urb error status %d\n", __func__, urb->status);
 			return;
 	}
 
@@ -894,7 +903,7 @@ static int baseband_usb_driver_probe(struct usb_interface *intf,
 	const struct usb_device_id *id)
 {
 
-	pr_info("%s(%d) 0308 - usb chr driver Ver.2 { intf %p id %p\n", __func__, __LINE__, intf, id);
+	pr_info("%s(%d) 0322 - usb chr driver Ver.3 { intf %p id %p\n", __func__, __LINE__, intf, id);
 
 	pr_info("intf->cur_altsetting->desc.bInterfaceNumber %02x\n",
 		intf->cur_altsetting->desc.bInterfaceNumber);
@@ -1044,6 +1053,13 @@ static int baseband_usb_chr_open(struct inode *inode, struct file *file)
 		return 0;
 	}
 
+	if (Modem_is_6360())
+	{
+		baseband_usb_chr_vid = 0x8087;
+		baseband_usb_chr_pid = 0x0716;
+		baseband_usb_chr_intf = 0x00;
+	}
+
 	/* open baseband usb */
 	baseband_usb_chr = baseband_usb_open(baseband_usb_chr_vid,
 				baseband_usb_chr_pid,
@@ -1175,6 +1191,9 @@ static void baseband_usb_close(struct baseband_usb *usb)
 	if (!usb)
 		return;
 
+	/* we need proper lock, maybe...*/
+	usb_device_connection = false;
+
 	/* free re-usable rx urb + rx urb transfer buffer */
 	if (usb->usb.rx_urb) {
 		chrlog4("free rx urb\n");
@@ -1188,7 +1207,7 @@ static void baseband_usb_close(struct baseband_usb *usb)
 	}
 
 	if (usb->ipc) {
-		usb_device_connection = false;
+//		usb_device_connection = false;
 		flush_work_sync(&usb->ipc->work);
 		flush_work_sync(&usb->ipc->rx_work);
 	}
@@ -1304,12 +1323,14 @@ static struct baseband_usb *baseband_usb_open(unsigned int vid,
 		pr_err("usb_alloc_urb() failed\n");
 		goto error_exit;
 	}
-	buf = kzalloc(USB_CHR_RX_BUFSIZ, GFP_KERNEL);
+
+	buf = kmalloc(USB_CHR_RX_BUFSIZ, GFP_KERNEL);
 	if (!buf) {
-		pr_err("usb buffer kzalloc() failed\n");
+		pr_err("%s: usb buffer kmalloc() failed\n", __func__);
 		usb_free_urb(urb);
 		goto error_exit;
 	}
+	pr_info("page alloc debug: after check !buf and allocated %d bytes\n", USB_CHR_RX_BUFSIZ);
 	urb->transfer_buffer = buf;
 	usb->usb.rx_urb = urb;
 

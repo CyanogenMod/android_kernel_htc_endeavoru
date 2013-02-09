@@ -180,8 +180,8 @@ struct ext3_group_desc
 
 /* Flags that should be inherited by new inodes from their parent. */
 #define EXT3_FL_INHERITED (EXT3_SECRM_FL | EXT3_UNRM_FL | EXT3_COMPR_FL |\
-			   EXT3_SYNC_FL | EXT3_IMMUTABLE_FL | EXT3_APPEND_FL |\
-			   EXT3_NODUMP_FL | EXT3_NOATIME_FL | EXT3_COMPRBLK_FL|\
+			   EXT3_SYNC_FL | EXT3_NODUMP_FL |\
+			   EXT3_NOATIME_FL | EXT3_COMPRBLK_FL |\
 			   EXT3_NOCOMPR_FL | EXT3_JOURNAL_DATA_FL |\
 			   EXT3_NOTAIL_FL | EXT3_DIRSYNC_FL)
 
@@ -418,12 +418,11 @@ struct ext3_inode {
 #define EXT2_MOUNT_DATA_FLAGS		EXT3_MOUNT_DATA_FLAGS
 #endif
 
-#define ext3_set_bit			__test_and_set_bit_le
+#define ext3_set_bit			__set_bit_le
 #define ext3_set_bit_atomic		ext2_set_bit_atomic
-#define ext3_clear_bit			__test_and_clear_bit_le
+#define ext3_clear_bit			__clear_bit_le
 #define ext3_clear_bit_atomic		ext2_clear_bit_atomic
 #define ext3_test_bit			test_bit_le
-#define ext3_find_first_zero_bit	find_first_zero_bit_le
 #define ext3_find_next_zero_bit		find_next_zero_bit_le
 
 /*
@@ -877,7 +876,7 @@ extern int ext3_htree_store_dirent(struct file *dir_file, __u32 hash,
 extern void ext3_htree_free_dir_info(struct dir_private_info *p);
 
 /* fsync.c */
-extern int ext3_sync_file(struct file *, int);
+extern int ext3_sync_file(struct file *, loff_t, loff_t, int);
 
 /* hash.c */
 extern int ext3fs_dirhash(const char *name, int len, struct
@@ -909,11 +908,11 @@ extern int  ext3_setattr (struct dentry *, struct iattr *);
 extern void ext3_evict_inode (struct inode *);
 extern int  ext3_sync_inode (handle_t *, struct inode *);
 extern void ext3_discard_reservation (struct inode *);
-extern void ext3_dirty_inode(struct inode *);
+extern void ext3_dirty_inode(struct inode *, int);
 extern int ext3_change_inode_journal_flag(struct inode *, int);
 extern int ext3_get_inode_loc(struct inode *, struct ext3_iloc *);
 extern int ext3_can_truncate(struct inode *inode);
-extern void ext3_truncate (struct inode *);
+extern void ext3_truncate(struct inode *inode);
 extern void ext3_set_inode_flags(struct inode *);
 extern void ext3_get_inode_flags(struct ext3_inode_info *);
 extern void ext3_set_aops(struct inode *inode);

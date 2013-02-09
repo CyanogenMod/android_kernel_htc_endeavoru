@@ -66,7 +66,7 @@ extern int i2c_master_recv(const struct i2c_client *client, char *buf,
 extern int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs,
 			int num);
 
-extern  bool tegra_i2c_is_ready(struct i2c_adapter *adap);
+extern bool tegra_i2c_is_ready(struct i2c_adapter *adap);
 
 /* This is the very generalized SMBus access routine. You probably do not
    want to use this, though; one of the functions below may be much easier,
@@ -411,7 +411,7 @@ void i2c_unlock_adapter(struct i2c_adapter *);
 /* i2c adapter classes (bitmask) */
 #define I2C_CLASS_HWMON		(1<<0)	/* lm_sensors, ... */
 #define I2C_CLASS_DDC		(1<<3)	/* DDC bus on graphics adapters */
-#define I2C_CLASS_SPD		(1<<7)	/* SPD EEPROMs and similar */
+#define I2C_CLASS_SPD		(1<<7)	/* Memory modules */
 
 /* Internal numbers to terminate lists */
 #define I2C_CLIENT_END		0xfffeU
@@ -470,6 +470,19 @@ static inline int i2c_adapter_id(struct i2c_adapter *adap)
 {
 	return adap->nr;
 }
+
+/**
+ * module_i2c_driver() - Helper macro for registering a I2C driver
+ * @__i2c_driver: i2c_driver struct
+ *
+ * Helper macro for I2C drivers which do not do anything special in module
+ * init/exit. This eliminates a lot of boilerplate. Each module may only
+ * use this macro once, and calling it replaces module_init() and module_exit()
+ */
+#define module_i2c_driver(__i2c_driver) \
+	module_driver(__i2c_driver, i2c_add_driver, \
+			i2c_del_driver)
+
 #endif /* I2C */
 #endif /* __KERNEL__ */
 

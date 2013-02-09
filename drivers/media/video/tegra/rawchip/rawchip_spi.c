@@ -200,6 +200,9 @@ static int yushan_spi_transaction(struct spi_message *msg)
 #endif
 	}
 
+	//HTC_START fix Klocwork
+	msg->context = NULL;
+	//HTC_END
 	return status;
 }
 
@@ -247,17 +250,24 @@ int SPI_Write(uint16_t uwIndex , uint16_t uwCount , uint8_t *pData)
 	uint16_t reg, i;
 	uint8_t val, rc = 0;
 	val = 0;
-	for (i = 0; i < uwCount; i++) {
-		reg = uwIndex+i;
-		rc = yushan_spi_write(reg,*(pData+i));
-		if (rc == 0)
-			CDBG("[DxO]%s 0x%x[%d]=0x%x SPI_Write OK",__func__, uwIndex, i, *(pData+i));
-		else {
-			pr_err("[CAM]%s 0x%x[%d]=0x%x " \
-			"SPI_Write Fail",__func__, uwIndex, i, *(pData+i));
-			break;
+	/* FIX ME */
+	if(uwCount <= 100){
+		for (i = 0; i < uwCount; i++) {
+			reg = uwIndex+i;
+			rc = yushan_spi_write(reg,*(pData+i));
+			if (rc == 0)
+				CDBG("[DxO]%s 0x%x[%d]=0x%x SPI_Write OK",__func__, uwIndex, i, *(pData+i));
+			else {
+				pr_err("[CAM]%s 0x%x[%d]=0x%x " \
+				"SPI_Write Fail",__func__, uwIndex, i, *(pData+i));
+				break;
+			}
 		}
+	}else{
+		 if(SPI_Write_4thByte(uwIndex , uwCount , pData) != SUCCESS)
+                    rc = 1;
 	}
+
 	if (rc == 0)
 		return SUCCESS;
 	else
@@ -286,13 +296,13 @@ static int32_t Yushan_spi_write_table(
 		yushan_spi_write_addr[2] = (uwIndex + transferedIndex) & 0x00ff;
 
 		for (i = 0; (i < yushan_MAX_ALLOCATE && transferedIndex < uwCount); i++, transferedIndex++)
-			yushan_spi_write_addr[i+3] = *(pData+2+4*transferedIndex);
+                       yushan_spi_write_addr[i+3] = *(pData + transferedIndex);
 
 		tx_addr.tx_buf = yushan_spi_write_addr;
 		tx_addr.len = i + 3;
 		tx_addr.cs_change = 0;
 		//FIX_ME!!!! EVA is using 32
-		tx_addr.bits_per_word = 8;
+		tx_addr.bits_per_word = 0;
 		spi_message_add_tail(&tx_addr, &m);
 		status = yushan_spi_transaction(&m);
 		if (status != 0) {
@@ -459,6 +469,16 @@ static struct spi_driver spi_rawchip = {
 	.probe = spi_rawchip_probe,
 };
 
+void rawchip_spi_clock_control(int enable)
+{
+	int ret = 0;
+	ret = spi_clock_control(rawchip_dev, enable);
+	if(ret < 0)
+		pr_err("[CAM] rawchip_spi_clock_control: fail to turn %s spi clock", enable ? "on" : "off");
+	else
+		pr_info("[CAM] rawchip_spi_clock_control: turn %s spi clock", enable ? "on" : "off");
+}
+
 int rawchip_spi_init(void)
 {
 	int rc = -1;
@@ -483,4 +503,3 @@ int rawchip_spi_init(void)
 
 	return 0;
 }
-

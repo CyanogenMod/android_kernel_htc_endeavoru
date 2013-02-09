@@ -30,6 +30,8 @@
 #include <linux/uaccess.h>
 #include <linux/random.h>
 #include <linux/hw_breakpoint.h>
+#include <linux/cpuidle.h>
+#include <linux/console.h>
 
 #include <asm/cacheflush.h>
 #include <asm/processor.h>
@@ -37,10 +39,6 @@
 #include <asm/thread_notify.h>
 #include <asm/stacktrace.h>
 #include <asm/mach/time.h>
-
-#include <mach/restart.h>
-extern struct htc_reboot_params *reboot_params;
-void set_dirty_state(int dirty);
 
 #ifdef CONFIG_CC_STACKPROTECTOR
 #include <linux/stackprotector.h>
@@ -64,6 +62,18 @@ extern void setup_mm_for_reboot(char mode);
 static volatile int hlt_counter;
 
 #include <mach/system.h>
+
+#ifdef CONFIG_SMP
+void arch_trigger_all_cpu_backtrace(void)
+{
+	smp_send_all_cpu_backtrace();
+}
+#else
+void arch_trigger_all_cpu_backtrace(void)
+{
+	dump_stack();
+}
+#endif
 
 void disable_hlt(void)
 {
@@ -94,12 +104,33 @@ static int __init hlt_setup(char *__unused)
 __setup("nohlt", nohlt_setup);
 __setup("hlt", hlt_setup);
 
+#ifdef CONFIG_ARM_FLUSH_CONSOLE_ON_RESTART
+void arm_machine_flush_console(void)
+{
+	printk("\n");
+	pr_emerg("Restarting %s\n", linux_banner);
+	if (console_trylock()) {
+		console_unlock();
+		return;
+	}
+
+	mdelay(50);
+
+	local_irq_disable();
+	if (!console_trylock())
+		pr_emerg("arm_restart: Console was locked! Busting\n");
+	else
+		pr_emerg("arm_restart: Console was locked!\n");
+	console_unlock();
+}
+#else
+void arm_machine_flush_console(void)
+{
+}
+#endif
+
 void arm_machine_restart(char mode, const char *cmd)
 {
-	/* Disable interrupts first */
-	local_irq_disable();
-	local_fiq_disable();
-
 	/*
 	 * Tell the mm system that we are going to reboot -
 	 * we may need it to insert some 1:1 mappings so that
@@ -169,37 +200,10 @@ static void default_idle(void)
 		arch_idle();
 	local_irq_enable();
 }
-EXPORT_SYMBOL(default_idle);
-
-void default_debug_idle(void)
-{
-	//printk("[CPUIDLE] print debug message here\n");
-}
-
-void default_cpu_hotplug(void)
-{
-	//printk("[CPUHP] print debug message here\n");
-}
-
-void default_debug_dvfs(void)
-{
-     //   printk("[DVFS] print debug message here\n");
-}
 
 void (*pm_idle)(void) = default_idle;
 EXPORT_SYMBOL(pm_idle);
-void (*pm_debug_idle)(void) = default_debug_idle;
-EXPORT_SYMBOL(pm_debug_idle);
-void (*pm_debug_cpu_hotplug)(void) = default_cpu_hotplug;
-EXPORT_SYMBOL(pm_debug_cpu_hotplug);
-void (*pm_debug_dvfs)(void) = default_debug_dvfs;
-EXPORT_SYMBOL(pm_debug_dvfs);
 
-#include <linux/wakelock.h>
-#include <linux/time.h>
-#include <linux/rtc.h>
-#include <mach/board_htc.h>
-extern void htc_print_active_wake_locks();
 /*
  * The idle thread, has rather strange semantics for calling pm_idle,
  * but this is what x86 does and we need to do the same, so that
@@ -208,35 +212,12 @@ extern void htc_print_active_wake_locks();
  */
 void cpu_idle(void)
 {
-
-    static bool bPrint_wake_lock = true;
-    struct timespec ts;
-    struct rtc_time tm;
-
 	local_fiq_enable();
-	u64 cur_time, last_time;
-	last_time = cpu_clock(UINT_MAX);
+
 	/* endless idle loop with no priority at all */
 	while (1) {
-		cur_time = cpu_clock(UINT_MAX);
-		if (((cur_time - last_time) >= 5000000000) && (smp_processor_id()==0))
-		{
-			pm_debug_idle();
-			pm_debug_cpu_hotplug();
-			//pm_debug_dvfs();
-			last_time = cpu_clock(UINT_MAX);
-			if (get_kernel_flag() & KERNEL_FLAG_PM_MONITOR && bPrint_wake_lock)
-			{
-				getnstimeofday(&ts);
-				rtc_time_to_tm(ts.tv_sec - (sys_tz.tz_minuteswest * 60), &tm);
-				printk(KERN_INFO "[PM] hTC PM Statistic  %02d-%02d %02d:%02d:%02d \n",
-					tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-				htc_print_active_wake_locks();
-			}
-			bPrint_wake_lock = !bPrint_wake_lock;
-		}
+		idle_notifier_call_chain(IDLE_START);
 		tick_nohz_stop_sched_tick(1);
-                idle_notifier_call_chain(IDLE_START);
 		while (!need_resched()) {
 #ifdef CONFIG_HOTPLUG_CPU
 			if (cpu_is_offline(smp_processor_id()))
@@ -244,12 +225,16 @@ void cpu_idle(void)
 #endif
 
 			local_irq_disable();
+#ifdef CONFIG_PL310_ERRATA_769419
+			wmb();
+#endif
 			if (hlt_counter) {
 				local_irq_enable();
 				cpu_relax();
 			} else {
 				stop_critical_timings();
-				pm_idle();
+				if (cpuidle_idle_call())
+					pm_idle();
 				start_critical_timings();
 				/*
 				 * This will eventually be removed - pm_idle
@@ -261,7 +246,7 @@ void cpu_idle(void)
 			}
 		}
 		tick_nohz_restart_sched_tick();
-                idle_notifier_call_chain(IDLE_END);
+		idle_notifier_call_chain(IDLE_END);
 		preempt_enable_no_resched();
 		schedule();
 		preempt_disable();
@@ -293,17 +278,23 @@ void machine_halt(void)
 
 void machine_power_off(void)
 {
-	printk("[PWR] clear reboot reason to RESTART_REASON_POWEROFF\n");
-	reboot_params->reboot_reason = RESTART_REASON_POWEROFF;
-	printk("[PWR] clear dirty\n");
-	set_dirty_state(0);
+#ifndef CONFIG_HTC_POWER_OFF
 	machine_shutdown();
+#endif
 	if (pm_power_off)
 		pm_power_off();
 }
 
 void machine_restart(char *cmd)
 {
+	/* Flush the console to make sure all the relevant messages make it
+	 * out to the console drivers */
+	arm_machine_flush_console();
+
+	/* Disable interrupts first */
+	local_irq_disable();
+	local_fiq_disable();
+
 	machine_shutdown();
 	arm_pm_restart(reboot_mode, cmd);
 }

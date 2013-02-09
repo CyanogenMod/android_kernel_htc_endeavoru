@@ -42,7 +42,7 @@
 
 struct tps80032_vsys_alarm_data {
 	struct device 	*parent_dev;
-	struct atomic_notifier_head irq_notifier_list;
+	struct blocking_notifier_head irq_notifier_list;
 	struct mutex vsys_alarm_mutex;
 	unsigned int notifier_count;
 	unsigned int reg_state;
@@ -55,10 +55,8 @@ static irqreturn_t tps80032_vsys_alarm_handler(int irq, void *data)
 {
 	CHECK_LOG();
 
-	if (!vsys_alarm_data->reg_state)
-		pr_err("%s:irq is not enabled by register\n", __func__);
-	else
-		atomic_notifier_call_chain(&vsys_alarm_data->irq_notifier_list,
+	if (!!vsys_alarm_data->reg_state)
+		blocking_notifier_call_chain(&vsys_alarm_data->irq_notifier_list,
 							vsys_alarm_data->reg_state, NULL);
 
 	return IRQ_HANDLED;
@@ -126,9 +124,14 @@ int tps80032_vsys_alarm_threshold_set(unsigned int threshold)
 	ret = tps80031_write(vsys_alarm_data->parent_dev, SLAVE_ID1
 				, TPS80032_VSYSMIN_HI_THRESHOLD
 				, reg);
-	if (ret < 0)
+	if (ret < 0) {
 		pr_err("%s:write register VSYSMIN_HI_THRESHOLD fail\n"
 				, __func__);
+		goto fail;
+	}
+
+	vsys_alarm_data->reg_threshold = reg;
+
 fail:
 	mutex_unlock(&vsys_alarm_data->vsys_alarm_mutex);
 	return ret;
@@ -146,7 +149,7 @@ int tps80032_vsys_alarm_register_notifier(struct notifier_block *nb)
 		return -ENXIO;
 	}
 
-	ret = atomic_notifier_chain_register(
+	ret = blocking_notifier_chain_register(
 			&vsys_alarm_data->irq_notifier_list, nb);
 
 	if (ret == 0) {
@@ -165,12 +168,6 @@ int tps80032_vsys_alarm_register_notifier(struct notifier_block *nb)
 				disable_irq(vsys_alarm_data->vsys_low_irq);
 			else
 				enable_irq(vsys_alarm_data->vsys_low_irq);
-
-			ret = irq_set_irq_wake(vsys_alarm_data->vsys_low_irq, 1);
-			if (ret < 0) {
-				pr_err("%s:set_irq_wake failed irq %d\n",
-					__func__, vsys_alarm_data->vsys_low_irq);
-			}
 		}
 
 		vsys_alarm_data->notifier_count++;
@@ -187,6 +184,7 @@ static int __devinit tps80032_vsys_alarm_probe(struct platform_device *pdev)
 						pdev->dev.platform_data;
 	struct tps80032_vsys_alarm_data *vsys_data;
 	int ret;
+	u8 reg;
 
 	CHECK_LOG();
 
@@ -213,7 +211,7 @@ static int __devinit tps80032_vsys_alarm_probe(struct platform_device *pdev)
 	}
 
 #if 0	/* fixme: if we need set a default threshold */
-	ret = tps80031_write(vsys_alarm_data->parent_dev, SLAVE_ID1
+	ret = tps80031_write(vsys_data->parent_dev, SLAVE_ID1
 				, TPS80032_VSYSMIN_HI_THRESHOLD
 				, 0x34);
 	if (ret < 0) {
@@ -221,10 +219,16 @@ static int __devinit tps80032_vsys_alarm_probe(struct platform_device *pdev)
 				, __func__);
 		goto fail;
 	}
-	vsys_data->reg_threshold = 0x00;
 #endif
+	ret = tps80031_read(vsys_data->parent_dev, SLAVE_ID1
+				, TPS80032_VSYSMIN_HI_THRESHOLD
+				, &reg);
 
-	ATOMIC_INIT_NOTIFIER_HEAD(&vsys_data->irq_notifier_list);
+	mutex_lock(&vsys_data->vsys_alarm_mutex);
+	vsys_data->reg_threshold = reg;
+	mutex_unlock(&vsys_data->vsys_alarm_mutex);
+
+	BLOCKING_INIT_NOTIFIER_HEAD(&vsys_data->irq_notifier_list);
 
 	vsys_alarm_data = vsys_data;
 	return 0;
@@ -235,8 +239,6 @@ fail:
 
 static int __devexit tps80032_vsys_alarm_teardown(struct platform_device *pdev)
 {
-	int ret;
-
 	CHECK_LOG();
 
 	if (vsys_alarm_data->notifier_count != 0)

@@ -126,7 +126,7 @@ xdr_terminate_string(struct xdr_buf *buf, const u32 len)
 	kaddr[buf->page_base + len] = '\0';
 	kunmap_atomic(kaddr, KM_USER0);
 }
-EXPORT_SYMBOL(xdr_terminate_string);
+EXPORT_SYMBOL_GPL(xdr_terminate_string);
 
 void
 xdr_encode_pages(struct xdr_buf *xdr, struct page **pages, unsigned int base,
@@ -296,7 +296,7 @@ _copy_to_pages(struct page **pages, size_t pgbase, const char *p, size_t len)
  * Copies data into an arbitrary memory location from an array of pages
  * The copy is assumed to be non-overlapping.
  */
-static void
+void
 _copy_from_pages(char *p, struct page **pages, size_t pgbase, size_t len)
 {
 	struct page **pgfrom;
@@ -324,6 +324,7 @@ _copy_from_pages(char *p, struct page **pages, size_t pgbase, size_t len)
 
 	} while ((len -= copy) != 0);
 }
+EXPORT_SYMBOL_GPL(_copy_from_pages);
 
 /*
  * xdr_shrink_bufhead
@@ -637,6 +638,25 @@ void xdr_init_decode(struct xdr_stream *xdr, struct xdr_buf *buf, __be32 *p)
 		xdr_set_page_base(xdr, 0, buf->len);
 }
 EXPORT_SYMBOL_GPL(xdr_init_decode);
+
+/**
+ * xdr_init_decode - Initialize an xdr_stream for decoding data.
+ * @xdr: pointer to xdr_stream struct
+ * @buf: pointer to XDR buffer from which to decode data
+ * @pages: list of pages to decode into
+ * @len: length in bytes of buffer in pages
+ */
+void xdr_init_decode_pages(struct xdr_stream *xdr, struct xdr_buf *buf,
+			   struct page **pages, unsigned int len)
+{
+	memset(buf, 0, sizeof(*buf));
+	buf->pages =  pages;
+	buf->page_len =  len;
+	buf->buflen =  len;
+	buf->len = len;
+	xdr_init_decode(xdr, buf, NULL);
+}
+EXPORT_SYMBOL_GPL(xdr_init_decode_pages);
 
 static __be32 * __xdr_inline_decode(struct xdr_stream *xdr, size_t nbytes)
 {

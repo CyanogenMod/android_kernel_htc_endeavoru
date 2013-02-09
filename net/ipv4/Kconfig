@@ -624,3 +624,10 @@ config TCP_MD5SIG
 	  on the Internet.
 
 	  If unsure, say N.
+
+config HTC_NETWORK_DEBUG
+	tristate "HTC_NETWORK_DEBUG"
+	default n
+	---help---
+	HTC_NETWORK_DEBUG
+

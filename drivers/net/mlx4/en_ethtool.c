@@ -57,37 +57,6 @@ mlx4_en_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *drvinfo)
 	drvinfo->eedump_len = 0;
 }
 
-static u32 mlx4_en_get_tso(struct net_device *dev)
-{
-	return (dev->features & NETIF_F_TSO) != 0;
-}
-
-static int mlx4_en_set_tso(struct net_device *dev, u32 data)
-{
-	struct mlx4_en_priv *priv = netdev_priv(dev);
-
-	if (data) {
-		if (!priv->mdev->LSO_support)
-			return -EPERM;
-		dev->features |= (NETIF_F_TSO | NETIF_F_TSO6);
-	} else
-		dev->features &= ~(NETIF_F_TSO | NETIF_F_TSO6);
-	return 0;
-}
-
-static u32 mlx4_en_get_rx_csum(struct net_device *dev)
-{
-	struct mlx4_en_priv *priv = netdev_priv(dev);
-	return priv->rx_csum;
-}
-
-static int mlx4_en_set_rx_csum(struct net_device *dev, u32 data)
-{
-	struct mlx4_en_priv *priv = netdev_priv(dev);
-	priv->rx_csum = (data != 0);
-	return 0;
-}
-
 static const char main_strings[][ETH_GSTRING_LEN] = {
 	"rx_packets", "tx_packets", "rx_bytes", "tx_bytes", "rx_errors",
 	"tx_errors", "rx_dropped", "tx_dropped", "multicast", "collisions",
@@ -135,7 +104,7 @@ static void mlx4_en_get_wol(struct net_device *netdev,
 	int err = 0;
 	u64 config = 0;
 
-	if (!priv->mdev->dev->caps.wol) {
+	if (!(priv->mdev->dev->caps.flags & MLX4_DEV_CAP_FLAG_WOL)) {
 		wol->supported = 0;
 		wol->wolopts = 0;
 		return;
@@ -165,7 +134,7 @@ static int mlx4_en_set_wol(struct net_device *netdev,
 	u64 config = 0;
 	int err = 0;
 
-	if (!priv->mdev->dev->caps.wol)
+	if (!(priv->mdev->dev->caps.flags & MLX4_DEV_CAP_FLAG_WOL))
 		return -EOPNOTSUPP;
 
 	if (wol->supported & ~WAKE_MAGIC)
@@ -201,7 +170,8 @@ static int mlx4_en_get_sset_count(struct net_device *dev, int sset)
 		return NUM_ALL_STATS +
 			(priv->tx_ring_num + priv->rx_ring_num) * 2;
 	case ETH_SS_TEST:
-		return MLX4_EN_NUM_SELF_TEST - !(priv->mdev->dev->caps.loopback_support) * 2;
+		return MLX4_EN_NUM_SELF_TEST - !(priv->mdev->dev->caps.flags
+					& MLX4_DEV_CAP_FLAG_UC_LOOPBACK) * 2;
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -251,7 +221,7 @@ static void mlx4_en_get_strings(struct net_device *dev,
 	case ETH_SS_TEST:
 		for (i = 0; i < MLX4_EN_NUM_SELF_TEST - 2; i++)
 			strcpy(data + i * ETH_GSTRING_LEN, mlx4_en_test_names[i]);
-		if (priv->mdev->dev->caps.loopback_support)
+		if (priv->mdev->dev->caps.flags & MLX4_DEV_CAP_FLAG_UC_LOOPBACK)
 			for (; i < MLX4_EN_NUM_SELF_TEST; i++)
 				strcpy(data + i * ETH_GSTRING_LEN, mlx4_en_test_names[i]);
 		break;
@@ -296,10 +266,10 @@ static int mlx4_en_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 
 	trans_type = priv->port_state.transciver;
 	if (netif_carrier_ok(dev)) {
-		cmd->speed = priv->port_state.link_speed;
+		ethtool_cmd_speed_set(cmd, priv->port_state.link_speed);
 		cmd->duplex = DUPLEX_FULL;
 	} else {
-		cmd->speed = -1;
+		ethtool_cmd_speed_set(cmd, -1);
 		cmd->duplex = -1;
 	}
 
@@ -323,7 +293,8 @@ static int mlx4_en_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 static int mlx4_en_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 {
 	if ((cmd->autoneg == AUTONEG_ENABLE) ||
-	    (cmd->speed != SPEED_10000) || (cmd->duplex != DUPLEX_FULL))
+	    (ethtool_cmd_speed(cmd) != SPEED_10000) ||
+	    (cmd->duplex != DUPLEX_FULL))
 		return -EINVAL;
 
 	/* Nothing to change */
@@ -483,17 +454,7 @@ const struct ethtool_ops mlx4_en_ethtool_ops = {
 	.get_drvinfo = mlx4_en_get_drvinfo,
 	.get_settings = mlx4_en_get_settings,
 	.set_settings = mlx4_en_set_settings,
-#ifdef NETIF_F_TSO
-	.get_tso = mlx4_en_get_tso,
-	.set_tso = mlx4_en_set_tso,
-#endif
-	.get_sg = ethtool_op_get_sg,
-	.set_sg = ethtool_op_set_sg,
 	.get_link = ethtool_op_get_link,
-	.get_rx_csum = mlx4_en_get_rx_csum,
-	.set_rx_csum = mlx4_en_set_rx_csum,
-	.get_tx_csum = ethtool_op_get_tx_csum,
-	.set_tx_csum = ethtool_op_set_tx_ipv6_csum,
 	.get_strings = mlx4_en_get_strings,
 	.get_sset_count = mlx4_en_get_sset_count,
 	.get_ethtool_stats = mlx4_en_get_ethtool_stats,
@@ -508,7 +469,6 @@ const struct ethtool_ops mlx4_en_ethtool_ops = {
 	.set_pauseparam = mlx4_en_set_pauseparam,
 	.get_ringparam = mlx4_en_get_ringparam,
 	.set_ringparam = mlx4_en_set_ringparam,
-	.get_flags = ethtool_op_get_flags,
 };
 
 

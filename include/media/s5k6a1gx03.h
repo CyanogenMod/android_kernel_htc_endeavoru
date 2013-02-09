@@ -31,6 +31,7 @@
 
 #define S5K6A1G_IOCTL_SET_GROUP_HOLD		_IOW('o', 6, struct s5k6a1gx03_ae)
 #define S5K6A1G_IOCTL_TEST_PATTERN		_IOW('o', 7, enum s5k6a1gx03_test_pattern)
+#define S5K6A1G_IOCTL_GET_INIT_STATE	_IOR('o', 8, struct s5k6a1gx03_init_state)
 
 /* IOCTL to set the operating mode of camera.
  * This can be either stereo , leftOnly or rightOnly */
@@ -60,13 +61,27 @@ struct s5k6a1gx03_ae {
 	__s32 gain;
 	__u8 gain_enable;
 };
+
+struct s5k6a1gx03_init_state {
+	__u8 use_rawchip;
+};
+
+enum sensor_id {
+	SENSOR_S5K6A1 = 0,
+	SENSOR_S5K6A2,
+};
+
 #ifdef __KERNEL__
 struct s5k6a1gx03_platform_data {
+	const char* sensor_name;
+	int data_lane;
+	int csi_if;
 	int (*power_on)(void);
 	int (*power_off)(void);
 	void (*synchronize_sensors)(void);
+	int mirror_flip;
+	int use_rawchip;
 };
 #endif /* __KERNEL__ */
 
 #endif  /* __S5K6A1GX03_H__ */
-

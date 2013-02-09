@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-tegra/sleep.S
  *
- * Copyright (c) 2010-2011, NVIDIA Corporation.
+ * Copyright (c) 2010-2012, NVIDIA Corporation. All rights reserved.
  * Copyright (c) 2011, Google, Inc.
  *
  * Author: Colin Cross <ccross@android.com>
@@ -48,16 +48,6 @@
 
 #define TEGRA_PMC_VIRT		(TEGRA_PMC_BASE - IO_APB_PHYS + IO_APB_VIRT)
 #define TEGRA_CLK_RESET_VIRT	(TEGRA_CLK_RESET_BASE - IO_PPSB_PHYS + IO_PPSB_VIRT)
-
-#if defined(__GNUC__) && \	
-	defined(__GNUC_MINOR__) && \	
-	defined(__GNUC_PATCHLEVEL__) && \	
-	((__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)) \	
-		>= 40502	
-#define USE_ARCH_EXTENSION_SEC 1	
-#else	
-#define USE_ARCH_EXTENSION_SEC 0	
-#endif
 
 /*
  * tegra_pen_lock
@@ -159,20 +149,11 @@ ENTRY(tegra_cpu_resume_phys)
 	ldr	r0, tegra_phys_sleep_sp		@ stack phys addr
 #endif
 	setmode	PSR_I_BIT | PSR_F_BIT | SVC_MODE, r1  @ set SVC, irqs off
-#ifdef MULTI_CPU
-	@ load v:p, stack, return fn, resume fn
-  ARM(	ldmia	r0!, {r1, sp, lr, pc}	)
-THUMB(	ldmia	r0!, {r1, r2, r3, r4}	)
+	@ load v:p, stack, resume fn
+  ARM(	ldmia	r0!, {r1, sp, pc}	)
+THUMB(	ldmia	r0!, {r1, r2, r3}	)
 THUMB(	mov	sp, r2			)
-THUMB(	mov	lr, r3			)
-THUMB(	bx	r4			)
-#else
-	@ load v:p, stack, return fn
-  ARM(	ldmia	r0!, {r1, sp, lr}	)
-THUMB(	ldmia	r0!, {r1, r2, lr}	)
-THUMB(	mov	sp, r2			)
-	b	cpu_do_resume
-#endif
+THUMB(	bx	r3			)
 #else
 	/* Use the standard cpu_resume. */
 	b	cpu_resume
@@ -180,13 +161,10 @@ THUMB(	mov	sp, r2			)
 ENDPROC(tegra_cpu_resume_phys)
 
 #if USE_TEGRA_CPU_SUSPEND
-	.align	L1_CACHE_SHIFT
-	.globl	tegra_phys_sleep_sp
 tegra_phys_sleep_sp:
 	.rept	4
 	.long	0		@ preserve stack phys ptr here
 	.endr
-	.align	L1_CACHE_SHIFT  @ nothing else must be in this cache line
 #endif
 
 /*
@@ -198,32 +176,35 @@ tegra_phys_sleep_sp:
  *
  * Input:
  *	r1 = v:p offset
- *	r3 = virtual return function
+ *	lr = return to the caller of this function
  * Output:
  *	sp is decremented to allocate space for CPU state on stack
- * r0-r3,r8-r10,lr corrupted
+ * r0-r3,r8,r9,ip,lr corrupted
  */
 	.align	L1_CACHE_SHIFT
 ENTRY(tegra_cpu_suspend)
-#if USE_TEGRA_CPU_SUSPEND
 	mov	r9, lr
+	adr	lr, tegra_cpu_resume
+#if USE_TEGRA_CPU_SUSPEND
+	stmfd	sp!, {r4 - r11, lr}
 #ifdef MULTI_CPU
 	mov32	r10, processor
-	mov	r2, sp			@ current virtual SP
-	ldr	r0, [r10, #CPU_SLEEP_SIZE] @ size of CPU sleep state
+	ldr	r5, [r10, #CPU_SLEEP_SIZE] @ size of CPU sleep state
 	ldr	ip, [r10, #CPU_DO_RESUME] @ virtual resume function
-	sub	sp, sp, r0		@ allocate CPU state on stack
-	mov	r0, sp			@ save pointer
+#else
+	mov32	r5, cpu_suspend_size
+	mov32	ip, cpu_do_resume
+#endif
+	mov	r6, sp			@ current virtual SP
+	sub	sp, sp, r5		@ allocate CPU state on stack
+	mov	r0, sp			@ save pointer to CPU save block
 	add	ip, ip, r1		@ convert resume fn to phys
-	stmfd	sp!, {r1, r2, r3, ip}	@ save v:p, virt SP, retfn, phys resume fn
+	stmfd	sp!, {r1, r6, ip}	@ save v:p, virt SP, phys resume fn
+
+#ifdef MULTI_CPU
 	mov	lr, pc
 	ldr	pc, [r10, #CPU_DO_SUSPEND] @ save CPU state
 #else
-	mov	r2, sp			@ current virtual SP
-	mov32	r0, cpu_suspend_size
-	sub	sp, sp, r0		@ allocate CPU state on stack
-	mov	r0, sp			@ save pointer
-	stmfd	sp!, {r1, r2, r3}	@ save v:p, virt SP, return fn
 	bl	cpu_do_suspend
 #endif
 	dsb
@@ -306,15 +287,16 @@ no_l2_sync:
 	mcr	p15, 0, r1, c8, c7, 0	@ invalidate local TLBs
 	dsb
 	isb
-
-	mov	pc, r9
 #else
 	/* Use the standard cpu_suspend. */
-	mov	r8, lr
-	bl	cpu_suspend
-	exit_smp r0, r2
-	mov	pc, r8
+	adr	r3, BSYM(tegra_finish_suspend)
+	b	__cpu_suspend
+
+tegra_finish_suspend:
+	/* Turn off SMP coherency */
+	exit_smp r1, r6
 #endif
+	mov	pc, r9
 ENDPROC(tegra_cpu_suspend)
 
 /*
@@ -323,20 +305,17 @@ ENDPROC(tegra_cpu_suspend)
  * Input:
  *	r0 = v:p offset
  *	r12 = return to the caller of this function
- *	lr = resume address
  * Output:
  *	r0 = v:p offset
  *	r7 = SP after saving the registers but before cpu_suspend, suitable
  *	     for restoring an aborted suspend
  *	sp = SP after tegra_cpu_suspend (the 'real' SP)
  * Saves r4-r11 on the stack
- * Corrupts r1, r3-r10
+ * Corrupts r1, r3-r11
  */
 
 ENTRY(tegra_cpu_save)
 	push_ctx_regs r1		@ save context registers
-
-	adr	r3, tegra_cpu_resume
 
 	mov	r7, sp			@ SP after reg save, before suspend
 
@@ -353,12 +332,12 @@ ENTRY(tegra_cpu_save)
 #endif
 
 	mov	r4, r12
-	mov	r5, r0
-	mov	r6, r2
+	mov	r8, r0
+	mov	r11, r2
 	mov	r1, r0
 	bl	tegra_cpu_suspend
-	mov	r0, r5
-	mov	r2, r6
+	mov	r0, r8
+	mov	r2, r11
 	mov	pc, r4
 ENDPROC(tegra_cpu_save)
 
@@ -461,31 +440,83 @@ ENDPROC(tegra_cpu_pllp)
 #endif
 
 #ifdef CONFIG_TRUSTED_FOUNDATIONS
+
 /*
- * tegra_generic_smc
+ * Confirm we're issuing this SMC from CPU0 (only one
+ * currently supported) and issue the instruction.
  *
  * r0 = smc type
  * r1 = smc subtype
  * r2 = argument passed to smc
- *
- * issues SMC (secure monitor call) instruction with
- * the specified parameters.
  */
-ENTRY(tegra_generic_smc)
-	adr	r3, __tegra_smc_stack
-	stmia	r3, {r4-r12, lr}
+.macro smc_issue_smc tmp
+	cpu_id	\tmp
+	cmp	\tmp, #0
+	bne	.
 	mov	r3, #0
 	mov	r4, #0
 	dsb
-#if USE_ARCH_EXTENSION_SEC
-  .arch_extension sec
-#endif
 	smc	#0
-	adr	r3, __tegra_smc_stack
-	ldmia	r3, {r4-r12, pc}
+.endm
+
+/*
+ * Issue SMC with ctx kept on an uncached stack
+ */
+ENTRY(tegra_generic_smc_uncached)
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_CACHE_L2X0)
+	mov32	r3, tegra_cpu_context		@ borrow CPU0's non-cached
+	ldr	r3, [r3]			@ context grows up
+	stmia	r3, {r4-r12, sp, lr}
+
+	smc_issue_smc r5
+
+	mov32	r3, tegra_cpu_context		@ borrow CPU0's non-cached
+	ldr	r3, [r3]			@ context grows up
+	ldmia	r3, {r4-r12, sp, pc}
+#else
+	mov	pc, lr
+#endif
+ENDPROC(tegra_generic_smc_uncached)
+
+/*
+ * Issue SMC with ctx kept on a cacheable stack
+ * 	(args in R0, R1, R2 and R3 holds save/restore ptr)
+ */
+ENTRY(tegra_generic_smc_cached)
+	stmia	r3, {r4-r12, sp, lr}
+	adr	r4, __tegra_smc_current_ctx	@ save current ptr
+	str	r3, [r4]
+
+	smc_issue_smc r5
+
+	adr	r4, __tegra_smc_current_ctx	@ restore from saved ptr
+	ldr	r3, [r4]
+	ldmia	r3, {r4-r12, sp, pc}
+ENDPROC(tegra_generic_smc_cached)
+	.type	__tegra_smc_current_ctx, %object
+__tegra_smc_current_ctx:
+	.long   0
+	.size   __tegra_smc_current_ctx, . - __tegra_smc_current_ctx
+
+#define TEGRA_SMC_SAVED_WORDS	11
+
+/* SMC issued using the current cacheable SP stack */
+ENTRY(tegra_generic_smc)
+	mov	r3, sp					@ use current stack
+	sub	r3, #(TEGRA_SMC_SAVED_WORDS << 2)	@ context grows up
+	b	tegra_generic_smc_cached
 ENDPROC(tegra_generic_smc)
-	.type   __tegra_smc_stack, %object
+
+/* SMC issued using a local cacheable stack */
+ENTRY(tegra_generic_smc_local)
+	adr	r3, __tegra_smc_stack			@ use local stack
+	b	tegra_generic_smc_cached
+ENDPROC(tegra_generic_smc_local)
+	.align	L1_CACHE_SHIFT
+	.type	__tegra_smc_stack, %object
 __tegra_smc_stack:
-	.long   0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+	.rept	TEGRA_SMC_SAVED_WORDS
+	.long   0
+	.endr
 	.size   __tegra_smc_stack, . - __tegra_smc_stack
 #endif

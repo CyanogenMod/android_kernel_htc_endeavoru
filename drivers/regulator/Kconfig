@@ -64,6 +64,15 @@ config REGULATOR_USERSPACE_CONSUMER
 
           If unsure, say no.
 
+config REGULATOR_GPIO
+	tristate "GPIO regulator support"
+	help
+	  This driver provides support for regulators that can be
+	  controlled via gpios.
+	  It is capable of supporting current and voltage regulators
+	  and the platform has to provide a mapping of GPIO-states
+	  to target volts/amps.
+
 config REGULATOR_BQ24022
 	tristate "TI bq24022 Dual Input 1-Cell Li-Ion Charger IC"
 	help
@@ -107,6 +116,15 @@ config REGULATOR_MAX8952
 	  This driver controls a Maxim 8952 voltage output regulator
 	  via I2C bus. Maxim 8952 has one voltage output and supports 4 DVS
 	  modes ranging from 0.77V to 1.40V by 0.01V steps.
+
+config REGULATOR_MAX8973
+	tristate "Maxim MAX8973 Power Regulator"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  This driver supports MAX8973 voltage regulator chip.
+	  The MAX8973 high-efficiency, three-phase, DC-DC step-down switching
+	  regulator delivers up to 9A of output current.
 
 config REGULATOR_MAX8997
 	tristate "Maxim 8997/8966 regulator"
@@ -239,6 +257,16 @@ config REGULATOR_AB3100
 	 AB3100 analog baseband dealing with power regulators
 	 for the system.
 
+config REGULATOR_RC5T583
+	tristate "RICOH RC5T583 Power regulators"
+	depends on MFD_RC5T583
+	help
+	  Select this option to enable the power regulator of RICOH
+	  PMIC RC5T583.
+	  This driver supports the control of different power rails of device
+	  through regulator interface. The device supports multiple DCDC/LDO
+	  outputs which can be controlled by i2c communication.
+
 config REGULATOR_TPS6105X
 	tristate "TI TPS6105X Power regulators"
 	depends on TPS6105X
@@ -251,6 +279,7 @@ config REGULATOR_TPS6105X
 config REGULATOR_TPS65023
 	tristate "TI TPS65023 Power regulators"
 	depends on I2C
+	select REGMAP_I2C
 	help
 	  This driver supports TPS65023 voltage regulator chips. TPS65023 provides
 	  three step-down converters and two general-purpose LDO voltage regulators.
@@ -263,6 +292,12 @@ config REGULATOR_TPS6507X
 	  This driver supports TPS6507X voltage regulator chips. TPS6507X provides
 	  three step-down converters and two general-purpose LDO voltage regulators.
 	  It supports TI's software based Class-2 SmartReflex implementation.
+
+config REGULATOR_TPS65912
+	tristate "TI TPS65912 Power regulator"
+	depends on (MFD_TPS65912_I2C || MFD_TPS65912_SPI)
+	help
+	    This driver supports TPS65912 voltage regulator chip.
 
 config REGULATOR_88PM8607
 	bool "Marvell 88PM8607 Power regulators"
@@ -290,6 +325,13 @@ config REGULATOR_AB8500
 	  This driver supports the regulators found on the ST-Ericsson mixed
 	  signal AB8500 PMIC
 
+config REGULATOR_DB8500_PRCMU
+	bool "ST-Ericsson DB8500 Voltage Domain Regulators"
+	depends on MFD_DB8500_PRCMU
+	help
+	  This driver supports the voltage domain regulators controlled by the
+	  DB8500 PRCMU
+
 config REGULATOR_TPS6586X
 	tristate "TI TPS6586X Power regulators"
 	depends on MFD_TPS6586X
@@ -306,6 +348,39 @@ config REGULATOR_TPS6524X
 	  serial interface currently supported on the sequencer serial
 	  port controller.
 
+config REGULATOR_TPS65910
+	tristate "TI TPS65910/TPS65911 Power Regulators"
+	depends on MFD_TPS65910
+	help
+	  This driver supports TPS65910/TPS65911 voltage regulator chips.
+
+config REGULATOR_TPS62360
+	tristate "TI TPS62360 Power Regulator"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  This driver supports TPS62360 voltage regulator chip. This
+	  regulator is meant for processor core supply. This chip is
+	  high-frequency synchronous step down dc-dc converter optimized
+	  for battery-powered portable applications.
+
+config REGULATOR_TPS6238X0
+	tristate "TI TPS623850/TPS623860/TPS623870 Power Regulator"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  This driver supports TPS6238X0 voltage regulator chip. This
+	  regulator is meant for processor core supply. This chip is
+	  high-frequency synchronous step down dc-dc converter optimized
+	  for battery-powered portable applications.
+
+config REGULATOR_AAT2870
+	tristate "AnalogicTech AAT2870 Regulators"
+	depends on MFD_AAT2870_CORE
+	help
+	  If you have a AnalogicTech AAT2870 say Y to enable the
+	  regulator driver.
+
 config REGULATOR_TPS6591X
 	tristate "TI TPS6591X Power regulators"
 	depends on MFD_TPS6591X
@@ -318,12 +393,6 @@ config REGULATOR_TPS65090
 	depends on MFD_TPS65090
 	help
 	  This driver supports TPS65090 voltage regulator chips.
-
-config REGULATOR_TPS6236X
-	tristate "TI TPS6236X DC-DC core power suply regulators"
-	default n
-	help
-	  This driver supports TPS6236X DC-DC Processor core supply.
 
 config REGULATOR_TPS80031
 	tristate "TI TPS80031 Power regulators"
@@ -338,14 +407,6 @@ config REGULATOR_RICOH583
 	default n
 	help
 	  This driver supports regulator driver for RICOH583 PMIC.
-
-config REGULATOR_GPIO_SWITCH
-	bool "GPIO based enable/disable of power rails."
-	default n
-	help
-	  This driver supports gpio based switch control of the power rails.
-	  Say Yes if the given platform have the rail enable through the
-	  gpios.
 
 config REGULATOR_AAT2870
 	tristate "AnalogicTech AAT2870 Regulators"

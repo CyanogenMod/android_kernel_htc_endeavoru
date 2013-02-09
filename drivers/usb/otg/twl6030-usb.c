@@ -31,6 +31,7 @@
 #include <linux/err.h>
 #include <linux/notifier.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
 
 /* usb register definitions */
 #define USB_VENDOR_ID_LSB		0x00
@@ -94,14 +95,19 @@ struct twl6030_usb {
 
 	struct regulator		*usb3v3;
 
+	/* used to set vbus, in atomic path */
+	struct work_struct	set_vbus_work;
+
 	int			irq1;
 	int			irq2;
 	u8			linkstat;
 	u8			asleep;
 	bool			irq_enabled;
+	bool			vbus_enable;
+	unsigned long		features;
 };
 
-#define xceiv_to_twl(x)		container_of((x), struct twl6030_usb, otg);
+#define xceiv_to_twl(x)		container_of((x), struct twl6030_usb, otg)
 
 /*-------------------------------------------------------------------------*/
 
@@ -188,8 +194,27 @@ static int twl6030_phy_suspend(struct otg_transceiver *x, int suspend)
 	return 0;
 }
 
+static int twl6030_start_srp(struct otg_transceiver *x)
+{
+	struct twl6030_usb *twl = xceiv_to_twl(x);
+
+	twl6030_writeb(twl, TWL_MODULE_USB, 0x24, USB_VBUS_CTRL_SET);
+	twl6030_writeb(twl, TWL_MODULE_USB, 0x84, USB_VBUS_CTRL_SET);
+
+	mdelay(100);
+	twl6030_writeb(twl, TWL_MODULE_USB, 0xa0, USB_VBUS_CTRL_CLR);
+
+	return 0;
+}
+
 static int twl6030_usb_ldo_init(struct twl6030_usb *twl)
 {
+	char *regulator_name;
+
+	if (twl->features & TWL6025_SUBCLASS)
+		regulator_name = "ldousb";
+	else
+		regulator_name = "vusb";
 
 	/* Set to OTG_REV 1.3 and turn on the ID_WAKEUP_COMP */
 	twl6030_writeb(twl, TWL6030_MODULE_ID0 , 0x1, TWL6030_BACKUP_REG);
@@ -200,7 +225,7 @@ static int twl6030_usb_ldo_init(struct twl6030_usb *twl)
 	/* Program MISC2 register and set bit VUSB_IN_VBAT */
 	twl6030_writeb(twl, TWL6030_MODULE_ID0 , 0x10, TWL6030_MISC2);
 
-	twl->usb3v3 = regulator_get(twl->dev, "vusb");
+	twl->usb3v3 = regulator_get(twl->dev, regulator_name);
 	if (IS_ERR(twl->usb3v3))
 		return -ENODEV;
 
@@ -349,20 +374,31 @@ static int twl6030_enable_irq(struct otg_transceiver *x)
 	return 0;
 }
 
-static int twl6030_set_vbus(struct otg_transceiver *x, bool enabled)
+static void otg_set_vbus_work(struct work_struct *data)
 {
-	struct twl6030_usb *twl = xceiv_to_twl(x);
+	struct twl6030_usb *twl = container_of(data, struct twl6030_usb,
+								set_vbus_work);
 
 	/*
 	 * Start driving VBUS. Set OPA_MODE bit in CHARGERUSB_CTRL1
 	 * register. This enables boost mode.
 	 */
-	if (enabled)
+
+	if (twl->vbus_enable)
 		twl6030_writeb(twl, TWL_MODULE_MAIN_CHARGE , 0x40,
-						CHARGERUSB_CTRL1);
-	 else
+							CHARGERUSB_CTRL1);
+	else
 		twl6030_writeb(twl, TWL_MODULE_MAIN_CHARGE , 0x00,
-						CHARGERUSB_CTRL1);
+							CHARGERUSB_CTRL1);
+}
+
+static int twl6030_set_vbus(struct otg_transceiver *x, bool enabled)
+{
+	struct twl6030_usb *twl = xceiv_to_twl(x);
+
+	twl->vbus_enable = enabled;
+	schedule_work(&twl->set_vbus_work);
+
 	return 0;
 }
 
@@ -395,6 +431,7 @@ static int __devinit twl6030_usb_probe(struct platform_device *pdev)
 	twl->dev		= &pdev->dev;
 	twl->irq1		= platform_get_irq(pdev, 0);
 	twl->irq2		= platform_get_irq(pdev, 1);
+	twl->features		= pdata->features;
 	twl->otg.dev		= twl->dev;
 	twl->otg.label		= "twl6030";
 	twl->otg.set_host	= twl6030_set_host;
@@ -403,6 +440,7 @@ static int __devinit twl6030_usb_probe(struct platform_device *pdev)
 	twl->otg.init		= twl6030_phy_init;
 	twl->otg.shutdown	= twl6030_phy_shutdown;
 	twl->otg.set_suspend	= twl6030_phy_suspend;
+	twl->otg.start_srp	= twl6030_start_srp;
 
 	/* init spinlock for workqueue */
 	spin_lock_init(&twl->lock);
@@ -420,6 +458,8 @@ static int __devinit twl6030_usb_probe(struct platform_device *pdev)
 		dev_warn(&pdev->dev, "could not create sysfs file\n");
 
 	ATOMIC_INIT_NOTIFIER_HEAD(&twl->otg.notifier);
+
+	INIT_WORK(&twl->set_vbus_work, otg_set_vbus_work);
 
 	twl->irq_enabled = true;
 	status = request_threaded_irq(twl->irq1, NULL, twl6030_usbotg_irq,
@@ -471,6 +511,7 @@ static int __exit twl6030_usb_remove(struct platform_device *pdev)
 	regulator_put(twl->usb3v3);
 	pdata->phy_exit(twl->dev);
 	device_remove_file(twl->dev, &dev_attr_vbus);
+	cancel_work_sync(&twl->set_vbus_work);
 	kfree(twl);
 
 	return 0;

@@ -74,9 +74,7 @@ static int tegra_idle_enter_lp3(struct cpuidle_device *dev,
 
 	exit = ktime_sub(ktime_get(), enter);
 	us = ktime_to_us(exit);
-	/* move from driver/cpuidle/cpuidle.c */
-	dev->states[0].usage++;
-	dev->states[0].time += (unsigned long long)us;
+
 	local_fiq_enable();
 	local_irq_enable();
 	return (int)us;
@@ -99,6 +97,14 @@ void tegra_lp2_in_idle(bool enable)
 	}
 }
 
+void tegra_lp2_update_target_residency(struct cpuidle_state *state)
+{
+	state->target_residency = state->exit_latency +
+		tegra_lp2_power_off_time;
+	if (state->target_residency < tegra_lp2_min_residency)
+		state->target_residency = tegra_lp2_min_residency;
+}
+
 static int tegra_idle_enter_lp2(struct cpuidle_device *dev,
 	struct cpuidle_state *state)
 {
@@ -106,8 +112,10 @@ static int tegra_idle_enter_lp2(struct cpuidle_device *dev,
 	s64 us;
 
 	if (!lp2_in_idle || lp2_disabled_by_suspend ||
-	    !tegra_lp2_is_allowed(dev, state))
+	    !tegra_lp2_is_allowed(dev, state)) {
+		dev->last_state = &dev->states[0];
 		return tegra_idle_enter_lp3(dev, state);
+	}
 
 	local_irq_disable();
 	enter = ktime_get();
@@ -120,18 +128,12 @@ static int tegra_idle_enter_lp2(struct cpuidle_device *dev,
 
 	local_irq_enable();
 
-	/* cpu clockevents may have been reset by powerdown */
-	hrtimer_peek_ahead_timers();
-
 	smp_rmb();
 
 	/* Update LP2 latency provided no fall back to LP3 */
 	if (state == dev->last_state) {
-		state->exit_latency = tegra_lp2_exit_latency;
-		state->target_residency = tegra_lp2_exit_latency +
-			tegra_lp2_power_off_time;
-		if (state->target_residency < tegra_lp2_min_residency)
-			state->target_residency = tegra_lp2_min_residency;
+		tegra_lp2_set_global_latency(state);
+		tegra_lp2_update_target_residency(state);
 	}
 	tegra_cpu_idle_stats_lp2_time(dev->cpu, us);
 

@@ -15,7 +15,6 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
-#include <linux/sysdev.h>
 #include <linux/interrupt.h>
 #include <linux/sched.h>
 #include <linux/bitops.h>
@@ -559,6 +558,7 @@ MACHINE_START(TRIZEPS4, "Keith und Koep Trizeps IV module")
 	.init_machine	= trizeps4_init,
 	.map_io		= trizeps4_map_io,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.timer		= &pxa_timer,
 MACHINE_END
 
@@ -568,5 +568,6 @@ MACHINE_START(TRIZEPS4WL, "Keith und Koep Trizeps IV-WL module")
 	.init_machine	= trizeps4_init,
 	.map_io		= trizeps4_map_io,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.timer		= &pxa_timer,
 MACHINE_END

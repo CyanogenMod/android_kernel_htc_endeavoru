@@ -25,13 +25,14 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/nvmap.h>
 
 #include <asm/cacheflush.h>
 #include <asm/outercache.h>
 #include <asm/tlbflush.h>
 
 #include <mach/iovmm.h>
-#include <mach/nvmap.h>
+#include <trace/events/nvmap.h>
 
 #include "nvmap_ioctl.h"
 #include "nvmap.h"
@@ -64,10 +65,10 @@ int nvmap_ioctl_pinop(struct file *filp, bool is_pin, void __user *arg)
 		return -EINVAL;
 
 	if (op.count > 1) {
-		size_t bytes = op.count * sizeof(unsigned long *);
+		size_t bytes = op.count * sizeof(*refs); /* kcalloc below will catch overflow. */
 
 		if (op.count > ARRAY_SIZE(on_stack))
-			refs = kmalloc(op.count * sizeof(*refs), GFP_KERNEL);
+			refs = kcalloc(op.count, sizeof(*refs), GFP_KERNEL);
 		else
 			refs = on_stack;
 
@@ -83,6 +84,7 @@ int nvmap_ioctl_pinop(struct file *filp, bool is_pin, void __user *arg)
 		on_stack[0] = (unsigned long)op.handles;
 	}
 
+	trace_nvmap_ioctl_pinop(filp->private_data, is_pin, op.count, refs);
 	if (is_pin)
 		err = nvmap_pin_ids(filp->private_data, op.count, refs);
 	else
@@ -234,6 +236,13 @@ int nvmap_map_into_caller_ptr(struct file *filp, void __user *arg)
 	if (!h)
 		return -EPERM;
 
+	if(!h->alloc) {
+		nvmap_handle_put(h);
+		return -EFAULT;
+	}
+
+	trace_nvmap_map_into_caller_ptr(client, h, op.offset,
+					op.length, op.flags);
 	down_read(&current->mm->mmap_sem);
 
 	vma = find_vma(current->mm, op.addr);
@@ -247,7 +256,7 @@ int nvmap_map_into_caller_ptr(struct file *filp, void __user *arg)
 		goto out;
 	}
 
-	if ((op.offset + op.length) > h->size) {
+	if (op.offset > h->size || (op.offset + op.length) > h->size) {
 		err = -EADDRNOTAVAIL;
 		goto out;
 	}
@@ -409,6 +418,9 @@ int nvmap_ioctl_rw_handle(struct file *filp, int is_read, void __user* arg)
 
 	nvmap_usecount_inc(h);
 
+	trace_nvmap_ioctl_rw_handle(client, h, is_read, op.offset,
+				    op.addr, op.hmem_stride,
+				    op.user_stride, op.elem_size, op.count);
 	copied = rw_handle(client, h, is_read, op.offset,
 			   (unsigned long)op.addr, op.hmem_stride,
 			   op.user_stride, op.elem_size, op.count);
@@ -540,6 +552,7 @@ static bool fast_cache_maint(struct nvmap_client *client, struct nvmap_handle *h
 {
 	int ret = false;
 
+#if defined(CONFIG_NVMAP_CACHE_MAINT_BY_SET_WAYS)
 	if ((op == NVMAP_CACHE_OP_INV) ||
 		((end - start) < FLUSH_CLEAN_BY_SET_WAY_THRESHOLD))
 		goto out;
@@ -559,6 +572,7 @@ static bool fast_cache_maint(struct nvmap_client *client, struct nvmap_handle *h
 	}
 	ret = true;
 out:
+#endif
 	return ret;
 }
 
@@ -580,6 +594,7 @@ static int cache_maint(struct nvmap_client *client, struct nvmap_handle *h,
 		goto out;
 	}
 
+	trace_cache_maint(client, h, start, end, op);
 	wmb();
 	if (h->flags == NVMAP_HANDLE_UNCACHEABLE ||
 	    h->flags == NVMAP_HANDLE_WRITE_COMBINE || start == end)

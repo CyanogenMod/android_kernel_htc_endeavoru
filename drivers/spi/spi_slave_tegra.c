@@ -260,6 +260,14 @@ static inline void spi_tegra_writel(struct spi_tegra_data *tspi,
 	writel(val, tspi->base + reg);
 }
 
+static void cancel_dma(struct tegra_dma_channel *dma_chan,
+		struct tegra_dma_req *req)
+{
+	tegra_dma_cancel(dma_chan);
+	if (req->status == -TEGRA_DMA_REQ_ERROR_ABORTED)
+		req->complete(req);
+}
+
 int spi_tegra_register_callback(struct spi_device *spi, callback func,
 			void *client_data)
 {
@@ -409,7 +417,7 @@ static unsigned int spi_tegra_read_rx_fifo_to_client_rxbuf(
 	u8 *rx_buf = (u8 *)t->rx_buf + tspi->cur_rx_pos;
 	unsigned i, count;
 	unsigned long x;
-	unsigned int read_words;
+	unsigned int read_words = 0;
 	unsigned len;
 
 	fifo_status = spi_tegra_readl(tspi, SLINK_STATUS2);
@@ -541,8 +549,7 @@ static int spi_tegra_start_dma_based_transfer(
 			dev_err(&tspi->pdev->dev, "Error in starting rx dma "
 						" error = %d\n", ret);
 			if (tspi->cur_direction & DATA_DIR_TX)
-				tegra_dma_dequeue_req(tspi->tx_dma,
-							&tspi->tx_dma_req);
+				cancel_dma(tspi->tx_dma, &tspi->tx_dma_req);
 			return ret;
 		}
 	}
@@ -788,7 +795,7 @@ static int spi_tegra_setup(struct spi_device *spi)
 		val |= cs_bit;
 	else
 		val &= ~cs_bit;
-	tspi->def_command_reg |= val;
+	tspi->def_command_reg = val;
 
 	if (!tspi->is_clkon_always && !tspi->clk_state) {
 		clk_enable(tspi->clk);
@@ -822,7 +829,7 @@ static int spi_tegra_transfer(struct spi_device *spi, struct spi_message *m)
 		return -EINVAL;
 
 	t = list_first_entry(&m->transfers, struct spi_transfer, transfer_list);
-	if (t->bits_per_word < 0 || t->bits_per_word > 32)
+	if (/*t->bits_per_word < 0 ||*/ t->bits_per_word > 32)
 		return -EINVAL;
 
 	if (t->len == 0)
@@ -974,13 +981,13 @@ static irqreturn_t spi_tegra_isr_thread(int irq, void *context_data)
 	/* Abort dmas if any error */
 	if (tspi->cur_direction & DATA_DIR_TX) {
 		if (tspi->tx_status) {
-			tegra_dma_dequeue(tspi->tx_dma);
+			cancel_dma(tspi->tx_dma, &tspi->tx_dma_req);
 			err += 1;
 		} else {
 			wait_status = wait_for_completion_interruptible_timeout(
 				&tspi->tx_dma_complete, SLINK_DMA_TIMEOUT);
 			if (wait_status <= 0) {
-				tegra_dma_dequeue(tspi->tx_dma);
+				cancel_dma(tspi->tx_dma, &tspi->tx_dma_req);
 				dev_err(&tspi->pdev->dev, "Error in Dma Tx "
 							"transfer\n");
 				err += 1;
@@ -990,13 +997,13 @@ static irqreturn_t spi_tegra_isr_thread(int irq, void *context_data)
 
 	if (tspi->cur_direction & DATA_DIR_RX) {
 		if (tspi->rx_status) {
-			tegra_dma_dequeue(tspi->rx_dma);
+			cancel_dma(tspi->rx_dma, &tspi->rx_dma_req);
 			err += 2;
 		} else {
 			wait_status = wait_for_completion_interruptible_timeout(
 				&tspi->rx_dma_complete, SLINK_DMA_TIMEOUT);
 			if (wait_status <= 0) {
-				tegra_dma_dequeue(tspi->rx_dma);
+				cancel_dma(tspi->rx_dma, &tspi->rx_dma_req);
 				dev_err(&tspi->pdev->dev, "Error in Dma Rx "
 							"transfer\n");
 				err += 2;
@@ -1065,7 +1072,7 @@ static int __init spi_tegra_probe(struct platform_device *pdev)
 	struct spi_tegra_data	*tspi;
 	struct resource		*r;
 	struct tegra_spi_platform_data *pdata = pdev->dev.platform_data;
-	int ret;
+	int ret, result;
 	int i;
 
 	master = spi_alloc_master(&pdev->dev, sizeof *tspi);
@@ -1110,12 +1117,13 @@ static int __init spi_tegra_probe(struct platform_device *pdev)
 		goto fail_io_map;
 	}
 
-	tspi->irq = platform_get_irq(pdev, 0);
-	if (unlikely(tspi->irq < 0)) {
+	result = platform_get_irq(pdev, 0);
+	if (unlikely(result < 0)) {
 		dev_err(&pdev->dev, "can't find irq resource\n");
 		ret = -ENXIO;
 		goto fail_irq_req;
 	}
+	tspi->irq = result;
 
 	sprintf(tspi->port_name, "tegra_spi_%d", pdev->id);
 	ret = request_threaded_irq(tspi->irq, spi_tegra_isr,
@@ -1311,6 +1319,10 @@ static int __devexit spi_tegra_remove(struct platform_device *pdev)
 
 	spi_master_put(master);
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!r) {
+		pr_err("[SPI] %s: r is NULL\n", __func__);
+		return -1;
+	}
 	release_mem_region(r->start, (r->end - r->start) + 1);
 
 	return 0;

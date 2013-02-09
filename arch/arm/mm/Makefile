@@ -2,12 +2,17 @@
 # Makefile for the linux arm-specific parts of the memory manager.
 #
 
-obj-y				:= dma-mapping.o extable.o fault.o init.o \
+obj-y				:= extable.o fault.o init.o \
 				   iomap.o
+
+ifeq ($(CONFIG_NON_ALIASED_COHERENT_MEM),y)
+obj-y				+= dma-na-mapping.o
+else
+obj-y				+= dma-mapping.o
+endif
 
 obj-$(CONFIG_MMU)		+= fault-armv.o flush.o idmap.o ioremap.o \
 				   mmap.o pgd.o mmu.o vmregion.o pageattr.o
-obj-$(CONFIG_DEBUG_RODATA)	+= rodata.o
 
 ifneq ($(CONFIG_MMU),y)
 obj-y				+= nommu.o

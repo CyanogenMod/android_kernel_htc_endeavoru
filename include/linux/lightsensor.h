@@ -1,7 +1,7 @@
 /* include/linux/lightsensor.h
  *
- * Copyright (C) 2009 Google, Inc.
- * Author: Iliyan Malchev <malchev@google.com>
+ * Copyright (C) 2011 Capella Microsystems Inc.
+ * Author: Frank Hsieh <pengyueh@gmail.com>
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -20,23 +20,10 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 
-#define LIGHTSENSOR_IOCTL_MAGIC 'l'
+#define LIGHTSENSOR_IOCTL_MAGIC		'l'
 
-#define LIGHTSENSOR_IOCTL_GET_ENABLED _IOR(LIGHTSENSOR_IOCTL_MAGIC, 1, int *)
-#define LIGHTSENSOR_IOCTL_ENABLE _IOW(LIGHTSENSOR_IOCTL_MAGIC, 2, int *)
-
-struct lightsensor_mpp_config_data {
-	uint32_t lightsensor_mpp;
-	uint32_t lightsensor_amux;
-};
-
-struct lightsensor_smd_platform_data {
-	const char      *name;
-	uint16_t        levels[10];
-	uint16_t        golden_adc;
-	uint16_t		m_voltage;
-	int             (*ls_power)(int, uint8_t);
-	struct lightsensor_mpp_config_data mpp_data;
-};
+#define LIGHTSENSOR_IOCTL_GET_ENABLED	_IOR(LIGHTSENSOR_IOCTL_MAGIC, 1, int *)
+#define LIGHTSENSOR_IOCTL_ENABLE	_IOW(LIGHTSENSOR_IOCTL_MAGIC, 2, int *)
+#define LIGHTSENSOR_IOCTL_SET_DELAY	_IOW(LIGHTSENSOR_IOCTL_MAGIC, 3, int *)
 
 #endif

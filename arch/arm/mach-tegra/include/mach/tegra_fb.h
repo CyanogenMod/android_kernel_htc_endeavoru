@@ -36,4 +36,3 @@ struct tegra_fb_info {
 extern int tegrafb_get_var(struct tegra_fb_info *tmp);
 extern int tegrafb_get_fb_area(void);
 #endif
-

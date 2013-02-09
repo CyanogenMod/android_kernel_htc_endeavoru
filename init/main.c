@@ -209,8 +209,19 @@ early_param("quiet", quiet_kernel);
 
 static int __init loglevel(char *str)
 {
-	get_option(&str, &console_loglevel);
-	return 0;
+	int newlevel;
+
+	/*
+	 * Only update loglevel value when a correct setting was passed,
+	 * to prevent blind crashes (when loglevel being set to 0) that
+	 * are quite hard to debug
+	 */
+	if (get_option(&str, &newlevel)) {
+		console_loglevel = newlevel;
+		return 0;
+	}
+
+	return -EINVAL;
 }
 
 early_param("loglevel", loglevel);
@@ -348,6 +359,9 @@ static noinline void __init_refok rest_init(void)
 {
 	int pid;
 
+    /* let kthreadd run immediately in RT priority */
+    const struct sched_param param = { .sched_priority = 1 };
+
 	rcu_scheduler_starting();
 	/*
 	 * We need to spawn init first so that it obtains pid 1, however
@@ -360,6 +374,7 @@ static noinline void __init_refok rest_init(void)
 	rcu_read_lock();
 	kthreadd_task = find_task_by_pid_ns(pid, &init_pid_ns);
 	rcu_read_unlock();
+    sched_setscheduler_nocheck(kthreadd_task, SCHED_FIFO, &param);
 	complete(&kthreadd_done);
 
 	/*
@@ -369,9 +384,9 @@ static noinline void __init_refok rest_init(void)
 	init_idle_bootup_task(current);
 	preempt_enable_no_resched();
 	schedule();
-	preempt_disable();
 
 	/* Call into cpu_idle with preempt disabled */
+	preempt_disable();
 	cpu_idle();
 }
 
@@ -487,6 +502,7 @@ asmlinkage void __init start_kernel(void)
 	printk(KERN_NOTICE "%s", linux_banner);
 	setup_arch(&command_line);
 	mm_init_owner(&init_mm, &init_task);
+	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
@@ -504,11 +520,13 @@ asmlinkage void __init start_kernel(void)
 	 * These use large bootmem allocations and must precede
 	 * kmem_cache_init()
 	 */
+	setup_log_buf(0);
 	pidhash_init();
 	vfs_caches_init_early();
 	sort_main_extable();
 	trap_init();
 	mm_init();
+
 	/*
 	 * Set up the scheduler prior starting any interrupts (such as the
 	 * timer interrupt). Full topology setup happens at smp_init()
@@ -539,6 +557,7 @@ asmlinkage void __init start_kernel(void)
 	timekeeping_init();
 	time_init();
 	profile_init();
+	call_function_init();
 	if (!irqs_disabled())
 		printk(KERN_CRIT "start_kernel(): bug: interrupts were "
 				 "enabled early\n");
@@ -711,13 +730,12 @@ static void __init do_basic_setup(void)
 {
 	cpuset_init_smp();
 	usermodehelper_init();
-	init_tmpfs();
+	shmem_init();
 	driver_init();
 	init_irq_proc();
 	do_ctors();
-	printk(KERN_NOTICE "[BOOT_LOG] Entering do_initcalls\n");
+	usermodehelper_enable();
 	do_initcalls();
-	printk(KERN_NOTICE "[BOOT_LOG] Leaving do_initcalls\n");
 }
 
 static void __init do_pre_smp_initcalls(void)
@@ -749,7 +767,6 @@ static noinline int init_post(void)
 
 	current->signal->flags |= SIGNAL_UNKILLABLE;
 
-	printk(KERN_NOTICE "[BOOT_LOG] Entering run_init_process");
 	if (ramdisk_execute_command) {
 		run_init_process(ramdisk_execute_command);
 		printk(KERN_WARNING "Failed to execute %s\n",

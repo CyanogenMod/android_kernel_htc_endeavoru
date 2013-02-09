@@ -22,6 +22,10 @@
 #include <linux/gpio_event.h>
 #include <linux/rtc.h>
 #include <linux/slab.h>
+#include <linux/termios.h>
+#include <linux/tty.h>
+#include <mach/mfootprint.h>
+#include "devices.h"
 
 #include <mach/htc_headset_mgr.h>
 #include <linux/delay.h>
@@ -46,6 +50,9 @@ static struct workqueue_struct *button_wq;
 static void button_35mm_work_func(struct work_struct *work);
 static DECLARE_DELAYED_WORK(button_35mm_work, button_35mm_work_func);
 
+static void button_1wire_work_func(struct work_struct *work);
+static DECLARE_DELAYED_WORK(button_1wire_work, button_1wire_work_func);
+
 static struct workqueue_struct *debug_wq;
 static void debug_work_func(struct work_struct *work);
 static DECLARE_WORK(debug_work, debug_work_func);
@@ -69,46 +76,16 @@ struct button_work {
 
 static struct htc_headset_mgr_info *hi;
 static struct hs_notifier_func hs_mgr_notifier;
+
+static int	hpin_report = 0,
+		hpin_bounce = 0,
+		key_report = 0,
+		key_bounce = 0;
+
 static struct regulator *regulator;
 static struct button_work *key_event[HS_BUTTON_EVENT_QUEUE];
 static int key_event_flag;
-static struct file *fp;
 static int uart_check = 0;
-
-struct file *openFile(char *path,int flag,int mode)
-{
-	fp=filp_open(path, flag, mode);
-	if(IS_ERR(fp))
-	   HS_LOG("File Open Error:%s",path);
-
-	if(!fp->f_op)
-	   HS_LOG("File Operation Method Error!!");
-
-	if (fp) return fp;
-	else return NULL;
-}
-
-int readFile(struct file *fp,char *buf,int readlen)
-{
-	if (fp->f_op && fp->f_op->read)
-		return fp->f_op->read(fp,buf,readlen, &fp->f_pos);
-	else
-		return -1;
-}
-
-int writeFile(struct file *fp,char *buf,int readlen)
-{
-	if (fp->f_op && fp->f_op->write)
-		return fp->f_op->write(fp,buf,readlen, &fp->f_pos);
-	else
-		return -1;
-}
-
-int closeFile(struct file *fp)
-{
-	filp_close(fp,NULL);
-	return 0;
-}
 
 static void init_next_driver(void)
 {
@@ -119,7 +96,9 @@ static void init_next_driver(void)
 
 	if (i < hi->pdata.headset_devices_num) {
 		hi->driver_init_seq++;
+		HS_LOG("platform_device_register %s ", hi->pdata.headset_devices[i]->name);
 		platform_device_register(hi->pdata.headset_devices[i]);
+		HS_LOG("platform_device_register %s ok", hi->pdata.headset_devices[i]->name);
 	}
 }
 
@@ -138,6 +117,7 @@ void hs_notify_hpin_irq(void)
 {
 	hi->hpin_jiffies = jiffies;
 	HS_LOG("HPIN IRQ");
+	hpin_bounce++;
 }
 
 struct class *hs_get_attribute_class(void)
@@ -268,6 +248,30 @@ int headset_notifier_register(struct headset_notifier *notifier)
 		HS_LOG("Register INDICATOR_ENABLE notifier");
 		hs_mgr_notifier.indicator_enable = notifier->func;
 		break;
+	case HEADSET_REG_UART_SET:
+		HS_LOG("Register UART_SET notifier");
+		hs_mgr_notifier.uart_set = notifier->func;
+	case HEADSET_REG_1WIRE_INIT:
+		HS_LOG("Register 1WIRE_INIT notifier");
+		hs_mgr_notifier.hs_1wire_init = notifier->func;
+		hi->driver_one_wire_exist = 1;
+		break;
+	case HEADSET_REG_1WIRE_QUERY:
+		HS_LOG("Register 1WIRE_QUERY notifier");
+		hs_mgr_notifier.hs_1wire_query = notifier->func;
+		break;
+	case HEADSET_REG_1WIRE_READ_KEY:
+		HS_LOG("Register 1WIRE_READ_KEY notifier");
+		hs_mgr_notifier.hs_1wire_read_key = notifier->func;
+		break;
+	case HEADSET_REG_1WIRE_DEINIT:
+		HS_LOG("Register 1WIRE_DEINIT notifier");
+		hs_mgr_notifier.hs_1wire_deinit = notifier->func;
+		break;
+	case HEADSET_REG_1WIRE_REPORT_TYPE:
+		HS_LOG("Register 1WIRE_REPORT_TYPE notifier");
+		hs_mgr_notifier.hs_1wire_report_type = notifier->func;
+		break;
 	default:
 		HS_LOG("Unknown register ID");
 		return 0;
@@ -303,6 +307,12 @@ static int hs_mgr_rpc_call(struct msm_rpc_server *server,
 		else
 			HS_LOG("RPC_KEY notify function doesn't exist");
 		break;
+	case HS_MGR_KEYCODE_FF:
+		sprintf(buf, "FastForward");
+		break;
+	case HS_MGR_KEYCODE_RW:
+		sprintf(buf, "ReWind");
+		break;
 	default:
 		HS_LOG("Unknown RPC procedure");
 		return -EINVAL;
@@ -323,6 +333,7 @@ void button_pressed(int type)
 	atomic_set(&hi->btn_state, type);
 	input_report_key(hi->input, type, 1);
 	input_sync(hi->input);
+	key_report++;
 }
 
 void button_released(int type)
@@ -331,6 +342,7 @@ void button_released(int type)
 	atomic_set(&hi->btn_state, 0);
 	input_report_key(hi->input, type, 0);
 	input_sync(hi->input);
+	key_report++;
 }
 
 void headset_button_event(int is_press, int type)
@@ -373,11 +385,14 @@ static int get_mic_status(void)
 			    adc <= hi->pdata.headset_config[i].adc_max)
 				return hi->pdata.headset_config[i].type;
 		}
-	} else if (hs_mgr_notifier.mic_status)
+			if (hi->pdata.driver_flag & DRIVER_HS_MGR_FLOAT_DET) {
+				return HEADSET_UNPLUG;
+			}
+	} else if (hs_mgr_notifier.mic_status) {
 		mic = hs_mgr_notifier.mic_status();
+	}
 	else
 		HS_LOG("Failed to get MIC status");
-
 	return mic;
 }
 
@@ -532,6 +547,7 @@ static void mic_detect_work_func(struct work_struct *work)
 	mutex_lock(&hi->mutex_lock);
 
 	mic = get_mic_status();
+
 	if (mic == HEADSET_NO_MIC)
 		mic = tv_out_detect();
 
@@ -541,25 +557,37 @@ static void mic_detect_work_func(struct work_struct *work)
 	if (mic == HEADSET_METRICO && !hi->metrico_status)
 		enable_metrico_headset(1);
 
-	if (mic == HEADSET_UNKNOWN_MIC) {
+	if (mic == HEADSET_UNKNOWN_MIC || mic == HEADSET_UNPLUG) {
 		mutex_unlock(&hi->mutex_lock);
 		if (hi->mic_detect_counter--)
 			queue_delayed_work(detect_wq, &mic_detect_work,
 					   HS_JIFFIES_MIC_DETECT);
-		else
-			HS_LOG("MIC polling timeout (UNKNOWN MIC status)");
+		else {
+			HS_LOG("MIC polling timeout (UNKNOWN/Floating MIC status)");
+			if ((hi->pdata.eng_cfg == HS_EDE_U) || (hi->pdata.eng_cfg == HS_EDE_TD) || (hi->pdata.eng_cfg == HS_BLE)){
+				aic3008_set_mic_bias(0);
+			}
+			if ((hi->pdata.eng_cfg == HS_QUO_F_U) || (hi->pdata.eng_cfg == HS_ENRC2_U_XB)){
+				regulator = regulator_get(NULL, "v_aud_2v85");
+				if (IS_ERR_OR_NULL(regulator)) {
+					pr_err("htc_headset_gpio_probe:Couldn't get regulator v_aud_2v85\n");
+					regulator = NULL;
+					return;
+				}
+				regulator_disable(regulator);
+			}
+		}
 		return;
 	}
 
 	old_state = switch_get_state(&hi->sdev);
-	if (!(old_state & MASK_35MM_HEADSET)) {
+	if (!(old_state & MASK_35MM_HEADSET) && !(hi->is_ext_insert)) {
 		HS_LOG("Headset has been removed");
 		mutex_unlock(&hi->mutex_lock);
 		return;
 	}
 
-	new_state = old_state & ~MASK_35MM_HEADSET;
-	new_state |= BIT_35MM_HEADSET;
+	new_state = old_state & ~(MASK_35MM_HEADSET | BIT_HEADSET_UART);
 
 	switch (mic) {
 	case HEADSET_NO_MIC:
@@ -595,102 +623,29 @@ static void mic_detect_work_func(struct work_struct *work)
 	case HEADSET_UNPLUG:
 		HS_LOG_TIME("HEADSET_UNPLUG");
 		break;
+	case HEADSET_UART:
+		new_state |= BIT_HEADSET_UART;
+		HS_LOG_TIME("HEADSET_UART");
+		break;
 	}
 
 	if (new_state != old_state) {
 		hi->hs_35mm_type = mic;
-		switch_set_state(&hi->sdev, new_state);
+		HS_LOG("old state = %d, new state = %d", old_state, new_state);
+		if ((new_state & MASK_HEADSET) && (old_state & MASK_HEADSET)) {
+			HS_LOG("old state = %d, new state = %d, use workaround", old_state, new_state);
+			switch_set_state(&hi->sdev, old_state & ~MASK_HEADSET);
+			switch_set_state(&hi->sdev, new_state);
+		} else
+			switch_set_state(&hi->sdev, new_state);
+
+		hpin_report++;
+		if (hs_mgr_notifier.uart_set)
+			hs_mgr_notifier.uart_set(!!(new_state & BIT_HEADSET_UART));
 	} else
 		HS_LOG("MIC status has not changed");
 
 	mutex_unlock(&hi->mutex_lock);
-}
-
-/*config GPIO for one-wire tx*/
-static void enable_1wire_tx()
-{
-	int ret;
-	ret = gpio_direction_output(hi->pdata.level_1wire_gpio,0);
-	if (ret < 0) {
-		printk(KERN_WARNING "[HS_UART_GPIO] %s: gpio_direction_input failed %d\n", __func__, ret);
-		gpio_free(hi->pdata.level_1wire_gpio);
-	}
-	tegra_gpio_enable(hi->pdata.rx_1wire_gpio);
-	tegra_gpio_disable(hi->pdata.tx_1wire_gpio);
-
-	return;
-}
-
-/*config GPIO for one-wire rx*/
-static void enable_1wire_rx()
-{
-	int ret;
-	ret = gpio_direction_output(hi->pdata.level_1wire_gpio,1);
-	if (ret < 0) {
-		printk(KERN_WARNING "[HS_UART_GPIO] %s: gpio_direction_input failed %d\n", __func__, ret);
-		gpio_free(hi->pdata.level_1wire_gpio);
-	}
-	tegra_gpio_disable(hi->pdata.rx_1wire_gpio);
-	tegra_gpio_enable(hi->pdata.tx_1wire_gpio);
-
-	return;
-}
-
-/*disable one-wire GPIO setting*/
-static void disable_1wire()
-{
-	int ret;
-	tegra_gpio_disable(hi->pdata.rx_1wire_gpio);
-	tegra_gpio_disable(hi->pdata.tx_1wire_gpio);
-	ret = gpio_direction_output(hi->pdata.level_1wire_gpio,1);
-	if (ret < 0) {
-		printk(KERN_WARNING "[HS_UART_GPIO] %s: gpio_direction_input failed %d\n", __func__, ret);
-		gpio_free(hi->pdata.level_1wire_gpio);
-		return;
-	}
-	return;
-}
-
-/*One-wire button event handler*/
-int button_1wire_work_func()
-{
-	int cnt = 0;
-	char a_buf[20];
-	int count = 0;
-	int r,bflag;
-
-	while(1){
-		bflag=0;
-		r=readFile(fp,a_buf,10);
-
-		if(r>0){
-			HS_LOG("Read %d bytes, count:%d, %s",r,count,a_buf);
-			for(cnt = 0; cnt < r; cnt++){
-				HS_LOG("0x%x \n", (int) a_buf[cnt]);
-				if ((int)a_buf[cnt]==49){
-					hi->key_level_flag = 3;
-					bflag=1;
-				}
-				if ((int)a_buf[cnt]==50){
-					hi->key_level_flag = 1;
-					bflag=1;
-				}
-				if ((int)a_buf[cnt]==51){
-					hi->key_level_flag = 2;
-					bflag=1;
-				}
-				if ((int)a_buf[cnt]==52)
-					bflag=1;
-			}
-		}
-		count++;
-
-		if(bflag == 1 || count == CHECK_COUNT)
-			break;
-
-		msleep(1);
-	}
-	return 1;
 }
 
 static void button_35mm_work_func(struct work_struct *work)
@@ -705,14 +660,10 @@ static void button_35mm_work_func(struct work_struct *work)
 	works = container_of(work, struct button_work, key_work.work);
 	hi->key_level_flag = works->key_code;
 
-/*run one-wire button work function if the project support one-wire detection*/
-	if(hi->detect_type == HEADSET_1WIRE && hi->pdata.enable_1wire)
-		button_1wire_work_func();
-
 	if (hi->hs_35mm_type == HEADSET_UNPLUG &&
 	    hi->h2w_35mm_type == HEADSET_UNPLUG) {
 //		kfree(works);
-		works->key_code = NULL;
+		works->key_code = 0;
 		HS_LOG("Ignore key event (HEADSET_UNPLUG)");
 		return;
 	}
@@ -744,7 +695,7 @@ static void button_35mm_work_func(struct work_struct *work)
 	}
 
 //	kfree(works);
-	works->key_code = NULL;
+	works->key_code = 0;
 }
 
 static void debug_work_func(struct work_struct *work)
@@ -774,14 +725,6 @@ static void remove_detect_work_func(struct work_struct *work)
 	wake_lock_timeout(&hi->hs_wake_lock, HS_WAKE_LOCK_TIMEOUT);
 
 	HS_DBG();
-
-/*remove one-wire detection setting if the project support one-wire detection*/
-	if(hi->detect_type == HEADSET_1WIRE && hi->pdata.enable_1wire){
-		HS_LOG("Disable one-wire detection.");
-		closeFile(fp);
-		disable_1wire();
-		hi->detect_type = HEADSET_ADC;
-	}
 
 	if (time_before_eq(jiffies, hi->insert_jiffies + HZ)) {
 		HS_LOG("Waiting for HPIN stable");
@@ -819,6 +762,10 @@ static void remove_detect_work_func(struct work_struct *work)
 		mutex_unlock(&hi->mutex_lock);
 		return;
 	}
+	if (state & BIT_HEADSET_UART || hi->hs_35mm_type == HEADSET_UART) {
+		if (hs_mgr_notifier.uart_set)
+			hs_mgr_notifier.uart_set(0);
+	}
 	hi->hs_35mm_type = HEADSET_UNPLUG;
 
 #if 0
@@ -832,19 +779,22 @@ static void remove_detect_work_func(struct work_struct *work)
 		switch_set_state(&hi->sdev, state);
 	}
 #else
-	state &= ~(MASK_35MM_HEADSET | MASK_FM_ATTRIBUTE);
+	state &= ~(MASK_35MM_HEADSET | MASK_FM_ATTRIBUTE | BIT_HEADSET_UART);
 	switch_set_state(&hi->sdev, state);
 #endif
-
+	hpin_report++;
 	HS_LOG_TIME("Remove 3.5mm accessory");
-
+	if (hi->one_wire_mode == 1) {
+		hs_mgr_notifier.hs_1wire_deinit();
+		hi->one_wire_mode = 0;
+	}
 	mutex_unlock(&hi->mutex_lock);
 	if ((hi->pdata.eng_cfg == HS_EDE_U) || (hi->pdata.eng_cfg == HS_EDE_TD) || (hi->pdata.eng_cfg == HS_BLE))
 	{
 		aic3008_set_mic_bias(0);
 	}
 
-	if ((hi->pdata.eng_cfg == HS_QUO_F_U))
+	if ((hi->pdata.eng_cfg == HS_QUO_F_U) || (hi->pdata.eng_cfg == HS_ENRC2_U_XB))
 	{
 		regulator = regulator_get(NULL, "v_aud_2v85");
 		if (IS_ERR_OR_NULL(regulator)) {
@@ -860,78 +810,9 @@ static void remove_detect_work_func(struct work_struct *work)
 		HS_LOG("quick_boot_status = 1"); */
 }
 
-/*insert one-wire work function. send start comment and initail comment and then recieve AID form accessory.*/
-static int insert_1wire_work_func()
-{
-	HS_LOG("insert one-wire detection start");
-	int cnt = 0;
-	char b_buf[128];
-	int r,i;
-	int count = 0;
-	int mic = HEADSET_NO_MIC;
-
-	char buf2[1];
-	buf2[0]=0x00;
-
-	char buf1[1];
-	buf1[0]=0x35;
-
-	if (uart_check == 0)
-		while (1){
-			if(hi->detect_type ==99){
-				uart_check = 1;
-				hi->detect_type == HEADSET_ADC;
-				msleep(1000);
-				break;
-			}
-			else
-				msleep(1000);
-		}
-
-	enable_1wire_tx();
-	mdelay(80);
-	fp = openFile(hi->pdata.dev_1wire,O_CREAT|O_RDWR|O_NONBLOCK,0666);
-	writeFile(fp,buf2,sizeof(buf2));
-	udelay(200);
-
-	writeFile(fp,buf1,sizeof(buf1));
-	udelay(200);
-
-	enable_1wire_rx();
-
-	while(1){
-		r=readFile(fp,b_buf,10);
-		if (r>0){
-			HS_LOG("Read %xh bytes, count:%d, %s\n",r,count,b_buf);
-
-			for(cnt = 0; cnt < r; cnt++){
-				HS_LOG("Read:0x%x, %d, %s\n", (int) b_buf[cnt], (int)b_buf[cnt], b_buf[cnt]);
-
-				if (hi->pdata.headset_config_1wire_num)
-					for (i = 0; i < hi->pdata.headset_config_1wire_num; i++)
-						if ((int)b_buf[cnt] == hi->pdata.headset_config_1wire[i].value)	{
-							mic = hi->pdata.headset_config_1wire[i].type;
-							hi->detect_type = HEADSET_1WIRE;
-						}
-			}
-		}
-		count++;
-		if (count == CHECK_COUNT || hi->detect_type == HEADSET_1WIRE )
-			break;
-	}
-
-	if(hi->detect_type != HEADSET_1WIRE){
-		closeFile(fp);
-		disable_1wire();
-		hi->detect_type = HEADSET_ADC;
-	}
-	HS_LOG("insert one-wire detection start end");
-	return mic;
-}
-
 static void insert_detect_work_func(struct work_struct *work)
 {
-	int state;
+	int state, adc = 0, old_state;
 	int mic = HEADSET_NO_MIC;
 
 	wake_lock_timeout(&hi->hs_wake_lock, HS_WAKE_LOCK_TIMEOUT);
@@ -943,32 +824,57 @@ static void insert_detect_work_func(struct work_struct *work)
 		return;
 	}
 
+	HS_LOG("Start 1-wire detecting sequence");
+	if (hi->pdata.uart_tx_gpo)
+		hi->pdata.uart_tx_gpo(0);
+	if (hi->pdata.uart_lv_shift_en)
+		hi->pdata.uart_lv_shift_en(0);
+	msleep(20);
+	if (hi->pdata.uart_lv_shift_en)
+		hi->pdata.uart_lv_shift_en(1);
+	if (hi->pdata.uart_tx_gpo)
+		hi->pdata.uart_tx_gpo(2);
 	hi->insert_jiffies = jiffies;
 	set_35mm_hw_state(1);
+	msleep(150);
+	if (hs_mgr_notifier.remote_adc)
+		hs_mgr_notifier.remote_adc(&adc);
 
 	mutex_lock(&hi->mutex_lock);
 
-	mic = get_mic_status();
-
-	if(mic == HEADSET_UNPLUG){
-		mdelay(1000);
-		mic = get_mic_status();
-		if(mic == HEADSET_UNPLUG){
-			HS_LOG("Headset unplug.");
-			hi->hs_35mm_type = mic;
+	hi->one_wire_mode = 0;
+/*Check one wire accessory for every plug event*/
+	if (hi->driver_one_wire_exist && adc > 915) {
+		HS_LOG("[HS_1wire]1wire driver exists, starting init");
+		if (hs_mgr_notifier.key_int_enable)
+			hs_mgr_notifier.key_int_enable(0);
+		if (hs_mgr_notifier.hs_1wire_init() == 0) {
+			hi->one_wire_mode = 1;
+		/*Report as normal headset with MIC*/
+			state = switch_get_state(&hi->sdev);
+			state |= BIT_HEADSET;
+			switch_set_state(&hi->sdev, state);
+			hi->hs_35mm_type = HEADSET_BEATS;
 			mutex_unlock(&hi->mutex_lock);
-			if ((hi->pdata.eng_cfg == HS_EDE_U) || (hi->pdata.eng_cfg == HS_EDE_TD) || (hi->pdata.eng_cfg == HS_BLE)){
-				aic3008_set_mic_bias(0);
-			}
-			if ((hi->pdata.eng_cfg == HS_QUO_F_U)){
-				regulator = regulator_get(NULL, "v_aud_2v85");
-				if (IS_ERR_OR_NULL(regulator)) {
-					pr_err("htc_headset_gpio_probe:Couldn't get regulator v_aud_2v85\n");
-					regulator = NULL;
-					return;
-				}
-				regulator_disable(regulator);
-			}
+		if (hs_mgr_notifier.key_int_enable)
+			hs_mgr_notifier.key_int_enable(1);
+			return;
+		}else {
+			hi->one_wire_mode = 0;
+			HS_LOG("Lagacy mode");
+			if (hi->pdata.uart_tx_gpo)
+				hi->pdata.uart_tx_gpo(2);
+			if (hs_mgr_notifier.key_int_enable)
+				hs_mgr_notifier.key_int_enable(1);
+		}
+	}
+
+	mic = get_mic_status();
+	if (hi->pdata.driver_flag & DRIVER_HS_MGR_FLOAT_DET) {
+		HS_LOG("Headset float detect enable");
+		if (mic == HEADSET_UNPLUG) {
+			mutex_unlock(&hi->mutex_lock);
+			update_mic_status(HS_DEF_MIC_DETECT_COUNT);
 			return;
 		}
 	}
@@ -983,20 +889,8 @@ static void insert_detect_work_func(struct work_struct *work)
 		enable_metrico_headset(1);
 
 	state = switch_get_state(&hi->sdev);
-	state &= ~MASK_35MM_HEADSET;
-	state |= BIT_35MM_HEADSET;
-
-/*run one-wire detect work function if one-wire detection is enable*/
-	if (hi->pdata.enable_1wire)
-		{
-		int wire = 0;
-		wire = insert_1wire_work_func();
-		if (wire > 0)
-			{
-			HS_LOG("Enable one-wire detection");
-			mic = wire;
-			}
-		}
+	old_state = state;
+	state &= ~(MASK_35MM_HEADSET | BIT_HEADSET_UART);
 
 	switch (mic) {
 	case HEADSET_NO_MIC:
@@ -1026,20 +920,34 @@ static void insert_detect_work_func(struct work_struct *work)
 	case HEADSET_BEATS:
 //		mic = HEADSET_UNSTABLE;
 		state |= BIT_HEADSET;
-		HS_LOG_TIME("HEADSET_BEATS (UNSTABLE)");
+		HS_LOG_TIME("HEADSET_BEATS");
 		break;
 	case HEADSET_BEATS_SOLO:
 //		mic = HEADSET_UNSTABLE;
 		state |= BIT_HEADSET;
-		HS_LOG_TIME("HEADSET_BEATS_SOLO (UNSTABLE)");
+		HS_LOG_TIME("HEADSET_BEATS_SOLO");
 		break;
 	case HEADSET_INDICATOR:
 		HS_LOG_TIME("HEADSET_INDICATOR");
 		break;
+	case HEADSET_UART:
+		state |= BIT_HEADSET_UART;
+		HS_LOG_TIME("HEADSET_UART");
+		break;
 	}
 
 	hi->hs_35mm_type = mic;
-	switch_set_state(&hi->sdev, state);
+	if ((state & MASK_HEADSET) && (old_state & MASK_HEADSET) && state != old_state) {
+		HS_LOG("old state = %d, new state = %d, use workaround", old_state, state);
+		switch_set_state(&hi->sdev, old_state & ~MASK_HEADSET);
+		switch_set_state(&hi->sdev, state);
+	} else
+		switch_set_state(&hi->sdev, state);
+	hpin_report++;
+
+	if (hs_mgr_notifier.uart_set)
+		hs_mgr_notifier.uart_set(!!(state & BIT_HEADSET_UART));
+
 
 	mutex_unlock(&hi->mutex_lock);
 
@@ -1061,15 +969,26 @@ static void insert_detect_work_func(struct work_struct *work)
 
 int hs_notify_plug_event(int insert)
 {
+	int ret = 0;
 	HS_DBG("Headset status %d", insert);
 
 	mutex_lock(&hi->mutex_lock);
 	hi->is_ext_insert = insert;
 	mutex_unlock(&hi->mutex_lock);
 
-	cancel_delayed_work_sync(&mic_detect_work);
-	cancel_delayed_work_sync(&insert_detect_work);
-	cancel_delayed_work_sync(&remove_detect_work);
+	ret = cancel_delayed_work_sync(&mic_detect_work);
+	if (ret)
+		HS_LOG("Cancel mic_detect_work succeeds");
+	ret = cancel_delayed_work_sync(&insert_detect_work);
+	if (ret && hs_mgr_notifier.key_int_enable) {
+		HS_LOG("Cancel insert_detect_work succeeds");
+		hs_mgr_notifier.key_int_enable(1);
+	}
+	ret = cancel_delayed_work_sync(&remove_detect_work);
+	if (ret && hs_mgr_notifier.key_int_enable) {
+		HS_LOG("Cancel remove_detect_work succeeds");
+		hs_mgr_notifier.key_int_enable(0);
+	}
 
 	if (hi->is_ext_insert)
 		queue_delayed_work(detect_wq, &insert_detect_work,
@@ -1083,8 +1002,6 @@ int hs_notify_plug_event(int insert)
 
 int hs_notify_key_event(int key_code)
 {
-
-
 	HS_DBG();
 
 	if (hi->hs_35mm_type == HEADSET_UNKNOWN_MIC ||
@@ -1100,7 +1017,7 @@ int hs_notify_key_event(int key_code)
 		if(key_event_flag == (HS_BUTTON_EVENT_QUEUE-1))
 			key_event_flag = -1;
 		key_event_flag++;
-		HS_LOG("key_event_flag = %d",key_event_flag);
+		HS_DBG("key_event_flag = %d",key_event_flag);
 		key_event[key_event_flag]->key_code = key_code;
 		INIT_DELAYED_WORK(&key_event[key_event_flag]->key_work, button_35mm_work_func);
 		queue_delayed_work(button_wq, &key_event[key_event_flag]->key_work,
@@ -1110,11 +1027,136 @@ int hs_notify_key_event(int key_code)
 	return 1;
 }
 
+static void proc_comb_keys(void)
+{
+	int j, k;
+	if (hi->key_code_1wire_index >= 5) {
+		for (j = 0; j <= hi->key_code_1wire_index - 5; j++) {
+			if (hi->key_code_1wire[j] == 1 && hi->key_code_1wire[j+2] == 1 && hi->key_code_1wire[j+4] == 1) {
+				hi->key_code_1wire[j] = HS_MGR_3X_KEY_MEDIA;
+				HS_LOG("key[%d] = %d", j, HS_MGR_3X_KEY_MEDIA);
+				for (k = j + 1; k < (hi->key_code_1wire_index - 4); k++) {
+					hi->key_code_1wire[k] = hi->key_code_1wire[k+4];
+					HS_LOG("key[%d] <= key[%d]", k, k+4);
+				}
+				hi->key_code_1wire_index -= 4;
+			}
+		}
+	}
+
+	if (hi->key_code_1wire_index >= 3) {
+		for (j = 0; j <= hi->key_code_1wire_index - 3; j++) {
+			if (hi->key_code_1wire[j] == 1 && hi->key_code_1wire[j+2] == 1) {
+				hi->key_code_1wire[j] = HS_MGR_2X_KEY_MEDIA;
+				HS_LOG("key[%d] = %d", j, HS_MGR_2X_KEY_MEDIA);
+				for (k = j + 1; k < (hi->key_code_1wire_index - 2); k++) {
+					hi->key_code_1wire[k] = hi->key_code_1wire[k+2];
+					HS_LOG("key[%d] <= key[%d]", k, k+2);
+				}
+				hi->key_code_1wire_index -= 2;
+			}
+		}
+	}
+}
+
+static void proc_long_press(void)
+{
+	if (hi->key_code_1wire[hi->key_code_1wire_index - 1] == HS_MGR_2X_KEY_MEDIA) {	/*If last key is NEXT press, change it to FF*/
+		HS_LOG("long press key found, replace key[%d] = %d ==> %d", hi->key_code_1wire_index - 1,
+			hi->key_code_1wire[hi->key_code_1wire_index - 1], HS_MGR_2X_HOLD_MEDIA);
+		hi->key_code_1wire[hi->key_code_1wire_index - 1] = HS_MGR_2X_HOLD_MEDIA;
+	}
+
+	if (hi->key_code_1wire[hi->key_code_1wire_index - 1] == HS_MGR_3X_KEY_MEDIA) {	/*If last key is PREVIOUS press, change it to RW*/
+		HS_LOG("long press key found, replace key[%d] = %d ==> %d", hi->key_code_1wire_index - 1,
+			hi->key_code_1wire[hi->key_code_1wire_index - 1], HS_MGR_3X_HOLD_MEDIA);
+		hi->key_code_1wire[hi->key_code_1wire_index - 1] = HS_MGR_3X_HOLD_MEDIA;
+	}
+}
+
+
+static void button_1wire_work_func(struct work_struct *work)
+{
+	int i;
+	static int pre_key = 0;
+	if (hi->key_code_1wire_index >= 15)
+		HS_LOG("key_code_1wire buffer overflow");
+	proc_comb_keys();
+	proc_long_press();
+	for (i = 0; i < hi->key_code_1wire_index; i++) {
+		HS_LOG("1wire key [%d] = %d", i, hi->key_code_1wire[i]);
+		switch (hi->key_code_1wire[i]) {
+			case	1:
+					/*single click MEDIA*/
+					button_pressed(HS_MGR_KEYCODE_MEDIA);
+					pre_key = HS_MGR_KEYCODE_MEDIA;
+					break;
+			case	2:
+					button_pressed(HS_MGR_KEYCODE_VOLUP);
+					pre_key = HS_MGR_KEYCODE_VOLUP;
+					break;
+			case	3:
+					button_pressed(HS_MGR_KEYCODE_VOLDOWN);
+					pre_key = HS_MGR_KEYCODE_VOLDOWN;
+					break;
+			case	HS_MGR_2X_KEY_MEDIA:
+					button_pressed(HS_MGR_KEYCODE_FORWARD);
+					pre_key = HS_MGR_KEYCODE_FORWARD;
+					/*double click MEDIA*/
+					break;
+			case	HS_MGR_3X_KEY_MEDIA:
+					button_pressed(HS_MGR_KEYCODE_BACKWARD);
+					pre_key = HS_MGR_KEYCODE_BACKWARD;
+					/*triple click MEDIA*/
+					break;
+			case	HS_MGR_2X_HOLD_MEDIA:
+					button_pressed(HS_MGR_KEYCODE_FF);
+					pre_key = HS_MGR_KEYCODE_FF;
+					/*double click and hold MEDIA*/
+					break;
+			case	HS_MGR_3X_HOLD_MEDIA:
+					button_pressed(HS_MGR_KEYCODE_RW);
+					pre_key = HS_MGR_KEYCODE_RW;
+					/*triple click and hold MEDIA*/
+					break;
+			case	0:
+					button_released(pre_key);
+					break;
+			default:
+					break;
+		}
+		msleep(10);
+	}
+	hi->key_code_1wire_index = 0;
+
+}
+
 int hs_notify_key_irq(void)
 {
 	int adc = 0;
 	int key_code = HS_MGR_KEY_INVALID;
+	static int pre_key = 0;
+	if (hi->one_wire_mode == 1 && hs_hpin_stable()) {
+		wake_lock_timeout(&hi->hs_wake_lock, HS_WAKE_LOCK_TIMEOUT);
+		key_code = hs_mgr_notifier.hs_1wire_read_key();
+		if (key_code < 0)
+			return 1;
+		if (key_code == 2 || key_code == 3 || pre_key == 2 || pre_key == 3) {
+			queue_delayed_work(button_wq, &button_1wire_work, HS_JIFFIES_1WIRE_BUTTON_SHORT);
+			HS_LOG("Use short delay");
+		} else {
+			queue_delayed_work(button_wq, &button_1wire_work, hi->onewire_key_delay);
+			HS_LOG("Use long delay");
+		}
 
+		HS_LOG("key_code = 0x%x", key_code);
+		hi->key_code_1wire[hi->key_code_1wire_index++] = key_code;
+		pre_key = key_code;
+		return 1;
+	}
+
+	key_bounce++;
+	mdelay(20);
 	if (!hs_mgr_notifier.remote_adc || !hs_mgr_notifier.remote_keycode) {
 		HS_LOG("Failed to get remote key code");
 		return 1;
@@ -1210,7 +1252,7 @@ static ssize_t headset_state_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	int length = 0;
-	char *state;
+	char *state = NULL;
 
 	HS_DBG();
 
@@ -1237,13 +1279,19 @@ static ssize_t headset_state_show(struct device *dev,
 		state = "headset_unstable";
 		break;
 	case HEADSET_BEATS:
-		state = "headset_beats";
+		if (hi->one_wire_mode == 1 && hs_mgr_notifier.hs_1wire_report_type)
+			hs_mgr_notifier.hs_1wire_report_type(&state);
+		else
+			state = "headset_beats";
 		break;
 	case HEADSET_BEATS_SOLO:
 		state = "headset_beats_solo";
 		break;
 	case HEADSET_INDICATOR:
 		state = "headset_indicator";
+		break;
+	case HEADSET_UART:
+		state = "headset_uart";
 		break;
 	default:
 		state = "error_state";
@@ -1267,6 +1315,96 @@ static ssize_t headset_state_store(struct device *dev,
 static DEVICE_HEADSET_ATTR(state, 0644, headset_state_show,
 			   headset_state_store);
 
+static ssize_t headset_1wire_state_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf,"%d\n", hi->one_wire_mode);
+}
+
+static ssize_t headset_1wire_state_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	HS_DBG();
+	return 0;
+}
+
+static DEVICE_HEADSET_ATTR(1wire_state, 0644, headset_1wire_state_show,
+			   headset_1wire_state_store);
+
+static ssize_t headset_simulate_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	HS_DBG();
+	return sprintf(buf, "Command is not supported\n");
+}
+
+static ssize_t headset_simulate_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned long state = 0;
+
+	HS_DBG();
+
+	state = MASK_35MM_HEADSET | MASK_USB_HEADSET;
+	switch_send_event(state, 0);
+
+	if (strncmp(buf, "headset_unplug", count - 1) == 0) {
+		HS_LOG("Headset simulation: headset_unplug");
+		set_35mm_hw_state(0);
+		hi->hs_35mm_type = HEADSET_UNPLUG;
+		return count;
+	}
+
+	set_35mm_hw_state(1);
+	state = BIT_35MM_HEADSET;
+
+	if (strncmp(buf, "headset_no_mic", count - 1) == 0) {
+		HS_LOG("Headset simulation: headset_no_mic");
+		hi->hs_35mm_type = HEADSET_NO_MIC;
+		state |= BIT_HEADSET_NO_MIC;
+	} else if (strncmp(buf, "headset_mic", count - 1) == 0) {
+		HS_LOG("Headset simulation: headset_mic");
+		hi->hs_35mm_type = HEADSET_MIC;
+		state |= BIT_HEADSET;
+	} else if (strncmp(buf, "headset_metrico", count - 1) == 0) {
+		HS_LOG("Headset simulation: headset_metrico");
+		hi->hs_35mm_type = HEADSET_METRICO;
+		state |= BIT_HEADSET;
+	} else if (strncmp(buf, "headset_unknown_mic", count - 1) == 0) {
+		HS_LOG("Headset simulation: headset_unknown_mic");
+		hi->hs_35mm_type = HEADSET_UNKNOWN_MIC;
+		state |= BIT_HEADSET_NO_MIC;
+	} else if (strncmp(buf, "headset_tv_out", count - 1) == 0) {
+		HS_LOG("Headset simulation: headset_tv_out");
+		hi->hs_35mm_type = HEADSET_TV_OUT;
+		state |= BIT_TV_OUT;
+#if defined(CONFIG_FB_MSM_TVOUT) && defined(CONFIG_ARCH_MSM8X60)
+		tvout_enable_detection(1);
+#endif
+	} else if (strncmp(buf, "headset_indicator", count - 1) == 0) {
+		HS_LOG("Headset simulation: headset_indicator");
+		hi->hs_35mm_type = HEADSET_INDICATOR;
+	} else if (strncmp(buf, "headset_beats", count - 1) == 0) {
+		HS_LOG("Headset simulation: headset_beats");
+		hi->hs_35mm_type = HEADSET_BEATS;
+		state |= BIT_HEADSET;
+	} else if (strncmp(buf, "headset_beats_solo", count - 1) == 0) {
+		HS_LOG("Headset simulation: headset_beats_solo");
+		hi->hs_35mm_type = HEADSET_BEATS_SOLO;
+		state |= BIT_HEADSET;
+	} else {
+		HS_LOG("Invalid parameter");
+		return count;
+	}
+
+	switch_send_event(state, 1);
+
+	return count;
+}
+
+static DEVICE_HEADSET_ATTR(simulate, 0644, headset_simulate_show,
+			   headset_simulate_store);
+
 static ssize_t headset_1wire_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -1278,12 +1416,44 @@ static ssize_t headset_1wire_store(struct device *dev,
 {
 	HS_DBG();
 	hi->detect_type = 99;
+	uart_check = 1;
+
 	return 0;
 }
 
 static DEVICE_HEADSET_ATTR(1wire, 0644, headset_1wire_show,
 			   headset_1wire_store);
 
+static ssize_t headset_1wire_key_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	char *s = buf;
+	HS_DBG();
+	s += sprintf(s, "onewire key delay is %dms\n", jiffies_to_msecs(hi->onewire_key_delay));
+	return (s - buf);
+}
+
+static ssize_t headset_1wire_key_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned long ten_base = 1;
+	int i;
+	unsigned long delay_t = 0;
+	HS_DBG();
+
+		for(i = (count - 2); i >= 0; i--) {
+			HS_LOG("buf[%d] = %d, ten_base = %ld", i, *(buf + i) - 48, ten_base);
+			delay_t += (*(buf + i) - 48) * ten_base;
+			ten_base *= 10;
+		}
+	HS_LOG("delay_t = %ld", delay_t);
+	hi->onewire_key_delay = msecs_to_jiffies(delay_t);
+
+	return count;
+}
+
+static DEVICE_HEADSET_ATTR(onewire_key, 0644, headset_1wire_key_show,
+			   headset_1wire_key_store);
 
 static ssize_t tty_flag_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -1413,9 +1583,22 @@ static DEVICE_ACCESSORY_ATTR(fm, 0644, fm_flag_show, fm_flag_store);
 static ssize_t debug_flag_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
+    char *s = buf;
 	int flag = hi->debug_flag;
 	int adc = -EINVAL;
 	int hpin_gpio = -EINVAL;
+	int i = 0;
+
+    int headset_mic_adc_max = 0;
+    int headset_mic_adc_min = 0;
+    int headset_beats_adc_max = 0;
+    int headset_beats_adc_min = 0;
+    int headset_beats_solo_adc_max = 0;
+    int headset_beats_solo_adc_min = 0;
+    int headset_no_mic_adc_max = 0;
+    int headset_no_mic_adc_min = 0;
+    int headset_uart_adc_max = 0;
+    int headset_uart_adc_min = 0;
 
 	HS_DBG();
 
@@ -1424,8 +1607,55 @@ static ssize_t debug_flag_show(struct device *dev,
 	if (hs_mgr_notifier.remote_adc)
 		hs_mgr_notifier.remote_adc(&adc);
 
-	return sprintf(buf, "Debug Flag %d, HP_DET %d, ADC %d\n", flag,
-		       hpin_gpio, adc);
+    for (i = 0; i < hi->pdata.headset_config_num; i++) {
+        if (hi->pdata.headset_config[i].type == HEADSET_MIC &&
+            headset_mic_adc_max == 0 && headset_mic_adc_min ==0) {
+            headset_mic_adc_max = hi->pdata.headset_config[i].adc_max;
+            headset_mic_adc_min = hi->pdata.headset_config[i].adc_min;
+        }
+        if (hi->pdata.headset_config[i].type == HEADSET_BEATS &&
+            headset_beats_adc_max == 0 && headset_beats_adc_min ==0) {
+            headset_beats_adc_max = hi->pdata.headset_config[i].adc_max;
+            headset_beats_adc_min = hi->pdata.headset_config[i].adc_min;
+        }
+        if (hi->pdata.headset_config[i].type == HEADSET_BEATS_SOLO &&
+            headset_beats_solo_adc_max == 0 && headset_beats_solo_adc_min ==0) {
+            headset_beats_solo_adc_max = hi->pdata.headset_config[i].adc_max;
+            headset_beats_solo_adc_min = hi->pdata.headset_config[i].adc_min;
+        }
+        if (hi->pdata.headset_config[i].type == HEADSET_NO_MIC &&
+            headset_no_mic_adc_max == 0 && headset_no_mic_adc_min ==0) {
+            headset_no_mic_adc_max = hi->pdata.headset_config[i].adc_max;
+            headset_no_mic_adc_min = hi->pdata.headset_config[i].adc_min;
+        }
+        if (hi->pdata.headset_config[i].type == HEADSET_UART &&
+            headset_uart_adc_max == 0 && headset_uart_adc_min == 0) {
+            headset_uart_adc_max = hi->pdata.headset_config[i].adc_max;
+            headset_uart_adc_min = hi->pdata.headset_config[i].adc_min;
+        }
+    }
+
+    mutex_lock(&hi->mutex_lock);
+    s += sprintf(s, "Debug Flag = %d\nHP_DET = %d\nADC = %d\n", flag, hpin_gpio, adc);
+    s += sprintf(s, "DET report count = %d\nDET bounce count = %d\n", hpin_report, hpin_bounce);
+    s += sprintf(s, "KEY report count = %d\nKEY bounce count = %d\n", key_report, key_bounce);
+
+    s += sprintf(s, "headset_mic_adc_max = %d\n", headset_mic_adc_max);
+    s += sprintf(s, "headset_mic_adc_min = %d\n", headset_mic_adc_min);
+    s += sprintf(s, "headset_beats_adc_max = %d\n", headset_beats_adc_max);
+    s += sprintf(s, "headset_beats_adc_min = %d\n", headset_beats_adc_min);
+    s += sprintf(s, "headset_beats_solo_adc_max = %d\n", headset_beats_solo_adc_max);
+    s += sprintf(s, "headset_beats_solo_adc_min = %d\n", headset_beats_solo_adc_min);
+    s += sprintf(s, "headset_no_mic_adc_max = %d\n", headset_no_mic_adc_max);
+    s += sprintf(s, "headset_no_mic_adc_min = %d\n", headset_no_mic_adc_min);
+
+    key_report = 0;
+    key_bounce = 0;
+    hpin_report = 0;
+    hpin_bounce = 0;
+    mutex_unlock(&hi->mutex_lock);
+
+    return (s - buf);
 }
 
 static ssize_t debug_flag_store(struct device *dev,
@@ -1494,6 +1724,9 @@ static ssize_t debug_flag_store(struct device *dev,
 		HS_LOG("Headset simulation: usb_audio");
 		state = BIT_USB_AUDIO_OUT;
 		switch_send_event(state, 1);
+	} else if (strncmp(buf, "bias_en", count - 1) == 0) {
+		HS_LOG("Headset bias on");
+		aic3008_set_mic_bias(1);
 	} else {
 		HS_LOG("Invalid parameter");
 		return count;
@@ -1528,7 +1761,15 @@ static int register_attributes(void)
 	if (ret)
 		goto err_create_headset_state_device_file;
 
+	ret = device_create_file(hi->headset_dev, &dev_attr_headset_simulate);
+	if (ret)
+		goto err_create_headset_simulate_device_file;
+
 	ret = device_create_file(hi->headset_dev, &dev_attr_headset_1wire);
+	if (ret)
+		goto err_create_headset_state_device_file;
+
+	ret = device_create_file(hi->headset_dev, &dev_attr_headset_1wire_state);
 	if (ret)
 		goto err_create_headset_state_device_file;
 
@@ -1572,6 +1813,10 @@ static int register_attributes(void)
 	if (ret)
 		goto err_create_debug_device_file;
 
+	ret = device_create_file(hi->debug_dev, &dev_attr_headset_onewire_key);
+	if (ret)
+		goto err_create_debug_device_file;
+
 	return 0;
 
 err_create_debug_device_file:
@@ -1590,6 +1835,9 @@ err_create_tty_device_file:
 	device_unregister(hi->tty_dev);
 
 err_create_tty_device:
+	device_remove_file(hi->headset_dev, &dev_attr_headset_simulate);
+
+err_create_headset_simulate_device_file:
 	device_remove_file(hi->headset_dev, &dev_attr_headset_state);
 
 err_create_headset_state_device_file:
@@ -1611,6 +1859,7 @@ static void unregister_attributes(void)
 	device_unregister(hi->fm_dev);
 	device_remove_file(hi->tty_dev, &dev_attr_tty);
 	device_unregister(hi->tty_dev);
+	device_remove_file(hi->headset_dev, &dev_attr_headset_simulate);
 	device_remove_file(hi->headset_dev, &dev_attr_headset_state);
 	device_remove_file(hi->headset_dev, &dev_attr_headset_1wire);
 	device_unregister(hi->headset_dev);
@@ -1629,7 +1878,9 @@ static void headset_mgr_init(void)
 
 static void htc_headset_mgr_early_suspend(struct early_suspend *h)
 {
+	MF_DEBUG("00260000");
 	HS_DBG();
+	MF_DEBUG("00260001");
 }
 
 static void htc_headset_mgr_late_resume(struct early_suspend *h)
@@ -1693,6 +1944,7 @@ static int htc_headset_mgr_probe(struct platform_device *pdev)
 	hi->pdata.tx_1wire_gpio = pdata->tx_1wire_gpio;
 	hi->pdata.rx_1wire_gpio = pdata->rx_1wire_gpio;
 	hi->pdata.level_1wire_gpio = pdata->level_1wire_gpio;
+	hi->pdata.uart_1wire_gpio = pdata->uart_1wire_gpio;
 	hi->pdata.enable_1wire = pdata->enable_1wire;
 	strncpy(hi->pdata.dev_1wire, pdata->dev_1wire, UART_DEV_NAME_LEN);
 
@@ -1702,6 +1954,9 @@ static int htc_headset_mgr_probe(struct platform_device *pdev)
 
 	hi->pdata.headset_init = pdata->headset_init;
 	hi->pdata.headset_power = pdata->headset_power;
+	hi->pdata.uart_lv_shift_en = pdata->uart_lv_shift_en;
+	hi->pdata.uart_tx_gpo = pdata->uart_tx_gpo;
+	hi->driver_one_wire_exist = 0;
 
 	if (hi->pdata.headset_init)
 		hi->pdata.headset_init();
@@ -1732,6 +1987,8 @@ static int htc_headset_mgr_probe(struct platform_device *pdev)
 	hi->tty_enable_flag = 0;
 	hi->fm_flag = 0;
 	hi->debug_flag = 0;
+	hi->key_code_1wire_index = 0;
+	hi->onewire_key_delay = HS_JIFFIES_1WIRE_BUTTON;
 
 	mutex_init(&hi->mutex_lock);
 
@@ -1783,6 +2040,8 @@ static int htc_headset_mgr_probe(struct platform_device *pdev)
 	set_bit(KEY_PREVIOUSSONG, hi->input->keybit);
 	set_bit(KEY_MEDIA, hi->input->keybit);
 	set_bit(KEY_SEND, hi->input->keybit);
+	set_bit(KEY_FASTFORWARD, hi->input->keybit);
+	set_bit(KEY_REWIND, hi->input->keybit);
 
 	ret = input_register_device(hi->input);
 	if (ret < 0)
@@ -1871,7 +2130,8 @@ static struct platform_driver htc_headset_mgr_driver = {
 
 
 static int __init htc_headset_mgr_init(void)
-{
+{	if (board_mfg_mode() == BOARD_MFG_MODE_OFFMODE_CHARGING)
+		return 0;
 	HS_LOG("INIT");
 	return platform_driver_register(&htc_headset_mgr_driver);
 }

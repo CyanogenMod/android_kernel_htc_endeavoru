@@ -868,7 +868,7 @@ SOC_ENUM("Right Capture Mode", rin_mode),
 SOC_DOUBLE_R("Capture Volume", WM8904_ANALOGUE_LEFT_INPUT_0,
 	     WM8904_ANALOGUE_RIGHT_INPUT_0, 0, 31, 0),
 SOC_DOUBLE_R("Capture Switch", WM8904_ANALOGUE_LEFT_INPUT_0,
-	     WM8904_ANALOGUE_RIGHT_INPUT_0, 7, 1, 0),
+	     WM8904_ANALOGUE_RIGHT_INPUT_0, 7, 1, 1),
 
 SOC_SINGLE("High Pass Filter Switch", WM8904_ADC_DIGITAL_0, 4, 1, 0),
 SOC_ENUM("High Pass Filter Mode", hpf_mode),
@@ -2560,6 +2560,7 @@ static __devexit int wm8904_i2c_remove(struct i2c_client *client)
 static const struct i2c_device_id wm8904_i2c_id[] = {
 	{ "wm8904", WM8904 },
 	{ "wm8912", WM8912 },
+	{ "wm8918", WM8904 },   /* Actually a subset, updates to follow */
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, wm8904_i2c_id);

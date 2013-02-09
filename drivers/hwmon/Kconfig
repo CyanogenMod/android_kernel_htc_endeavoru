@@ -41,7 +41,7 @@ comment "Native drivers"
 
 config SENSORS_ABITUGURU
 	tristate "Abit uGuru (rev 1 & 2)"
-	depends on X86 && EXPERIMENTAL
+	depends on X86 && DMI && EXPERIMENTAL
 	help
 	  If you say yes here you get support for the sensor part of the first
 	  and second revision of the Abit uGuru chip. The voltage and frequency
@@ -56,7 +56,7 @@ config SENSORS_ABITUGURU
 
 config SENSORS_ABITUGURU3
 	tristate "Abit uGuru (rev 3)"
-	depends on X86 && EXPERIMENTAL
+	depends on X86 && DMI && EXPERIMENTAL
 	help
 	  If you say yes here you get support for the sensor part of the
 	  third revision of the Abit uGuru chip. Only reading the sensors
@@ -223,7 +223,7 @@ config SENSORS_ADT7475
 
 config SENSORS_ASC7621
 	tristate "Andigilog aSC7621"
-	depends on HWMON && I2C
+	depends on I2C
 	help
 	  If you say yes here you get support for the aSC7621
 	  family of SMBus sensors chip found on most Intel X38, X48, X58,
@@ -247,16 +247,26 @@ config SENSORS_K8TEMP
 	  will be called k8temp.
 
 config SENSORS_K10TEMP
-	tristate "AMD Family 10h/11h/12h/14h temperature sensor"
+	tristate "AMD Family 10h+ temperature sensor"
 	depends on X86 && PCI
 	help
 	  If you say yes here you get support for the temperature
 	  sensor(s) inside your CPU. Supported are later revisions of
 	  the AMD Family 10h and all revisions of the AMD Family 11h,
-	  12h (Llano), and 14h (Brazos) microarchitectures.
+	  12h (Llano), 14h (Brazos) and 15h (Bulldozer) microarchitectures.
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called k10temp.
+
+config SENSORS_FAM15H_POWER
+	tristate "AMD Family 15h processor power"
+	depends on X86 && PCI
+	help
+	  If you say yes here you get support for processor power
+	  information of your AMD family 15h CPU.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called fam15h_power.
 
 config SENSORS_ASB100
 	tristate "Asus ASB100 Bach"
@@ -329,11 +339,11 @@ config SENSORS_F71882FG
 	  If you say yes here you get support for hardware monitoring
 	  features of many Fintek Super-I/O (LPC) chips. The currently
 	  supported chips are:
-	    F71808E
+	    F71808E/A
 	    F71858FG
 	    F71862FG
 	    F71863FG
-	    F71869F/E
+	    F71869F/E/A
 	    F71882FG
 	    F71883FG
 	    F71889FG/ED/A
@@ -417,13 +427,6 @@ config SENSORS_CORETEMP
 	  If you say yes here you get support for the temperature
 	  sensor inside your CPU. Most of the family 6 CPUs
 	  are supported. Check Documentation/hwmon/coretemp for details.
-
-config SENSORS_PKGTEMP
-	tristate "Intel processor package temperature sensor"
-	depends on X86 && EXPERIMENTAL
-	help
-	  If you say yes here you get support for the package level temperature
-	  sensor inside your CPU. Check documentation/driver for details.
 
 config SENSORS_IBMAEM
 	tristate "IBM Active Energy Manager temperature/power sensors and control"
@@ -630,7 +633,7 @@ config SENSORS_LM90
 	  LM86, LM89 and LM99, Analog Devices ADM1032, ADT7461, and ADT7461A,
 	  Maxim MAX6646, MAX6647, MAX6648, MAX6649, MAX6657, MAX6658, MAX6659,
 	  MAX6680, MAX6681, MAX6692, MAX6695, MAX6696, ON Semiconductor NCT1008,
-	  and Winbond/Nuvoton W83L771W/G/AWG/ASG sensor chips.
+	  Winbond/Nuvoton W83L771W/G/AWG/ASG and Philips SA56004 sensor chips.
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called lm90.
@@ -701,13 +704,23 @@ config SENSORS_LTC4261
 	  be called ltc4261.
 
 config SENSORS_LM95241
-	tristate "National Semiconductor LM95241 sensor chip"
+	tristate "National Semiconductor LM95241 and compatibles"
 	depends on I2C
 	help
-	  If you say yes here you get support for LM95241 sensor chip.
+	  If you say yes here you get support for LM95231 and LM95241 sensor
+	  chips.
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called lm95241.
+
+config SENSORS_LM95245
+	tristate "National Semiconductor LM95245 sensor chip"
+	depends on I2C && EXPERIMENTAL
+	help
+	  If you say yes here you get support for LM95245 sensor chip.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called lm95245.
 
 config SENSORS_MAX1111
 	tristate "Maxim MAX1111 Multichannel, Serial 8-bit ADC chip"
@@ -718,6 +731,22 @@ config SENSORS_MAX1111
 	  This driver can also be built as a module.  If so, the module
 	  will be called max1111.
 
+config SENSORS_MAX16065
+	tristate "Maxim MAX16065 System Manager and compatibles"
+	depends on I2C
+	help
+	  If you say yes here you get support for hardware monitoring
+	  capabilities of the following Maxim System Manager chips.
+	    MAX16065
+	    MAX16066
+	    MAX16067
+	    MAX16068
+	    MAX16070
+	    MAX16071
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called max16065.
+
 config SENSORS_MAX1619
 	tristate "Maxim MAX1619 sensor chip"
 	depends on I2C
@@ -726,6 +755,16 @@ config SENSORS_MAX1619
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called max1619.
+
+config SENSORS_MAX1668
+	tristate "Maxim MAX1668 and compatibles"
+	depends on I2C && EXPERIMENTAL
+	help
+	  If you say yes here you get support for MAX1668, MAX1989 and
+	  MAX1805 chips.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called max1668.
 
 config SENSORS_MAX6639
 	tristate "Maxim MAX6639 sensor chip"
@@ -737,6 +776,17 @@ config SENSORS_MAX6639
 	  This driver can also be built as a module.  If so, the module
 	  will be called max6639.
 
+config SENSORS_MAX6642
+	tristate "Maxim MAX6642 sensor chip"
+	depends on I2C && EXPERIMENTAL
+	help
+	  If you say yes here you get support for MAX6642 sensor chip.
+	  MAX6642 is a SMBus-Compatible Remote/Local Temperature Sensor
+	  with Overtemperature Alarm from Maxim.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called max6642.
+
 config SENSORS_MAX6650
 	tristate "Maxim MAX6650 sensor chip"
 	depends on I2C && EXPERIMENTAL
@@ -746,6 +796,20 @@ config SENSORS_MAX6650
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called max6650.
+
+config SENSORS_NTC_THERMISTOR
+	tristate "NTC thermistor support"
+	depends on EXPERIMENTAL
+	help
+	  This driver supports NTC thermistors sensor reading and its
+	  interpretation. The driver can also monitor the temperature and
+	  send notifications about the temperature.
+
+	  Currently, this driver supports
+	  NCP15WB473, NCP18WB473, NCP21WB473, NCP03WB473, and NCP15WL333.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called ntc-thermistor.
 
 config SENSORS_PC87360
 	tristate "National Semiconductor PC87360 family"
@@ -787,60 +851,7 @@ config SENSORS_PCF8591
 	  These devices are hard to detect and rarely found on mainstream
 	  hardware.  If unsure, say N.
 
-config PMBUS
-	tristate "PMBus support"
-	depends on I2C && EXPERIMENTAL
-	default n
-	help
-	  Say yes here if you want to enable PMBus support.
-
-	  This driver can also be built as a module. If so, the module will
-	  be called pmbus_core.
-
-if PMBUS
-
-config SENSORS_PMBUS
-	tristate "Generic PMBus devices"
-	default n
-	help
-	  If you say yes here you get hardware monitoring support for generic
-	  PMBus devices, including but not limited to BMR450, BMR451, BMR453,
-	  BMR454, and LTC2978.
-
-	  This driver can also be built as a module. If so, the module will
-	  be called pmbus.
-
-config SENSORS_MAX16064
-	tristate "Maxim MAX16064"
-	default n
-	help
-	  If you say yes here you get hardware monitoring support for Maxim
-	  MAX16064.
-
-	  This driver can also be built as a module. If so, the module will
-	  be called max16064.
-
-config SENSORS_MAX34440
-	tristate "Maxim MAX34440/MAX34441"
-	default n
-	help
-	  If you say yes here you get hardware monitoring support for Maxim
-	  MAX34440 and MAX34441.
-
-	  This driver can also be built as a module. If so, the module will
-	  be called max34440.
-
-config SENSORS_MAX8688
-	tristate "Maxim MAX8688"
-	default n
-	help
-	  If you say yes here you get hardware monitoring support for Maxim
-	  MAX8688.
-
-	  This driver can also be built as a module. If so, the module will
-	  be called max8688.
-
-endif # PMBUS
+source drivers/hwmon/pmbus/Kconfig
 
 config SENSORS_SHT15
 	tristate "Sensiron humidity and temperature sensors. SHT15 and compat."
@@ -936,6 +947,16 @@ config SENSORS_EMC2103
 	  This driver can also be built as a module.  If so, the module
 	  will be called emc2103.
 
+config SENSORS_EMC6W201
+	tristate "SMSC EMC6W201"
+	depends on I2C
+	help
+	  If you say yes here you get support for the SMSC EMC6W201
+	  hardware monitoring chip.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called emc6w201.
+
 config SENSORS_SMSC47M1
 	tristate "SMSC LPC47M10x and compatibles"
 	help
@@ -979,14 +1000,34 @@ config SENSORS_SMSC47B397
 	  This driver can also be built as a module.  If so, the module
 	  will be called smsc47b397.
 
+config SENSORS_SCH56XX_COMMON
+	tristate
+	default n
+
 config SENSORS_SCH5627
 	tristate "SMSC SCH5627"
+	select SENSORS_SCH56XX_COMMON
 	help
 	  If you say yes here you get support for the hardware monitoring
 	  features of the SMSC SCH5627 Super-I/O chip.
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called sch5627.
+
+config SENSORS_SCH5636
+	tristate "SMSC SCH5636"
+	select SENSORS_SCH56XX_COMMON
+	help
+	  SMSC SCH5636 Super I/O chips include an embedded microcontroller for
+	  hardware monitoring solutions, allowing motherboard manufacturers to
+	  create their own custom hwmon solution based upon the SCH5636.
+
+	  Currently this driver only supports the Fujitsu Theseus SCH5636 based
+	  hwmon solution. Say yes here if you want support for the Fujitsu
+	  Theseus' hardware monitoring features.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called sch5636.
 
 config SENSORS_ADS1015
 	tristate "Texas Instruments ADS1015"
@@ -1088,6 +1129,7 @@ config SENSORS_TWL4030_MADC
 config SENSORS_VIA_CPUTEMP
 	tristate "VIA CPU temperature sensor"
 	depends on X86
+	select HWMON_VID
 	help
 	  If you say yes here you get support for the temperature
 	  sensor inside your CPU. Supported are all known variants of
@@ -1321,6 +1363,16 @@ config SENSORS_INA230
 if ACPI
 
 comment "ACPI drivers"
+
+config SENSORS_ACPI_POWER
+	tristate "ACPI 4.0 power meter"
+	help
+	  This driver exposes ACPI 4.0 power meters as hardware monitoring
+	  devices.  Say Y (or M) if you have a computer with ACPI 4.0 firmware
+	  and a power meter.
+
+	  To compile this driver as a module, choose M here:
+	  the module will be called acpi_power_meter.
 
 config SENSORS_ATK0110
 	tristate "ASUS ATK0110"

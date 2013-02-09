@@ -32,8 +32,6 @@
 #include <asm/sections.h>
 #include <asm/tlb.h>
 
-DEFINE_PER_CPU(struct mmu_gather, mmu_gathers);
-
 pg_data_t pg_data_map[MAX_NUMNODES];
 EXPORT_SYMBOL(pg_data_map);
 
@@ -84,11 +82,6 @@ void __init mem_init(void)
 	int datapages = 0;
 	int initpages = 0;
 	int i;
-
-#ifdef CONFIG_ATARI
-	if (MACH_IS_ATARI)
-		atari_stram_mem_init_hook();
-#endif
 
 	/* this will put all memory onto the freelists */
 	totalram_pages = num_physpages = 0;

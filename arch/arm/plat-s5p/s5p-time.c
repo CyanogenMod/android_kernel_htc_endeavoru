@@ -290,7 +290,7 @@ static void __init s5p_clockevent_init(void)
 	setup_irq(irq_number, &s5p_clock_event_irq);
 }
 
-static cycle_t s5p_timer_read(struct clocksource *cs)
+static void __iomem *s5p_timer_reg(void)
 {
 	unsigned long offset = 0;
 
@@ -308,10 +308,10 @@ static cycle_t s5p_timer_read(struct clocksource *cs)
 
 	default:
 		printk(KERN_ERR "Invalid Timer %d\n", timer_source.source_id);
-		return 0;
+		return NULL;
 	}
 
-	return (cycle_t) ~__raw_readl(S3C_TIMERREG(offset));
+	return S3C_TIMERREG(offset);
 }
 
 /*
@@ -325,62 +325,23 @@ static DEFINE_CLOCK_DATA(cd);
 
 unsigned long long notrace sched_clock(void)
 {
-	u32 cyc;
-	unsigned long offset = 0;
+	void __iomem *reg = s5p_timer_reg();
 
-	switch (timer_source.source_id) {
-	case S5P_PWM0:
-	case S5P_PWM1:
-	case S5P_PWM2:
-	case S5P_PWM3:
-		offset = (timer_source.source_id * 0x0c) + 0x14;
-		break;
-
-	case S5P_PWM4:
-		offset = 0x40;
-		break;
-
-	default:
-		printk(KERN_ERR "Invalid Timer %d\n", timer_source.source_id);
+	if (!reg)
 		return 0;
-	}
 
-	cyc = ~__raw_readl(S3C_TIMERREG(offset));
-	return cyc_to_sched_clock(&cd, cyc, (u32)~0);
+	return cyc_to_sched_clock(&cd, ~__raw_readl(reg), (u32)~0);
 }
 
 static void notrace s5p_update_sched_clock(void)
 {
-	u32 cyc;
-	unsigned long offset = 0;
+	void __iomem *reg = s5p_timer_reg();
 
-	switch (timer_source.source_id) {
-	case S5P_PWM0:
-	case S5P_PWM1:
-	case S5P_PWM2:
-	case S5P_PWM3:
-		offset = (timer_source.source_id * 0x0c) + 0x14;
-		break;
+	if (!reg)
+		return;
 
-	case S5P_PWM4:
-		offset = 0x40;
-		break;
-
-	default:
-		printk(KERN_ERR "Invalid Timer %d\n", timer_source.source_id);
-	}
-
-	cyc = ~__raw_readl(S3C_TIMERREG(offset));
-	update_sched_clock(&cd, cyc, (u32)~0);
+	update_sched_clock(&cd, ~__raw_readl(reg), (u32)~0);
 }
-
-struct clocksource time_clocksource = {
-	.name		= "s5p_clocksource_timer",
-	.rating		= 250,
-	.read		= s5p_timer_read,
-	.mask		= CLOCKSOURCE_MASK(32),
-	.flags		= CLOCK_SOURCE_IS_CONTINUOUS,
-};
 
 static void __init s5p_clocksource_init(void)
 {
@@ -394,13 +355,14 @@ static void __init s5p_clocksource_init(void)
 
 	clock_rate = clk_get_rate(tin_source);
 
-	init_sched_clock(&cd, s5p_update_sched_clock, 32, clock_rate);
-
 	s5p_time_setup(timer_source.source_id, TCNT_MAX);
 	s5p_time_start(timer_source.source_id, PERIODIC);
 
-	if (clocksource_register_hz(&time_clocksource, clock_rate))
-		panic("%s: can't register clocksource\n", time_clocksource.name);
+	init_sched_clock(&cd, s5p_update_sched_clock, 32, clock_rate);
+
+	if (clocksource_mmio_init(s5p_timer_reg(), "s5p_clocksource_timer",
+			clock_rate, 250, 32, clocksource_mmio_readl_down))
+		panic("s5p_clocksource_timer: can't register clocksource\n");
 }
 
 static void __init s5p_timer_resources(void)
@@ -408,12 +370,17 @@ static void __init s5p_timer_resources(void)
 
 	unsigned long event_id = timer_source.event_id;
 	unsigned long source_id = timer_source.source_id;
+	char devname[15];
 
 	timerclk = clk_get(NULL, "timers");
 	if (IS_ERR(timerclk))
 		panic("failed to get timers clock for timer");
 
 	clk_enable(timerclk);
+
+	sprintf(devname, "s3c24xx-pwm.%lu", event_id);
+	s3c_device_timer[event_id].id = event_id;
+	s3c_device_timer[event_id].dev.init_name = devname;
 
 	tin_event = clk_get(&s3c_device_timer[event_id].dev, "pwm-tin");
 	if (IS_ERR(tin_event))
@@ -424,6 +391,10 @@ static void __init s5p_timer_resources(void)
 		panic("failed to get pwm-tdiv clock for event timer");
 
 	clk_enable(tin_event);
+
+	sprintf(devname, "s3c24xx-pwm.%lu", source_id);
+	s3c_device_timer[source_id].id = source_id;
+	s3c_device_timer[source_id].dev.init_name = devname;
 
 	tin_source = clk_get(&s3c_device_timer[source_id].dev, "pwm-tin");
 	if (IS_ERR(tin_source))

@@ -23,7 +23,6 @@
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/crc7.h>
 #include <linux/spi/spi.h>
 #include <linux/etherdevice.h>
 #include <linux/ieee80211.h>
@@ -76,7 +75,7 @@ int wl1271_cmd_send(struct wl1271 *wl, u16 id, void *buf, size_t len,
 		if (time_after(jiffies, timeout)) {
 			wl1271_error("command complete timeout");
 			ret = -ETIMEDOUT;
-			goto out;
+			goto fail;
 		}
 
 		poll_count++;
@@ -96,26 +95,35 @@ int wl1271_cmd_send(struct wl1271 *wl, u16 id, void *buf, size_t len,
 	status = le16_to_cpu(cmd->status);
 	if (status != CMD_STATUS_SUCCESS) {
 		wl1271_error("command execute failure %d", status);
-		ieee80211_queue_work(wl->hw, &wl->recovery_work);
 		ret = -EIO;
+		goto fail;
 	}
 
 	wl1271_write32(wl, ACX_REG_INTERRUPT_ACK,
 		       WL1271_ACX_INTR_CMD_COMPLETE);
+	return 0;
 
-out:
+fail:
+	WARN_ON(1);
+	wl12xx_queue_recovery_work(wl);
 	return ret;
 }
 
 int wl1271_cmd_general_parms(struct wl1271 *wl)
 {
 	struct wl1271_general_parms_cmd *gen_parms;
-	struct wl1271_ini_general_params *gp = &wl->nvs->general_params;
+	struct wl1271_ini_general_params *gp =
+		&((struct wl1271_nvs_file *)wl->nvs)->general_params;
 	bool answer = false;
 	int ret;
 
 	if (!wl->nvs)
 		return -ENODEV;
+
+	if (gp->tx_bip_fem_manufacturer >= WL1271_INI_FEM_MODULE_COUNT) {
+		wl1271_warning("FEM index from INI out of bounds");
+		return -EINVAL;
+	}
 
 	gen_parms = kzalloc(sizeof(*gen_parms), GFP_KERNEL);
 	if (!gen_parms)
@@ -128,6 +136,14 @@ int wl1271_cmd_general_parms(struct wl1271 *wl)
 	if (gp->tx_bip_fem_auto_detect)
 		answer = true;
 
+	/* Override the REF CLK from the NVS with the one from platform data */
+	gen_parms->general_params.ref_clock = wl->ref_clock;
+
+	/* LPD mode enable (bits 6-7) in WL1271 AP mode only */
+	if (wl->quirks & WL12XX_QUIRK_LPD_MODE)
+		gen_parms->general_params.general_settings |=
+			GENERAL_SETTINGS_DRPW_LPD;
+
 	ret = wl1271_cmd_test(wl, gen_parms, sizeof(*gen_parms), answer);
 	if (ret < 0) {
 		wl1271_warning("CMD_INI_FILE_GENERAL_PARAM failed");
@@ -136,6 +152,66 @@ int wl1271_cmd_general_parms(struct wl1271 *wl)
 
 	gp->tx_bip_fem_manufacturer =
 		gen_parms->general_params.tx_bip_fem_manufacturer;
+
+	if (gp->tx_bip_fem_manufacturer >= WL1271_INI_FEM_MODULE_COUNT) {
+		wl1271_warning("FEM index from FW out of bounds");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	wl1271_debug(DEBUG_CMD, "FEM autodetect: %s, manufacturer: %d\n",
+		     answer ? "auto" : "manual", gp->tx_bip_fem_manufacturer);
+
+out:
+	kfree(gen_parms);
+	return ret;
+}
+
+int wl128x_cmd_general_parms(struct wl1271 *wl)
+{
+	struct wl128x_general_parms_cmd *gen_parms;
+	struct wl128x_ini_general_params *gp =
+		&((struct wl128x_nvs_file *)wl->nvs)->general_params;
+	bool answer = false;
+	int ret;
+
+	if (!wl->nvs)
+		return -ENODEV;
+
+	if (gp->tx_bip_fem_manufacturer >= WL1271_INI_FEM_MODULE_COUNT) {
+		wl1271_warning("FEM index from ini out of bounds");
+		return -EINVAL;
+	}
+
+	gen_parms = kzalloc(sizeof(*gen_parms), GFP_KERNEL);
+	if (!gen_parms)
+		return -ENOMEM;
+
+	gen_parms->test.id = TEST_CMD_INI_FILE_GENERAL_PARAM;
+
+	memcpy(&gen_parms->general_params, gp, sizeof(*gp));
+
+	if (gp->tx_bip_fem_auto_detect)
+		answer = true;
+
+	/* Replace REF and TCXO CLKs with the ones from platform data */
+	gen_parms->general_params.ref_clock = wl->ref_clock;
+	gen_parms->general_params.tcxo_ref_clock = wl->tcxo_clock;
+
+	ret = wl1271_cmd_test(wl, gen_parms, sizeof(*gen_parms), answer);
+	if (ret < 0) {
+		wl1271_warning("CMD_INI_FILE_GENERAL_PARAM failed");
+		goto out;
+	}
+
+	gp->tx_bip_fem_manufacturer =
+		gen_parms->general_params.tx_bip_fem_manufacturer;
+
+	if (gp->tx_bip_fem_manufacturer >= WL1271_INI_FEM_MODULE_COUNT) {
+		wl1271_warning("FEM index from FW out of bounds");
+		ret = -EINVAL;
+		goto out;
+	}
 
 	wl1271_debug(DEBUG_CMD, "FEM autodetect: %s, manufacturer: %d\n",
 		     answer ? "auto" : "manual", gp->tx_bip_fem_manufacturer);
@@ -147,8 +223,9 @@ out:
 
 int wl1271_cmd_radio_parms(struct wl1271 *wl)
 {
+	struct wl1271_nvs_file *nvs = (struct wl1271_nvs_file *)wl->nvs;
 	struct wl1271_radio_parms_cmd *radio_parms;
-	struct wl1271_ini_general_params *gp = &wl->nvs->general_params;
+	struct wl1271_ini_general_params *gp = &nvs->general_params;
 	int ret;
 
 	if (!wl->nvs)
@@ -161,19 +238,63 @@ int wl1271_cmd_radio_parms(struct wl1271 *wl)
 	radio_parms->test.id = TEST_CMD_INI_FILE_RADIO_PARAM;
 
 	/* 2.4GHz parameters */
-	memcpy(&radio_parms->static_params_2, &wl->nvs->stat_radio_params_2,
+	memcpy(&radio_parms->static_params_2, &nvs->stat_radio_params_2,
 	       sizeof(struct wl1271_ini_band_params_2));
 	memcpy(&radio_parms->dyn_params_2,
-	       &wl->nvs->dyn_radio_params_2[gp->tx_bip_fem_manufacturer].params,
+	       &nvs->dyn_radio_params_2[gp->tx_bip_fem_manufacturer].params,
 	       sizeof(struct wl1271_ini_fem_params_2));
 
 	/* 5GHz parameters */
 	memcpy(&radio_parms->static_params_5,
-	       &wl->nvs->stat_radio_params_5,
+	       &nvs->stat_radio_params_5,
 	       sizeof(struct wl1271_ini_band_params_5));
 	memcpy(&radio_parms->dyn_params_5,
-	       &wl->nvs->dyn_radio_params_5[gp->tx_bip_fem_manufacturer].params,
+	       &nvs->dyn_radio_params_5[gp->tx_bip_fem_manufacturer].params,
 	       sizeof(struct wl1271_ini_fem_params_5));
+
+	wl1271_dump(DEBUG_CMD, "TEST_CMD_INI_FILE_RADIO_PARAM: ",
+		    radio_parms, sizeof(*radio_parms));
+
+	ret = wl1271_cmd_test(wl, radio_parms, sizeof(*radio_parms), 0);
+	if (ret < 0)
+		wl1271_warning("CMD_INI_FILE_RADIO_PARAM failed");
+
+	kfree(radio_parms);
+	return ret;
+}
+
+int wl128x_cmd_radio_parms(struct wl1271 *wl)
+{
+	struct wl128x_nvs_file *nvs = (struct wl128x_nvs_file *)wl->nvs;
+	struct wl128x_radio_parms_cmd *radio_parms;
+	struct wl128x_ini_general_params *gp = &nvs->general_params;
+	int ret;
+
+	if (!wl->nvs)
+		return -ENODEV;
+
+	radio_parms = kzalloc(sizeof(*radio_parms), GFP_KERNEL);
+	if (!radio_parms)
+		return -ENOMEM;
+
+	radio_parms->test.id = TEST_CMD_INI_FILE_RADIO_PARAM;
+
+	/* 2.4GHz parameters */
+	memcpy(&radio_parms->static_params_2, &nvs->stat_radio_params_2,
+	       sizeof(struct wl128x_ini_band_params_2));
+	memcpy(&radio_parms->dyn_params_2,
+	       &nvs->dyn_radio_params_2[gp->tx_bip_fem_manufacturer].params,
+	       sizeof(struct wl128x_ini_fem_params_2));
+
+	/* 5GHz parameters */
+	memcpy(&radio_parms->static_params_5,
+	       &nvs->stat_radio_params_5,
+	       sizeof(struct wl128x_ini_band_params_5));
+	memcpy(&radio_parms->dyn_params_5,
+	       &nvs->dyn_radio_params_5[gp->tx_bip_fem_manufacturer].params,
+	       sizeof(struct wl128x_ini_fem_params_5));
+
+	radio_parms->fem_vendor_and_options = nvs->fem_vendor_and_options;
 
 	wl1271_dump(DEBUG_CMD, "TEST_CMD_INI_FILE_RADIO_PARAM: ",
 		    radio_parms, sizeof(*radio_parms));
@@ -257,7 +378,7 @@ static int wl1271_cmd_wait_for_event(struct wl1271 *wl, u32 mask)
 
 	ret = wl1271_cmd_wait_for_event_or_timeout(wl, mask);
 	if (ret != 0) {
-		ieee80211_queue_work(wl->hw, &wl->recovery_work);
+		wl12xx_queue_recovery_work(wl);
 		return ret;
 	}
 
@@ -300,10 +421,6 @@ int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type)
 	memcpy(join->ssid, wl->ssid, wl->ssid_len);
 
 	join->ctrl |= wl->session_counter << WL1271_JOIN_CMD_TX_SESSION_OFFSET;
-
-	/* reset TX security counters */
-	wl->tx_security_last_seq = 0;
-	wl->tx_security_seq = 0;
 
 	wl1271_debug(DEBUG_CMD, "cmd join: basic_rate_set=0x%x, rate_set=0x%x",
 		join->basic_rate_set, join->supported_rate_set);
@@ -985,7 +1102,7 @@ int wl1271_cmd_start_bss(struct wl1271 *wl)
 
 	memcpy(cmd->bssid, bss_conf->bssid, ETH_ALEN);
 
-	cmd->aging_period = cpu_to_le16(WL1271_AP_DEF_INACTIV_SEC);
+	cmd->aging_period = cpu_to_le16(wl->conf.tx.ap_aging_period);
 	cmd->bss_index = WL1271_AP_BSS_INDEX;
 	cmd->global_hlid = WL1271_AP_GLOBAL_HLID;
 	cmd->broadcast_hlid = WL1271_AP_BROADCAST_HLID;
@@ -1072,14 +1189,7 @@ int wl1271_cmd_add_sta(struct wl1271 *wl, struct ieee80211_sta *sta, u8 hlid)
 	cmd->bss_index = WL1271_AP_BSS_INDEX;
 	cmd->aid = sta->aid;
 	cmd->hlid = hlid;
-
-	/*
-	 * FIXME: Does STA support QOS? We need to propagate this info from
-	 * hostapd. Currently not that important since this is only used for
-	 * sending the correct flavor of null-data packet in response to a
-	 * trigger.
-	 */
-	cmd->wmm = 0;
+	cmd->wmm = sta->wme ? 1 : 0;
 
 	cmd->supported_rates = cpu_to_le32(wl1271_tx_enabled_rates_get(wl,
 						sta->supp_rates[wl->band]));
@@ -1128,6 +1238,90 @@ int wl1271_cmd_remove_sta(struct wl1271 *wl, u8 hlid)
 	 * due to a firmware bug.
 	 */
 	wl1271_cmd_wait_for_event_or_timeout(wl, STA_REMOVE_COMPLETE_EVENT_ID);
+
+out_free:
+	kfree(cmd);
+
+out:
+	return ret;
+}
+
+int wl12xx_cmd_config_fwlog(struct wl1271 *wl)
+{
+	struct wl12xx_cmd_config_fwlog *cmd;
+	int ret = 0;
+
+	wl1271_debug(DEBUG_CMD, "cmd config firmware logger");
+
+	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
+	if (!cmd) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	cmd->logger_mode = wl->conf.fwlog.mode;
+	cmd->log_severity = wl->conf.fwlog.severity;
+	cmd->timestamp = wl->conf.fwlog.timestamp;
+	cmd->output = wl->conf.fwlog.output;
+	cmd->threshold = wl->conf.fwlog.threshold;
+
+	ret = wl1271_cmd_send(wl, CMD_CONFIG_FWLOGGER, cmd, sizeof(*cmd), 0);
+	if (ret < 0) {
+		wl1271_error("failed to send config firmware logger command");
+		goto out_free;
+	}
+
+out_free:
+	kfree(cmd);
+
+out:
+	return ret;
+}
+
+int wl12xx_cmd_start_fwlog(struct wl1271 *wl)
+{
+	struct wl12xx_cmd_start_fwlog *cmd;
+	int ret = 0;
+
+	wl1271_debug(DEBUG_CMD, "cmd start firmware logger");
+
+	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
+	if (!cmd) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = wl1271_cmd_send(wl, CMD_START_FWLOGGER, cmd, sizeof(*cmd), 0);
+	if (ret < 0) {
+		wl1271_error("failed to send start firmware logger command");
+		goto out_free;
+	}
+
+out_free:
+	kfree(cmd);
+
+out:
+	return ret;
+}
+
+int wl12xx_cmd_stop_fwlog(struct wl1271 *wl)
+{
+	struct wl12xx_cmd_stop_fwlog *cmd;
+	int ret = 0;
+
+	wl1271_debug(DEBUG_CMD, "cmd stop firmware logger");
+
+	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
+	if (!cmd) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = wl1271_cmd_send(wl, CMD_STOP_FWLOGGER, cmd, sizeof(*cmd), 0);
+	if (ret < 0) {
+		wl1271_error("failed to send stop firmware logger command");
+		goto out_free;
+	}
 
 out_free:
 	kfree(cmd);
