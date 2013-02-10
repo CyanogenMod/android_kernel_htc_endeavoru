@@ -1,0 +1,8 @@
+#
+# Top-level generic files
+#
+Module.symvers
+
+# MAC80211 generated files
+modules
+compat_autoconf.h
