@@ -580,6 +580,12 @@ struct snd_soc_codec {
 	/* dapm */
 	struct snd_soc_dapm_context dapm;
 
+	/* endeavoru requirements */
+	bool is_call_mode;
+	int downlink_id;
+	int uplink_id;
+	int aic3008_dsp_id;
+
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *debugfs_codec_root;
 	struct dentry *debugfs_reg;

@@ -455,13 +455,13 @@ static struct spi_board_info spi_board_info_audio[] __initdata = {
 	},
 };
 
-static struct htc_asoc_platform_data endeavoru_audio_pdata;
+/* static struct htc_asoc_platform_data endeavoru_audio_pdata; */
 
 static struct platform_device endeavoru_audio_device = {
 	.name	= "tegra-snd-aic3008",
 	.id	= 0,
 	.dev	= {
-		.platform_data  = &endeavoru_audio_pdata,
+		.platform_data  = NULL,
 	},
 };
 
@@ -1802,7 +1802,7 @@ static struct platform_device *endeavoru_audio_devices[] __initdata = {
 
 static void endeavoru_audio_init(void)
 {
-	endeavoru_audio_codec_init(&endeavoru_audio_pdata);
+/*	endeavoru_audio_codec_init(&endeavoru_audio_pdata); */
 
 	platform_add_devices(endeavoru_audio_devices,
 			ARRAY_SIZE(endeavoru_audio_devices));

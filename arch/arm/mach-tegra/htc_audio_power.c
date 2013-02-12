@@ -1,3 +1,9 @@
+#include <linux/kernel.h>
+#include <linux/delay.h>
+#include <linux/err.h>
+#include <linux/gpio.h>
+#include "gpio-names.h"
+#include <linux/regulator/consumer.h>
 #include "htc_audio_power.h"
 
 static struct regulator *audio_regulator = NULL;

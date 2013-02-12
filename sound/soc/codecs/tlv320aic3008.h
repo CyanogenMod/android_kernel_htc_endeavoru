@@ -18,11 +18,36 @@
 #define _AIC3008_H
 
 #include <sound/soc.h>
+#include <linux/regulator/consumer.h>
 #include <../arch/arm/mach-tegra/htc_audio_power.h>
+#include <../../../arch/arm/mach-tegra/gpio-names.h>
 
 #define AIC3008_MAX_PAGES        255
 #define AIC3008_MAX_REGS         128
 #define AIC3008_MAX_RETRY        10
+
+/* structures for SPI commands */
+typedef struct _CODEC_SPI_CMD {
+	unsigned char act;
+	unsigned char reg;
+	unsigned char data;
+} CODEC_SPI_CMD;
+
+typedef struct _CODEC_SPI_CMD_PARAM {
+	CODEC_SPI_CMD *data;
+	unsigned int len;
+} CODEC_SPI_CMD_PARAM;
+
+struct AIC3008_PARAM {
+	unsigned int row_num;
+	unsigned int col_num;
+	void *cmd_data;
+};
+
+struct CODEC_CFG {
+	unsigned char tb_idx;
+	unsigned char index;
+};
 
 /* control operations structure */
 struct aic3008_ctl_ops {
@@ -53,6 +78,9 @@ extern void aic3008_register_ctl_ops(struct aic3008_ctl_ops *ops);
 void aic3008_CodecInit(void);
 int aic3008_setMode(int cmd, int idx, int is_call_mode);
 void aic3008_set_mic_bias(int en);
+
+
+
 
 /*****************************************************************************/
 /* AIC3008 register addresses                                                */
@@ -248,6 +276,26 @@ void aic3008_set_mic_bias(int en);
 #define AIC3008_ASI_WCLK_NDIV			13	/* ASI WCLK N divider pwr + divide by 32 ~ 128 */
 #define AIC3008_ASI_BCLK_WCLK_OUT		14	/* ASI WCLK/BLCK output mux. */
 #define AIC3008_ASI_DATA_OUT			15	/* ASI Data Out from eg DOUT1 from ADI1 out, AD1/2/3 in, pin-pin loop back */
+
+#define AIC3008_WCLK1_GPIO				65	/* pin control for WCLK1 */
+#define AIC3008_DOUT1_GPIO				67	/* pin control for DOUT1 */
+#define AIC3008_DIN1_GPIO				68	/* pin control for DIN1 */
+#define AIC3008_WCLK2_GPIO				69	/* pin control for WCLK2 */
+#define AIC3008_BCLK2_GPIO				70	/* pin control for BCLK2 */
+#define AIC3008_DOUT2_GPIO				71	/* pin control for DOUT2 */
+#define AIC3008_DIN2_GPIO				72	/* pin control for DIN2 */
+#define AIC3008_WCLK3_GPIO				73	/* pin control for BCLK3 */
+#define AIC3008_BCLK3_GPIO				74	/* pin control for WCLK3 */
+#define AIC3008_DOUT3_GPIO				75	/* pin control for DOUT3 */
+#define AIC3008_DIN3_GPIO				76	/* pin control for DIN3 */
+#define AIC3008_MCLK2					82	/* pin control for MCLK2 */
+#define AIC3008_GPIO1					86	/* pin control for GPIO1 */
+#define AIC3008_GPIO2					87	/* pin control for GPIO2 */
+#define AIC3008_GPI1					91	/* pin control for GPI1 */
+#define AIC3008_GPI2					92	/* pin control for GPI2 */
+#define AIC3008_GPO1					96	/* pin control for GPO1 */
+#define AIC3008_DIG_MIC					101	/* Digital Microphone Input Pin Control */
+#define AIC3008_DSP_DATA_PORT			118	/* miniDSP data port control */
 /*****************************************************************************/
 
 /* Audio serial data interface control register A bits */
@@ -303,25 +351,87 @@ void aic3008_set_mic_bias(int en);
 /* Default input volume */
 #define DEFAULT_GAIN    0x20
 
+/* GPIO API */
+enum {
+	AIC3008_GPIO1_FUNC_DISABLED		= 0,
+	AIC3008_GPIO1_FUNC_AUDIO_WORDCLK_ADC	= 1,
+	AIC3008_GPIO1_FUNC_CLOCK_MUX		= 2,
+	AIC3008_GPIO1_FUNC_CLOCK_MUX_DIV2		= 3,
+	AIC3008_GPIO1_FUNC_CLOCK_MUX_DIV4		= 4,
+	AIC3008_GPIO1_FUNC_CLOCK_MUX_DIV8		= 5,
+	AIC3008_GPIO1_FUNC_SHORT_CIRCUIT_IRQ	= 6,
+	AIC3008_GPIO1_FUNC_AGC_NOISE_IRQ		= 7,
+	AIC3008_GPIO1_FUNC_INPUT			= 8,
+	AIC3008_GPIO1_FUNC_OUTPUT			= 9,
+	AIC3008_GPIO1_FUNC_DIGITAL_MIC_MODCLK	= 10,
+	AIC3008_GPIO1_FUNC_AUDIO_WORDCLK		= 11,
+	AIC3008_GPIO1_FUNC_BUTTON_IRQ		= 12,
+	AIC3008_GPIO1_FUNC_HEADSET_DETECT_IRQ	= 13,
+	AIC3008_GPIO1_FUNC_HEADSET_DETECT_OR_BUTTON_IRQ	= 14,
+	AIC3008_GPIO1_FUNC_ALL_IRQ		= 16
+};
+
+enum {
+	AIC3008_GPIO2_FUNC_DISABLED		= 0,
+	AIC3008_GPIO2_FUNC_HEADSET_DETECT_IRQ	= 2,
+	AIC3008_GPIO2_FUNC_INPUT			= 3,
+	AIC3008_GPIO2_FUNC_OUTPUT			= 4,
+	AIC3008_GPIO2_FUNC_DIGITAL_MIC_INPUT	= 5,
+	AIC3008_GPIO2_FUNC_AUDIO_BITCLK		= 8,
+	AIC3008_GPIO2_FUNC_HEADSET_DETECT_OR_BUTTON_IRQ = 9,
+	AIC3008_GPIO2_FUNC_ALL_IRQ		= 10,
+	AIC3008_GPIO2_FUNC_SHORT_CIRCUIT_OR_AGC_IRQ = 11,
+	AIC3008_GPIO2_FUNC_HEADSET_OR_BUTTON_PRESS_OR_SHORT_CIRCUIT_IRQ = 12,
+	AIC3008_GPIO2_FUNC_SHORT_CIRCUIT_IRQ	= 13,
+	AIC3008_GPIO2_FUNC_AGC_NOISE_IRQ		= 14,
+	AIC3008_GPIO2_FUNC_BUTTON_PRESS_IRQ	= 15
+};
+
+struct aic3008_setup_data {
+	unsigned int gpio_func[2];
+};
+
 /* Number of supplies voltages */
 #define AIC3008_NUM_SUPPLIES    4
 #define AIC3008_CACHEREGNUM     100
 
+struct aic3008_platform_data {
+	bool irq_active_low;   /* Set if IRQ active low, default high */
+
+    /* Default register value for R6 (Mic bias), used to configure
+	 * microphone detection.  In conjunction with gpio_cfg this
+	 * can be used to route the microphone status signals out onto
+	 * the GPIOs for use with snd_soc_jack_add_gpios().
+	 */
+	u16 micdet_cfg;
+
+	int micdet_delay;      /* Delay after microphone detection (ms) */
+
+	int gpio_base;
+
+	u32 gpio_cfg[AIC3008_CACHEREGNUM]; /* Default register values for GPIO pin mux */
+};
+
 /* codec private data */
 struct aic3008_priv {
 	struct snd_soc_codec *codec;
+	struct regulator_bulk_data supplies[AIC3008_NUM_SUPPLIES];
 	unsigned int sysclk;
 	int master;
-
-	bool is_call_mode;
-	int downlink_id;
-	int uplink_id;
-	int aic3008_dsp_id;
-	int es305_cfg_id;
+	int gpio_reset;
 
 	/* Reference counts */
+	int class_w_users;
 	int playback_active;
 	int capture_active;
+
+	struct completion wseq; /* race condition */
+
+	struct snd_soc_jack *mic_jack;
+	int mic_det;
+	int mic_short;
+	int mic_last_report;
+	int mic_delay;
 
 	struct snd_pcm_substream *master_substream;
 	struct snd_pcm_substream *slave_substream;

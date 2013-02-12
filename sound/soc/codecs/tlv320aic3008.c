@@ -30,12 +30,11 @@
 
 #include <linux/spi/spi.h>
 #include <linux/wakelock.h>
-#include <linux/switch.h>
 
 #include "tlv320aic3008.h"
 #include "tlv320aic3008-reg.h"
-#include "tlv320aic3008-tonegen.h"
 #include <linux/spi-tegra.h>
+#include <mach/board_htc.h>
 #include <linux/pm_qos_params.h>
 
 #undef LOG_TAG
@@ -48,13 +47,14 @@
 #undef AUDIO_DEBUG
 #define AUDIO_DEBUG 0
 
+#define AUD_ERR(fmt, ...) pr_tag_err(LOG_TAG, fmt, ##__VA_ARGS__)
+#define AUD_INFO(fmt, ...) pr_tag_info(LOG_TAG, fmt, ##__VA_ARGS__)
+
 #if AUDIO_DEBUG
 #define AUDIO_DEBUG_BEEP 1
-#undef AUD_DBG
 #define AUD_DBG(fmt, ...) pr_tag_info(LOG_TAG, fmt, ##__VA_ARGS__)
 #else
 #define AUDIO_DEBUG_BEEP 0
-#undef AUD_DBG
 #define AUD_DBG(fmt, ...) do { } while (0)
 #endif
 
@@ -72,14 +72,13 @@ static int aic3008_opened;
 static CODEC_SPI_CMD **aic3008_uplink;
 static CODEC_SPI_CMD **aic3008_downlink;
 static CODEC_SPI_CMD **aic3008_minidsp;
-static int aic3008_dspindex[MINIDSP_ROW_MAX];
 static int aic3008_rx_mode;
 static int aic3008_tx_mode;
 static int aic3008_dsp_mode;
 static bool first_boot_path = false;
 static struct pm_qos_request_list aud_cpu_minfreq_req;
 
-struct aic3008_power *aic3008_power_ctl;
+extern struct aic3008_power *aic3008_power_ctl;
 
 static struct aic3008_ctl_ops default_ctl_ops;
 static struct aic3008_ctl_ops *ctl_ops = &default_ctl_ops;
@@ -92,18 +91,14 @@ struct aic3008_clk_state {
 	struct wake_lock wakelock;
 };
 
-static struct aic3008_clk_state codec_clk;
-
 static const struct snd_kcontrol_new aic3008_snd_controls[] = { };
 static const struct snd_soc_dapm_widget aic3008_dapm_widgets[] = { };
 static const struct snd_soc_dapm_route intercon[] = { };
 
-static int aic3008_config(CODEC_SPI_CMD *cmds, int size);
 static int aic3008_set_config(int config_tbl, int idx, int en);
 static void aic3008_powerdown(void);
 static void aic3008_powerup(void);
 void aic3008_votecpuminfreq(bool bflag);
-static struct switch_dev sdev_beats;
 
 /*****************************************************************************/
 /* Specific SPI read/write command for AIC3008                               */
@@ -118,15 +113,15 @@ static int codec_spi_write(unsigned char addr, unsigned char data, bool flag)
 
 	if(addr == 0x00 && flag)
 	{
-		AUD_INFO("------ write page: 0x%02X ------\n", data);
+		AUD_DBG("------ write page: 0x%02X ------\n", data);
 	}
 	else if(addr == 0x7F && flag)
 	{
-		AUD_INFO("------ write book: 0x%02X ------\n", data);
+		AUD_DBG("------ write book: 0x%02X ------\n", data);
 	}
 	else if(flag)
 	{
-		AUD_INFO("write : reg: 0x%02X data: 0x%02X\n", addr, data);
+		AUD_DBG("write : reg: 0x%02X data: 0x%02X\n", addr, data);
 	}
 
 	codec_spi_dev->bits_per_word = 16;
@@ -155,9 +150,9 @@ static int codec_spi_read(unsigned char addr, unsigned char *data, bool flag)
 	if (rc < 0)
 		return rc;
 
-	if (flag)
+	if(flag)
 	{
-		AUD_INFO("read: reg: 0x%02X , data: 0x%02X \n", addr, result[0]);
+		AUD_DBG("read: reg: 0x%02X , data: 0x%02X \n", addr, result[0]);
 	}
 
 	*data = result[0]; /* seems address on high byte, data on low byte */
@@ -233,57 +228,60 @@ static int32_t spi_write_table_parsepage(CODEC_SPI_CMD *cmds, int num)
 	return status;
 }
 
-#if 0
-/* For debug useage. write a register then read a register, compare them ! */
-static int32_t spi_write_read_list(CODEC_SPI_CMD *cmds, int num)
+/*
+ * This function arranges the address and data bytes in a large command list
+ * and use kernel SPI API,
+ * i.e. use single spi_write() to write spi commands to the audio codec.
+ */
+static int32_t spi_read_list(CODEC_SPI_CMD *cmds, int num)
 {
 	int i;
 	int rc;
-	unsigned char write_buffer[2];
-	unsigned char read_result[2] = { 0, 0 };
+	unsigned char page = 0;
+	unsigned char buffer[2] = { 0, 0 };
+	unsigned char result[2] = { 0, 0 };
 
 	if (!codec_spi_dev)
 		return 0;
 
 	codec_spi_dev->bits_per_word = 16;
 	for (i = 0; i < num; i++) {
-		/*if writing page, then don't read its value */
-		switch (cmds[i].act) {
-		case 'w':
-			write_buffer[1] = cmds[i].reg << 1;
-			write_buffer[0] = cmds[i].data;
-			if (cmds[i].reg == 0x00 || cmds[i].reg == 0x7F) {
-				rc = spi_write(codec_spi_dev, write_buffer, sizeof(write_buffer));
-				if (rc < 0)
-					return rc;
-				if(cmds[i].reg == 0x00)
-				{
-					AUD_DBG("------ write page: 0x%02X ------\n", cmds[i].data);
-				}
-				else if(cmds[i].reg == 0x7F)
-				{
-					AUD_DBG("------ write book: 0x%02X ------\n", cmds[i].data);
-				}
-			} else {
-				rc = spi_write_then_read(codec_spi_dev, write_buffer, 2, read_result, 2);
-				if (rc < 0)
-					return rc;
-
-				if (read_result[0] != cmds[i].data)
-					AUD_INFO("incorrect value,reg 0x%02x, write 0x%02x, read 0x%02x",
-						cmds[i].reg, cmds[i].data, read_result[0]);
+		udelay(20);
+		/* if writing page, then don't read its value */
+		if(i==2)
+		{
+			AUD_INFO("Skip software reset cmd when dump spi! %02X\n", cmds[i].reg);
+			continue;
+		}
+		if (cmds[i].reg == 0x00) {
+			buffer[1] = cmds[i].reg << 1;
+			buffer[0] = cmds[i].data;
+			rc = spi_write(codec_spi_dev, buffer, sizeof(buffer));
+			if (rc < 0)
+			{
+				return rc;
 			}
-			break;
-		case 'd':
-			msleep(cmds[i].data);
-			break;
-		default:
-			break;
+			AUD_INFO("====== write page %02X ======", buffer[0]);
+			page = buffer[0];
+		} else if (cmds[i].reg == 0x7F && page == 0x00) {
+			buffer[1] = cmds[i].reg << 1;
+			buffer[0] = cmds[i].data;
+			rc = spi_write(codec_spi_dev, buffer, sizeof(buffer));
+			if (rc < 0)
+			{
+				return rc;
+			}
+			AUD_INFO("====== write book %02X ======", buffer[0]);
+		} else {
+			buffer[1] = cmds[i].reg << 1 | 1;
+			rc = spi_write_then_read(codec_spi_dev, buffer, 2, result, 2);
+			if (rc < 0)
+				return rc;
+			AUD_INFO("read: reg: 0x%02X , data: 0x%02X\n", cmds[i].reg, result[0]);
 		}
 	}
 	return 0;
 }
-#endif
 
 /*****************************************************************************/
 /* Codec Initialisation Sequence                                             */
@@ -324,8 +322,7 @@ void aic3008_AmpSwitch(int idx, int on)
 		idx == CALL_DOWNLINK_EMIC_HEADPHONE_BEATS ||
 		idx == CALL_DOWNLINK_EMIC_HEADPHONE_BEATS_WB ||
 		idx == VOIP_DOWNLINK_EMIC_HEADPHONE_BEATS ||
-		idx == PLAYBACK_HEADPHONE_FULLDELPX ||
-		idx == TTY_OUT_FULL)
+		idx == PLAYBACK_HEADPHONE_FULLDELPX)
 	{
 		if (on)
 		{
@@ -381,10 +378,10 @@ void aic3008_AmpSwitch(int idx, int on)
 		}
 	}
 }
-
 bool aic3008_IsSoundPlayBack(int idx)
 {
-	if (idx == PLAYBACK_HEADPHONE ||
+	if (
+		idx == PLAYBACK_HEADPHONE ||
 		idx == PLAYBACK_HEADPHONE_URBEATS ||
 		idx == PLAYBACK_HEADPHONE_SOLO ||
 		idx == PLAYBACK_SPEAKER ||
@@ -395,16 +392,12 @@ bool aic3008_IsSoundPlayBack(int idx)
 		idx == PLAYBACK_DOCK ||
 		idx == PLAYBACK_RECEIVER ||
 		idx == MFG_PLAYBACK_L_SPEAKER ||
-		idx == MFG_PLAYBACK_R_SPEAKER)
-	{
+		idx == MFG_PLAYBACK_R_SPEAKER
+        )
         return true;
-	}
     else
-	{
         return false;
-	}
 }
-
 void aic3008_votecpuminfreq(bool bflag)
 {
     static bool boldCPUMinReq = false;
@@ -432,14 +425,13 @@ void aic3008_CodecInit()
 	AUD_DBG("aic3008_CodecInit: start\n");
 	pwr_up_time = ktime_to_ms(ktime_get());
 
+	pr_device_power_on();
+
 	// aic3008 power up
 	aic3008_power_ctl->powerinit();
 
 	// close mic
 	aic3008_MicSwitch(0);
-
-	// reset codec
-	spi_write_table_parsepage(CODEC_SW_RESET, ARRAY_SIZE(CODEC_SW_RESET));
 
 	spi_write_table_parsepage(POWER_UP_SEQ, ARRAY_SIZE(POWER_UP_SEQ));
 	AUD_DBG("***** SPI CMD: Power Up Seq *****\n");
@@ -464,7 +456,6 @@ EXPORT_SYMBOL_GPL(aic3008_CodecInit);
 int aic3008_setMode(int cmd, int idx, int is_call_mode)
 {
 	int ret;
-
 	AUD_DBG("setMode: cmd:%d, idx:%d, call_mode:%d\n", cmd, idx, is_call_mode);
 	if (aic3008_power_ctl->mic_switch)
 	{
@@ -481,120 +472,15 @@ int aic3008_setMode(int cmd, int idx, int is_call_mode)
 }
 EXPORT_SYMBOL_GPL(aic3008_setMode);
 
-void aic3008_set_mic_bias(int on)
-{
-	bool bNeedPowerOff = false;
-
-	if (aic3008_power_ctl == NULL) {
-		AUD_ERR("[PWR] aic3008_set_mic_bias() aic3008_power_ctl is NULL.\n");
-		return;
-	}
-
-	if (!aic3008_power_ctl->isPowerOn) {
-		AUD_INFO("[PWR] codec was power off wakeup first.\n");
-		bNeedPowerOff = true;
-		aic3008_powerup();
-	}
-
-	if (on) {
-		AUD_INFO("[PWR] enalbe_AUD_HPMIC_BIAS\n");
-		aic3008_config(ENABLE_AUD_HPMIC_EXT, ARRAY_SIZE(ENABLE_AUD_HPMIC_EXT));
-	} else {
-		AUD_INFO("[PWR] disalbe_AUD_HPMIC_BIAS\n");
-		if (aic3008_tx_mode == CALL_UPLINK_IMIC_SPEAKER ||
-				aic3008_tx_mode == CALL_UPLINK_IMIC_SPEAKER_DUALMIC ||
-				aic3008_tx_mode == VOIP_UPLINK_IMIC_SPEAKER ||
-				aic3008_tx_mode == CALL_UPLINK_IMIC_SPEAKER_DUALMIC_WB
-				)
-		{
-			aic3008_config(DISABLE_AUD_HPMIC_EXT_ONLY, ARRAY_SIZE(DISABLE_AUD_HPMIC_EXT_ONLY));
-		}
-		else
-		{
-			aic3008_config(DISABLE_AUD_HPMIC_EXT, ARRAY_SIZE(DISABLE_AUD_HPMIC_EXT));
-		}
-	}
-
-	if (bNeedPowerOff) aic3008_powerdown();
-}
-EXPORT_SYMBOL_GPL(aic3008_set_mic_bias);
-
-/*****************************************************************************/
-/* other Audio Codec controls                                                */
-/*****************************************************************************/
-static void aic3008_sw_reset(struct snd_soc_codec *codec)
-{
-	AUD_DBG("aic3008 soft reset\n");
-	/*  SW RESET on AIC3008. */
-	aic3008_config(CODEC_SW_RESET, ARRAY_SIZE(CODEC_SW_RESET));
-}
-
-static int aic3008_volatile_register(unsigned int reg)
-{
-	/* check which registers are volatile on the T30S side */
-	return 0;
-}
-
-void aic3008_register_ctl_ops(struct aic3008_ctl_ops *ops)
-{
-	ctl_ops = ops;
-}
-
-/* call by SPI probe to create space for the SPI commands */
-static CODEC_SPI_CMD **init_2d_array(int row_sz, int col_sz)
-{
-	CODEC_SPI_CMD *table = NULL;
-	CODEC_SPI_CMD **table_ptr = NULL;
-	int i = 0;
-
-	table_ptr = kzalloc(row_sz * sizeof(CODEC_SPI_CMD *), GFP_KERNEL);
-	if (table_ptr == NULL) {
-		AUD_ERR("%s: table_ptr out of memory!\n", __func__);
-		goto table_ptr_failed;
-	}
-
-	table = kzalloc(row_sz * col_sz * sizeof(CODEC_SPI_CMD), GFP_KERNEL);
-	if (table == NULL) {
-		AUD_ERR("%s: table out of memory!\n", __func__);
-		goto table_failed;
-	}
-
-	for (i = 0; i < row_sz; i++)
-		table_ptr[i] = (CODEC_SPI_CMD *) table + i * col_sz;
-
-	return table_ptr;
-
-table_failed:
-	kfree(table_ptr);
-table_ptr_failed:
-	return NULL;
-}
-
-static void spi_aic3008_prevent_sleep(void)
-{
-	wake_lock(&codec_clk.wakelock);
-	wake_lock(&codec_clk.idlelock);
-}
-
-static void spi_aic3008_allow_sleep(void)
-{
-	wake_unlock(&codec_clk.idlelock);
-	wake_unlock(&codec_clk.wakelock);
-}
-
 /* Access function pointed by ctl_ops to call control operations */
 static int aic3008_config(CODEC_SPI_CMD *cmds, int size)
 {
 	int i, retry, ret;
 	unsigned char data;
-
-	if (aic3008_power_ctl == NULL) {
-		AUD_ERR("[PWR] aic3008_config() aic3008_power_ctl is NULL.\n");
-		return -EFAULT;
-	}
-
-	if (!aic3008_power_ctl->isPowerOn) {
-		aic3008_powerup();
+	if(!aic3008_power_ctl->isPowerOn)
+	{
+		AUD_INFO("aic3008_config: AIC3008 is power off now");
+		return -EINVAL;
 	}
 
 	if (!codec_spi_dev) {
@@ -611,17 +497,15 @@ static int aic3008_config(CODEC_SPI_CMD *cmds, int size)
 	if (size < 1000) {
 		for (i = 0; i < size; i++) {
 			switch (cmds[i].act) {
-			case 'W':
 			case 'w':
-				codec_spi_write(cmds[i].reg, cmds[i].data, false);
+				codec_spi_write(cmds[i].reg, cmds[i].data, true);
 				break;
-			case 'R':
 			case 'r':
 				for (retry = AIC3008_MAX_RETRY; retry > 0; retry--) {
 					ret = codec_spi_read(cmds[i].reg, &data, true);
 					if (ret < 0) {
 						AUD_ERR("read fail %d, retry\n", ret);
-						msleep(1);
+						mdelay(1);
 					} else if (data == cmds[i].data) {
 						AUD_DBG("data == cmds\n");
 						break;
@@ -632,7 +516,6 @@ static int aic3008_config(CODEC_SPI_CMD *cmds, int size)
 							" flag 0x%02X=0x%02X(0x%02X)\n",
 							cmds[i].reg, ret, cmds[i].data);
 				break;
-			case 'D':
 			case 'd':
 				msleep(cmds[i].data);
 				break;
@@ -646,6 +529,134 @@ static int aic3008_config(CODEC_SPI_CMD *cmds, int size)
 		AUD_DBG("Here is bulk mode\n");
 	}
 	return 0;
+}
+
+void aic3008_set_mic_bias(int on)
+{
+	if (on) {
+		AUD_INFO("[PWR] enalbe_AUD_HPMIC_BIAS\n");
+		if (!aic3008_power_ctl->isPowerOn) {
+			AUD_INFO("[PWR] codec was power off wakeup first\n");
+			aic3008_powerup();
+			aic3008_config(ENABLE_AUD_HPMIC_EXT, ARRAY_SIZE(ENABLE_AUD_HPMIC_EXT));
+			aic3008_powerdown();
+		} else aic3008_config(ENABLE_AUD_HPMIC_EXT, ARRAY_SIZE(ENABLE_AUD_HPMIC_EXT));
+	} else {
+		AUD_INFO("[PWR] disalbe_AUD_HPMIC_BIAS\n");
+		if (aic3008_tx_mode == CALL_UPLINK_IMIC_SPEAKER ||
+				aic3008_tx_mode == CALL_UPLINK_IMIC_SPEAKER_DUALMIC ||
+				aic3008_tx_mode == VOIP_UPLINK_IMIC_SPEAKER ||
+				aic3008_tx_mode == CALL_UPLINK_IMIC_SPEAKER_DUALMIC_WB
+				)
+		{
+			if (!aic3008_power_ctl->isPowerOn) {
+				AUD_INFO("[PWR] codec was power off wakeup first\n");
+				aic3008_powerup();
+				aic3008_config(DISABLE_AUD_HPMIC_EXT_ONLY, ARRAY_SIZE(DISABLE_AUD_HPMIC_EXT_ONLY));
+				aic3008_powerdown();
+			} else aic3008_config(DISABLE_AUD_HPMIC_EXT_ONLY, ARRAY_SIZE(DISABLE_AUD_HPMIC_EXT_ONLY));
+		}
+		else
+		{
+			if (!aic3008_power_ctl->isPowerOn) {
+				AUD_INFO("[PWR] codec was power off wakeup first\n");
+				aic3008_powerup();
+				aic3008_config(DISABLE_AUD_HPMIC_EXT, ARRAY_SIZE(DISABLE_AUD_HPMIC_EXT));
+				aic3008_powerdown();
+			} else aic3008_config(DISABLE_AUD_HPMIC_EXT, ARRAY_SIZE(DISABLE_AUD_HPMIC_EXT));
+		}
+	}
+}
+EXPORT_SYMBOL_GPL(aic3008_set_mic_bias);
+
+/*****************************************************************************/
+/* other Audio Codec controls                                                */
+/*****************************************************************************/
+static void aic3008_sw_reset(struct snd_soc_codec *codec)
+{
+	AUD_DBG("aic3008 soft reset\n");
+	/*  SW RESET on AIC3008. */
+	aic3008_config(CODEC_SW_RESET, ARRAY_SIZE(CODEC_SW_RESET));
+}
+
+void aic3008_register_ctl_ops(struct aic3008_ctl_ops *ops)
+{
+	ctl_ops = ops;
+}
+
+/* call by SPI probe to create space for the SPI commands */
+static CODEC_SPI_CMD **init_2d_array(int row_sz, int col_sz)
+{
+	CODEC_SPI_CMD *table = NULL;
+	CODEC_SPI_CMD **table_ptr = NULL;
+	int i = 0;
+
+	table_ptr = kzalloc(row_sz * sizeof(CODEC_SPI_CMD *), GFP_KERNEL);
+	table = kzalloc(row_sz * col_sz * sizeof(CODEC_SPI_CMD), GFP_KERNEL);
+	if (table_ptr == NULL || table == NULL) {
+		AUD_ERR("%s: out of memory\n", __func__);
+		kfree(table);
+		kfree(table_ptr);
+	} else
+		for (i = 0; i < row_sz; i++)
+			table_ptr[i] = (CODEC_SPI_CMD *) table + i * col_sz;
+
+	return table_ptr;
+}
+
+static int aic3008_config_ex(CODEC_SPI_CMD *cmds, int size)
+{
+	int i = 0;
+	int ret = -EINVAL;
+	struct spi_transfer *spi_t_cmds = NULL;
+	struct spi_message m;
+	unsigned char *buffer = NULL;
+	unsigned char *ptr = NULL;
+
+	if (!codec_spi_dev) {
+		AUD_ERR("no spi device\n");
+		return -EFAULT;
+	}
+
+	if (cmds == NULL || size == 0) {
+		AUD_ERR("invalid spi parameters\n");
+		return -EINVAL;
+	}
+
+	spi_t_cmds = kmalloc(size * sizeof(struct spi_transfer), GFP_KERNEL);
+	if (spi_t_cmds == NULL) {
+		AUD_ERR("kmalloc spi transfer struct fail\n");
+		goto error;
+	} else
+		memset(spi_t_cmds, 0, size * sizeof(struct spi_transfer));
+
+	buffer = kmalloc(size * 2 * sizeof(unsigned char),
+			GFP_KERNEL);
+	if (buffer == NULL) {
+		AUD_ERR("kmalloc buffer fail\n");
+		goto error;
+	} else
+		memset(buffer, 0, size * sizeof(CODEC_SPI_CMD) * sizeof(unsigned char));
+
+	spi_message_init(&m);
+	for (i = 0, ptr = buffer; i < size; i++, ptr += 2) {
+		ptr[0] = cmds[i].reg << 1;
+		ptr[1] = cmds[i].data;
+
+		spi_t_cmds[i].tx_buf = ptr;
+		spi_t_cmds[i].len = 2;
+		spi_message_add_tail(&spi_t_cmds[i], &m);
+	}
+	codec_spi_dev->bits_per_word = 16;
+	ret = spi_sync(codec_spi_dev, &m);
+
+error:
+	if (buffer != NULL)
+		kfree(buffer);
+
+	if (spi_t_cmds != NULL)
+		kfree(spi_t_cmds);
+	return ret;
 }
 
 int route_rx_enable(int path, int en)
@@ -719,7 +730,7 @@ static void aic3008_tx_config(int mode)
 	}
 
 	/* if not uplink off or power off */
-	if (mode != UPLINK_PATH_OFF && mode != POWER_OFF && mode != FM_IN_SPEAKER && mode != FM_IN_HEADPHONE) {
+	if (mode != UPLINK_PATH_OFF && mode != POWER_OFF) {
 		/* uplink_Wakeup */
 		AUD_DBG("[TX] ----- uplink wakeup len(%d) -----\n",
 				(aic3008_uplink[UPLINK_WAKEUP][0].data-1));
@@ -747,7 +758,7 @@ static void aic3008_rx_config(int mode)
 		return;
 	}
 
-	if (mode != DOWNLINK_PATH_OFF && mode != FM_OUT_SPEAKER && mode != FM_OUT_HEADPHONE) {
+	if (mode != DOWNLINK_PATH_OFF) {
 		/* Downlink Wakeup */
 		AUD_DBG("[RX] ----- downlink wakeup len(%d) -----\n",
 				(aic3008_downlink[DOWNLINK_WAKEUP][0].data-1));
@@ -761,11 +772,10 @@ static void aic3008_rx_config(int mode)
 
 	aic3008_config(&aic3008_downlink[mode][1], aic3008_downlink[mode][0].data);
 
-    if (aic3008_IsSoundPlayBack(mode)) {
+    if (aic3008_IsSoundPlayBack(mode))
         aic3008_votecpuminfreq(true);
-    } else {
+    else
         aic3008_votecpuminfreq(false);
-	}
 }
 
 static void aic3008_powerdown(void)
@@ -878,27 +888,18 @@ static int aic3008_set_config(int config_tbl, int idx, int en)
 	int rc = 0, len = 0;
 	int64_t t1, t2;
 
-	if (aic3008_power_ctl == NULL) {
-		AUD_ERR("[PWR] aic3008_config() aic3008_power_ctl is NULL.\n");
-		return -EFAULT;
-	}
-
 	mutex_lock(&lock);
 /*	spi_aic3008_prevent_sleep(); */
 
 	switch (config_tbl) {
 	case AIC3008_IO_CONFIG_TX:
 		/* TX */
-		if (idx < 0 || idx >= UPLINK_MODE_END) {
-			AUD_ERR("[TX] AIC3008_IO_CONFIG_TX: idx %d is out of range.", idx);
-			rc = -EFAULT;
+		if(!aic3008_power_ctl->isPowerOn)
+		{
+			AUD_ERR("[TX] AIC3008 is power off now, can't do IO CONFIG TX = %d, please check this condition!!", idx);
+			AUD_ERR("[TX] Since IO CONFIG TX = %d can't be done, it maybe no sound on device", idx);
 			break;
 		}
-
-		if (!aic3008_power_ctl->isPowerOn && idx == UPLINK_PATH_OFF) {
-			break;
-		}
-
 		if (en) {
 			AUD_INFO("[TX] AIC3008_IO_CONFIG_TX: UPLINK idx = %d",idx);
 			aic3008_tx_config(idx);
@@ -917,17 +918,13 @@ static int aic3008_set_config(int config_tbl, int idx, int en)
 		break;
 	case AIC3008_IO_CONFIG_RX:
 		/* RX */
-		if (idx < 0 || idx >= DOWNLINK_MODE_END) {
-			AUD_ERR("[RX] AIC3008_IO_CONFIG_RX: idx %d is out of range.", idx);
-			rc = -EFAULT;
-			break;
-		}
-
-		if (!aic3008_power_ctl->isPowerOn && idx == DOWNLINK_PATH_OFF) {
-			break;
-		}
-
 		aic3008_AmpSwitch(aic3008_rx_mode, 0);
+		if(!aic3008_power_ctl->isPowerOn)
+		{
+			AUD_ERR("[RX] AIC3008 is power off now, can't do IO CONFIG RX = %d, please check this condition!!", idx);
+			AUD_ERR("[RX] Since IO CONFIG RX = %d can't be done, it maybe no sound on device", idx);
+			break;
+		}
 		if(!first_boot_path && idx == 10)
 		{
 			AUD_INFO("[RX] AIC3008_IO_CONFIG_RX: first_boot_path = 10\n");
@@ -939,26 +936,12 @@ static int aic3008_set_config(int config_tbl, int idx, int en)
 			AUD_INFO("[RX] AIC3008_IO_CONFIG_RX: DOWNLINK idx = %d",idx);
 			aic3008_rx_config(idx);
 			aic3008_rx_mode = idx;
-			if(aic3008_power_ctl->hs_vol_control)
-			{
-				if(idx == PLAYBACK_HEADPHONE_URBEATS)
-				{
-					AUD_INFO("[RX] BEATS_GAIN_ON");
-					aic3008_power_ctl->headset_vol_control(BEATS_GAIN_ON);
-				}
-				else
-				{
-					AUD_INFO("[RX] BEATS_GAIN_OFF");
-					aic3008_power_ctl->headset_vol_control(BEATS_GAIN_OFF);
-				}
-			}
 			aic3008_AmpSwitch(idx, 1);
 		} else {
 			AUD_INFO("[RX] AIC3008_IO_CONFIG_RX: DOWNLINK_PATH_OFF");
 			aic3008_rx_config(DOWNLINK_PATH_OFF);
 			aic3008_rx_mode = DOWNLINK_PATH_OFF;
 		}
-
 		if ((aic3008_tx_mode == UPLINK_PATH_OFF) && (aic3008_rx_mode == DOWNLINK_PATH_OFF))
 		{
 			AUD_INFO("[RX] AIC3008_IO_CONFIG_RX: PATH OFF Call aic3008_powerdown()");
@@ -966,47 +949,34 @@ static int aic3008_set_config(int config_tbl, int idx, int en)
 		}
 		break;
 	case AIC3008_IO_CONFIG_MEDIA:
-		if(idx == 49)
+		if(idx == 20 && !aic3008_power_ctl->isPowerOn)
+		{
+			aic3008_powerup();
+			break;
+		}
+		else if(idx == 49)
 		{
 			AUD_DBG("[DSP] idx = %d, Mic Mute!!", idx);
-			if (aic3008_tx_mode == UPLINK_BT_AP ||
-				aic3008_tx_mode == UPLINK_BT_BB ){
+			if (aic3008_tx_mode == VOIP_UPLINK_BT ||
+					aic3008_tx_mode == UPLINK_BT_AP ||
+					aic3008_tx_mode == UPLINK_BT_BB ){
 				aic3008_config(BT_MIC_MUTE, ARRAY_SIZE(BT_MIC_MUTE));		// mute mic
 			}
 			else{
-				if (aic3008_tx_mode == VOIP_UPLINK_IMIC_RECEIVER ||
-					aic3008_tx_mode == VOIP_UPLINK_EMIC_HEADPHONE ||
-					aic3008_tx_mode == VOIP_UPLINK_IMIC_HEADPHONE ||
-					aic3008_tx_mode == VOIP_UPLINK_IMIC_SPEAKER ||
-					aic3008_tx_mode == VOIP_UPLINK_BT){
-						AUD_DBG("ADC_MUTE_VOIP");
-						aic3008_config(ADC_MUTE_VOIP, ARRAY_SIZE(ADC_MUTE_VOIP));		// mute mic
-					}
-					else{
-						aic3008_config(ADC_MUTE, ARRAY_SIZE(ADC_MUTE));		// mute mic
-					}
+				aic3008_config(ADC_MUTE, ARRAY_SIZE(ADC_MUTE));		// mute mic
 			}
 			break;
 		}
 		else if(idx == 50)
 		{
 			AUD_DBG("[DSP] idx = %d, Mic unMute!!", idx);
-			if (aic3008_tx_mode == UPLINK_BT_AP ||
-				aic3008_tx_mode == UPLINK_BT_BB ){
+			if (aic3008_tx_mode == VOIP_UPLINK_BT ||
+					aic3008_tx_mode == UPLINK_BT_AP ||
+					aic3008_tx_mode == UPLINK_BT_BB ){
 				aic3008_config(BT_MIC_UNMUTE, ARRAY_SIZE(BT_MIC_UNMUTE));		// mute mic
 			}
 			else{
-				if (aic3008_tx_mode == VOIP_UPLINK_IMIC_RECEIVER ||
-					aic3008_tx_mode == VOIP_UPLINK_EMIC_HEADPHONE ||
-					aic3008_tx_mode == VOIP_UPLINK_IMIC_HEADPHONE ||
-					aic3008_tx_mode == VOIP_UPLINK_IMIC_SPEAKER ||
-					aic3008_tx_mode == VOIP_UPLINK_BT){
-						AUD_DBG("ADC_UNMUTE_VOIP");
-						aic3008_config(ADC_UNMUTE_VOIP, ARRAY_SIZE(ADC_UNMUTE_VOIP));		// mute mic
-					}
-					else{
-						aic3008_config(ADC_UNMUTE, ARRAY_SIZE(ADC_UNMUTE));		// mute mic
-					}
+				aic3008_config(ADC_UNMUTE, ARRAY_SIZE(ADC_UNMUTE));		// mute mic
 			}
 			break;
 		}
@@ -1025,21 +995,13 @@ static int aic3008_set_config(int config_tbl, int idx, int en)
 		else if(idx == 53)
 		{
 			AUD_INFO("[DSP] idx = %d, BEATS_ON!!", idx);
-			if(aic3008_power_ctl->hs_vol_control)
-			{
-				aic3008_power_ctl->headset_vol_control(BEATS_GAIN_ON);
-			}
-			else aic3008_config(BEATS_ON, ARRAY_SIZE(BEATS_ON));	// Increase the gain for BEATS_EFFECT_ON
+			aic3008_config(BEATS_ON, ARRAY_SIZE(BEATS_ON));	// Increase the gain for BEATS_EFFECT_ON
 			break;
 		}
 		else if(idx == 54)
 		{
 			AUD_INFO("[DSP] idx = %d, BEATS_OFF!!", idx);
-			if(aic3008_power_ctl->hs_vol_control)
-			{
-				aic3008_power_ctl->headset_vol_control(BEATS_GAIN_OFF);
-			}
-			else aic3008_config(BEATS_OFF, ARRAY_SIZE(BEATS_OFF)); // Decrease the gain for BEATS_EFFECT_OFF
+			aic3008_config(BEATS_OFF, ARRAY_SIZE(BEATS_OFF)); // Decrease the gain for BEATS_EFFECT_OFF
 			break;
 		}
 		else if(idx == 55)
@@ -1066,88 +1028,37 @@ static int aic3008_set_config(int config_tbl, int idx, int en)
 			aic3008_config(HS_UNMUTE, ARRAY_SIZE(HS_UNMUTE));
 			break;
 		}
-		else if(idx == 59)
+		if(!aic3008_power_ctl->isPowerOn)
 		{
-			AUD_INFO("[DSP] idx = %d, enable Beats icon!!", idx);
-			int new_state = 1, old_state = 0;
-			old_state = switch_get_state(&sdev_beats);
-			if (new_state != old_state)
-				switch_set_state(&sdev_beats, new_state);
-			break;
+//			AUD_ERR("[DSP] AIC3008 is power off now, do you want change DSP = %d??", idx);
+//			AUD_ERR("[DSP] If DSP %d must to be done, please make sure I/O config won't be forgot!!", idx);
+			aic3008_powerup();
+			AUD_INFO("[DSP] Recovery this condition, AIC3008 is power up now and DSP %d will be config", idx);
 		}
-		else if(idx == 60)
-		{
-			AUD_INFO("[DSP] idx = %d, disable Beats icon!!", idx);
-			int new_state = 0, old_state = 0;
-			old_state = switch_get_state(&sdev_beats);
-			if (new_state != old_state)
-				switch_set_state(&sdev_beats, new_state);
-			break;
-		}
-		else if(idx == 61)
-		{
-			AUD_ERR("%s trigger_modem_coredump +++++\n", __func__);
-			aic3008_power_ctl->modem_coredump();
-			AUD_ERR("%s trigger_modem_coredump -----\n", __func__);
-		}
-		else if(idx < 0 || idx >= End_Audio_Effect)
-		{
-			AUD_ERR("[DSP] AIC3008_IO_CONFIG_MEDIA: idx %d is out of range.", idx);
-			rc = -EFAULT;
-			break;
-		}
-		/* else regular DSP index */
-
-		/* i2s config */
-		if (aic3008_power_ctl->i2s_switch) {
-			if (aic3008_dspindex[idx] != -1) {
-				aic3008_power_ctl->i2s_control(aic3008_dspindex[idx]);
-			} else {
-				AUD_ERR("[DSP] AIC3008_IO_CONFIG_MEDIA: unknown dsp index %d\n", idx);
-			}
-		}
-
 		if (aic3008_minidsp == NULL) {
-			AUD_ERR("[DSP] AIC3008_IO_CONFIG_MEDIA: aic3008_minidsp == NULL");
+			AUD_INFO("[DSP] AIC3008_IO_CONFIG_MEDIA: aic3008_minidsp == NULL");
 			rc = -EFAULT;
 			break;
 		}
-		if (aic3008_minidsp[idx] == NULL) {
-			AUD_ERR("[DSP] AIC3008_IO_CONFIG_MEDIA: aic3008_minidsp[%d] == NULL.", idx);
-			rc = -EFAULT;
-			break;
-		}
-
 		/* we use this value to dump dsp. */
 		aic3008_dsp_mode = idx;
 
-		AUD_INFO("[DSP] AIC3008_IO_CONFIG_MEDIA: Original RX %d, TX %d. start DSP = %d ++.",
-				aic3008_rx_mode, aic3008_tx_mode, idx);
+		len = (aic3008_minidsp[idx][0].reg << 8) | aic3008_minidsp[idx][0].data;
 
-		len = (((int)(aic3008_minidsp[idx][0].reg) & 0xFF) << 8) | ((int)(aic3008_minidsp[idx][0].data) & 0xFF);
+		AUD_INFO("[DSP] AIC3008_IO_CONFIG_MEDIA: Original RX %d, TX %d. start DSP = %d, len = %d ++. ",
+				aic3008_rx_mode, aic3008_tx_mode, idx, len);
 
 		t1 = ktime_to_ms(ktime_get());
-		/* step 1: path off first
-			Symptom:
-				If downlink wasn't path_off, it could have noise when config DSP.
-			Solution:
-				1.) Add the Speaker_AmpSwitch and Headset_Mute here to prevent noise.
-				2.) After we config DSP setting and I/O sequence, it will be unmute.
-		*/
-		if (aic3008_rx_mode != DOWNLINK_PATH_OFF) {
-			aic3008_AmpSwitch(aic3008_rx_mode, 0);
-			aic3008_config(HS_MUTE, ARRAY_SIZE(HS_MUTE));
-		}
+		/* step 1: path off first */
+		if (aic3008_rx_mode != DOWNLINK_PATH_OFF)
+			aic3008_rx_config(DOWNLINK_PATH_OFF);
 
 		/* step 2: config DSP */
 		aic3008_config(&aic3008_minidsp[idx][1], len);
 
 		t2 = ktime_to_ms(ktime_get()) - t1;
 
-		AUD_INFO("[DSP] AIC3008_IO_CONFIG_MEDIA: configure miniDSP index(%d) len = %d, time: %lldms --\n", idx, len, (t2));
-		break;
-	default:
-		AUD_ERR("aic3008_set_config case error\n");
+		AUD_INFO("[DSP] AIC3008_IO_CONFIG_MEDIA: configure miniDSP index(%d) time: %lldms --\n", idx, (t2));
 		break;
 	}
 
@@ -1234,14 +1145,13 @@ static long aic3008_ioctl(struct file *file, unsigned int cmd,
 	int ret = 0, i = 0, mem_size, volume = 0;
 	CODEC_SPI_CMD reg[4];
 	unsigned char data;
-	int len = 0; /* for dump dsp length. */
+	int len= 0; /* for dump dsp length. */
 	int pcbid = 0;
 
 	AUD_DBG("IOCTL command:0x%02X, argc:%ld\n", cmd, argc);
 
-	if (aic3008_uplink == NULL ||
-		aic3008_downlink == NULL ||
-		aic3008_minidsp == NULL) {
+	if (aic3008_uplink == NULL || aic3008_downlink == NULL || aic3008_minidsp
+			== NULL) {
 		AUD_ERR("cmd 0x%x, invalid pointers\n", cmd);
 		return -EFAULT;
 	}
@@ -1253,32 +1163,28 @@ static long aic3008_ioctl(struct file *file, unsigned int cmd,
 	case AIC3008_IO_SET_RX_PARAM:
 		if (copy_from_user(&para, (void *) argc, sizeof(para))) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 
-		AUD_INFO("parameters(%d, %d, %p)\n",
+		AUD_DBG("parameters(%d, %d, %p)\n",
 				para.row_num, para.col_num, para.cmd_data);
 
-		if (cmd == AIC3008_IO_SET_TX_PARAM) {
+		if (cmd == AIC3008_IO_SET_TX_PARAM)
 			table = aic3008_uplink[0];
-		} else {
+		else
 			table = aic3008_downlink[0];
-		}
 
 		/* confirm indicated size doesn't exceed the allocated one */
 		if (para.row_num > IO_CTL_ROW_MAX || para.col_num != IO_CTL_COL_MAX) {
 			AUD_ERR("data size mismatch with allocated memory (%d,%d)\n",
-				IO_CTL_ROW_MAX, IO_CTL_COL_MAX);
-			ret = -EFAULT;
-			break;
+					IO_CTL_ROW_MAX, IO_CTL_COL_MAX);
+			return -EFAULT;
 		}
 
 		mem_size = para.row_num * para.col_num * sizeof(CODEC_SPI_CMD);
 		if (copy_from_user(table, para.cmd_data, mem_size)) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 
 		/* invoking initialization procedure of AIC3008 */
@@ -1289,171 +1195,120 @@ static long aic3008_ioctl(struct file *file, unsigned int cmd,
 				para.row_num, para.col_num);
 		break;
 
-	/* third io command from HAL */
+		/* third io command from HAL */
 	case AIC3008_IO_SET_DSP_PARAM:
 		if (copy_from_user(&para, (void *) argc, sizeof(para))) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 
 		AUD_DBG("parameters(%d, %d, %p)\n",
-			para.row_num, para.col_num, para.cmd_data);
+				para.row_num, para.col_num, para.cmd_data);
 
 		table = aic3008_minidsp[0];
 
 		/* confirm indicated size doesn't exceed the allocated one */
 		if (para.row_num > MINIDSP_ROW_MAX ||
-			para.col_num != MINIDSP_COL_MAX) {
+				para.col_num != MINIDSP_COL_MAX) {
 			AUD_ERR("data size mismatch with allocated memory (%d, %d)\n",
-				MINIDSP_ROW_MAX, MINIDSP_COL_MAX);
-			ret = -EFAULT;
-			break;
+					MINIDSP_ROW_MAX, MINIDSP_COL_MAX);
+			return -EFAULT;
 		}
 
 		mem_size = para.row_num * para.col_num * sizeof(CODEC_SPI_CMD);
 		if (copy_from_user(table, para.cmd_data, mem_size)) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 
 		AUD_INFO("update dsp table(%d, %d) successfully\n",
 				para.row_num, para.col_num);
 		break;
 
-	/* fourth io command from HAL */
-	case AIC3008_IO_SET_DSP_INDEX:
-		if (copy_from_user(&para, (void *) argc, sizeof(para))) {
-			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
-		}
-
-		AUD_DBG("parameters(%d, %d, %p)\n",
-			para.row_num, para.col_num, para.cmd_data);
-
-		table = &aic3008_dspindex[0];
-
-		/* confirm indicated size doesn't exceed the allocated one */
-		if (para.row_num != MINIDSP_ROW_MAX ||
-			para.col_num != 1) {
-			AUD_ERR("data size mismatch with allocated memory (%d, %d)\n",
-				MINIDSP_ROW_MAX, 1);
-			ret = -EFAULT;
-			break;
-		}
-
-		mem_size = MINIDSP_ROW_MAX * sizeof(int);
-		if (copy_from_user(table, para.cmd_data, mem_size)) {
-			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
-		}
-
-		AUD_INFO("update dsp index table(%d, %d) successfully\n",
-				para.row_num, para.col_num);
-		break;
-
-	/* these IO commands are called to set path */
+		/* these IO commands are called to set path */
 	case AIC3008_IO_CONFIG_TX:
 	case AIC3008_IO_CONFIG_RX:
 	case AIC3008_IO_CONFIG_MEDIA:
 		if (copy_from_user(&i, (void *) argc, sizeof(int))) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 		/* call aic3008_set_config() to issue SPI commands */
 		ret = aic3008_set_config(cmd, i, 1);
-		if (ret < 0) AUD_ERR("configure(%d) error %d\n", i, ret);
+		if (ret < 0)
+			AUD_ERR("configure(%d) error %d\n", i, ret);
 		break;
 
 	case AIC3008_IO_CONFIG_VOLUME_L:
 		if (copy_from_user(&volume, (void *) argc, sizeof(int))) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 
 		if (volume < -127 || volume > 48) {
 			AUD_ERR("volume out of range\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 
-		AUD_INFO("AIC3008 config left volume is not support now.\n");
+		AUD_DBG("AIC3008 config left volume %d\n", volume);
 
 		CODEC_SET_VOLUME_L[1].data = volume;
 
-		/* call extended aic3008_config() to set up volume
-		aic3008_config(CODEC_SET_VOLUME_L, ARRAY_SIZE(CODEC_SET_VOLUME_L)); */
+		/* call extended aic3008_config_ex() to set up volume */
+		aic3008_config_ex(CODEC_SET_VOLUME_L, ARRAY_SIZE(CODEC_SET_VOLUME_L));
 		break;
 
 	case AIC3008_IO_CONFIG_VOLUME_R:
 		if (copy_from_user(&volume, (void *) argc, sizeof(int))) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 
 		if (volume < -127 || volume > 48) {
 			AUD_ERR("volume out of range\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 
-		AUD_INFO("AIC3008 config right volume is not support now.\n");
+		AUD_DBG("AIC3008 config right volume %d\n", volume);
 
 		CODEC_SET_VOLUME_R[1].data = volume;
 
-		/* call extended aic3008_config() to set up volume
-		aic3008_config(CODEC_SET_VOLUME_R, ARRAY_SIZE(CODEC_SET_VOLUME_R)); */
+		/* call extended aic3008_config_ex() to set up volume */
+		aic3008_config_ex(CODEC_SET_VOLUME_R, ARRAY_SIZE(CODEC_SET_VOLUME_R));
 		break;
 
 		/* dump specific audio codec page */
 	case AIC3008_IO_DUMP_PAGES:
 		if (copy_from_user(&i, (void *) argc, sizeof(int))) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 		if (i > AIC3008_MAX_PAGES) {
 			AUD_ERR("invalid page number %d\n", i);
-			ret = -EINVAL;
-			break;
+			return -EINVAL;
 		}
 
-		AUD_INFO("========== dump page %d ==========\n", i);
+		AUD_DBG("========== dump page %d ==========\n", i);
 		/* indicated page number of AIC3008 */
 		codec_spi_write(0x00, i, true);
 		for (i = 0; i < AIC3008_MAX_REGS; i++) {
 			ret = codec_spi_read(i, &data, true);
 			if (ret < 0) {
 				AUD_ERR("read fail on register 0x%X\n", i);
-				ret = -EFAULT;
-				break;
 			} else {
-				AUD_INFO("(addr:0x%02X, data:0x%02X)\n", i, data);
+				AUD_DBG("(addr:0x%02X, data:0x%02X)\n", i, data);
 			}
 		}
-		AUD_INFO("=============================================\n");
+		AUD_DBG("=============================================\n");
 		break;
 	case AIC3008_IO_DUMP_DSP:
-		AUD_INFO("========== dump dsp %d ==========\n", aic3008_dsp_mode);
+		AUD_DBG("========== dump dsp %d ==========\n", aic3008_dsp_mode);
 
 		/* indicated dsp number of AIC3008 */
-		len = (((int)(aic3008_minidsp[aic3008_dsp_mode][0].reg) & 0xFF) << 8) |
-				((int)(aic3008_minidsp[aic3008_dsp_mode][0].data) & 0xFF);
-		AUD_INFO("len = %d", len);
-
-		for (i = 0; i < len; i++) {
-			AUD_INFO("{'%s', 0x%02X, 0x%02X},\n",
-				aic3008_minidsp[aic3008_dsp_mode][i].act,
-				aic3008_minidsp[aic3008_dsp_mode][i].reg,
-				aic3008_minidsp[aic3008_dsp_mode][i].data);
-		}
-		AUD_INFO("=============================================\n");
+		len = (aic3008_minidsp[aic3008_dsp_mode][0].reg << 8) | aic3008_minidsp[aic3008_dsp_mode][0].data;
+		AUD_DBG("len = %d", len);
+		spi_read_list(&aic3008_minidsp[aic3008_dsp_mode][1], len);
+		AUD_DBG("=============================================\n");
 		break;
 
 		/* write specific audio codec register */
@@ -1461,15 +1316,22 @@ static long aic3008_ioctl(struct file *file, unsigned int cmd,
 		AUD_INFO("========== WRITE_REG ==========\n");
 		if (copy_from_user(&reg, (void *) argc, sizeof(CODEC_SPI_CMD) * 4)) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
-		AUD_INFO("command list (%c,%02X,%02X) (%c,%02X,%02X) (%c,%02X,%02X) (%c,%02X,%02X)\n",
+		AUD_DBG("command list (%c,%02X,%02X) (%c,%02X,%02X) (%c,%02X,%02X) (%c,%02X,%02X)\n",
 				reg[0].act, reg[0].reg, reg[0].data,
 				reg[1].act, reg[1].reg, reg[1].data,
 				reg[2].act, reg[2].reg, reg[2].data,
 				reg[3].act, reg[3].reg, reg[3].data);
-		aic3008_config(reg, 4);
+//		aic3008_config_ex(reg, 4);
+		for (i = 0; i < 4; i++) {
+			if (reg[i].act == 'r' || reg[i].act == 'R')
+				codec_spi_read(reg[i].reg, &reg[i].data, true);
+			else if (reg[i].act == 'w' || reg[i].act == 'W')
+				codec_spi_write(reg[i].reg, reg[i].data, true);
+			else
+				return -EINVAL;
+		}
 		AUD_INFO("========== WRITE_REG end ==========\n");
 		break;
 
@@ -1478,48 +1340,51 @@ static long aic3008_ioctl(struct file *file, unsigned int cmd,
 		AUD_INFO("========== READ_REG ==========\n");
 		if (copy_from_user(&reg, (void *) argc, sizeof(CODEC_SPI_CMD) * 4)) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
-		aic3008_config(reg, 4);
-		if (copy_to_user((void *) argc, &reg, sizeof(CODEC_SPI_CMD) * 4)) {
+		for (i = 0; i < 4; i++) {
+			if (reg[i].act == 'r' || reg[i].act == 'R')
+				codec_spi_read(reg[i].reg, &reg[i].data, true);
+			else if (reg[i].act == 'w' || reg[i].act == 'W')
+				codec_spi_write(reg[i].reg, reg[i].data, true);
+			else
+				return -EINVAL;
+		}
+		if (copy_to_user((void *) argc, &reg, sizeof(CODEC_SPI_CMD) * 2)) {
 			AUD_ERR("failed on copy_to_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 		AUD_INFO("========== READ_REG end==========\n");
 		break;
 
 	case AIC3008_IO_POWERDOWN: /* power down IO command */
+		mutex_lock(&lock);
 		aic3008_powerdown();
+		mutex_unlock(&lock);
 		break;
 
 	case AIC3008_IO_LOOPBACK: /* loopback IO command */
 		if (copy_from_user(&i, (void *) argc, sizeof(int))) {
 			AUD_ERR("failed on copy_from_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
-		AUD_INFO("index %d for LOOPBACK\n", i);
+		AUD_DBG("index %d for LOOPBACK\n", i);
 
 		/* set up the loopback with specific id */
 		aic3008_set_loopback(i);
 		break;
 
 	case AIC3008_IO_GET_PCBID: /* get pcbid */
-		AUD_INFO("pass pcbid %d\n", pcbid);
 		pcbid = htc_get_pcbid_info();
 		if (copy_to_user((void *) argc, &pcbid, sizeof(int))) {
 			AUD_ERR("failed on copy_to_user\n");
-			ret = -EFAULT;
-			break;
+			return -EFAULT;
 		}
 		break;
 
 	default:
 		AUD_ERR("invalid command %d\n", _IOC_NR(cmd));
 		ret = -EINVAL;
-		break;
 	}
 
 	return ret;
@@ -1537,10 +1402,6 @@ static struct miscdevice aic3008_misc = {
 		.name = "codec_aic3008",
 		.fops = &aic3008_fops,
 };
-
-static ssize_t beats_print_name(struct switch_dev *sdev, char *buf){
-	return sprintf(buf, "Beats\n");
-}
 
 /*****************************************************************************/
 /* Audio Codec specific DAI callback functions                               */
@@ -1582,7 +1443,6 @@ static int aic3008_dai_startup(struct snd_pcm_substream *substream,
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_codec *codec = rtd->codec;
 	struct aic3008_priv *aic3008 = snd_soc_codec_get_drvdata(codec);
-	struct spi_device *spi = codec->control_data;
 	struct snd_pcm_runtime *master_runtime;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
@@ -1673,9 +1533,8 @@ static int aic3008_dai_hw_params(struct snd_pcm_substream *substream,
 			      SNDRV_PCM_RATE_44100 |	\
 			      SNDRV_PCM_RATE_48000)
 
-#define AIC3008_FORMATS (SNDRV_PCM_FMTBIT_S16_LE |\
-			SNDRV_PCM_FMTBIT_S20_3LE |\
-			SNDRV_PCM_FMTBIT_S24_LE)
+#define AIC3008_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE | \
+			SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S32_LE)
 
 static struct snd_soc_dai_ops aic3008_dai_ops = {
 		.startup = aic3008_dai_startup,
@@ -1711,55 +1570,32 @@ struct snd_soc_dai_driver aic3008_dai = {
 /*****************************************************************************/
 static int __devinit aic3008_probe(struct snd_soc_codec *codec)
 {
-	AUD_INFO("aic3008_probe() start... aic3008_codec:%p", codec);
 	int ret = 0;
 
 	struct aic3008_priv *aic3008 = snd_soc_codec_get_drvdata(codec);
+	aic3008->codec = codec;
+
+	AUD_INFO("aic3008_probe() start... aic3008_codec:%p", codec);
+
+	aic3008->codec->control_data = (void *)codec_spi_dev;
+
 	if (!aic3008) {
-		AUD_ERR("AIC3008: Codec not registered, SPI device not yet probed\n");
+		AUD_ERR("%p: Codec not registered, SPI device not yet probed\n",
+				&aic3008->codec->name);
 		return -ENODEV;
 	}
-	aic3008->codec = codec;
-	aic3008->codec->control_data = (void *)codec_spi_dev;
+	aic3008_sw_reset(codec); // local call to reset codec
 	aic3008_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 
 	// request space for SPI commands data of AIC3008
 	aic3008_uplink = init_2d_array(IO_CTL_ROW_MAX, IO_CTL_COL_MAX);
-	if (aic3008_uplink == NULL) {
-		AUD_ERR("aic3008_probe() aic3008_uplink alloc failed.");
-		goto uplink_failed;
-	}
-
 	aic3008_downlink = init_2d_array(IO_CTL_ROW_MAX, IO_CTL_COL_MAX);
-	if (aic3008_downlink == NULL) {
-		AUD_ERR("aic3008_probe() aic3008_downlink alloc failed.");
-		goto downlink_failed;
-	}
-
 	aic3008_minidsp = init_2d_array(MINIDSP_ROW_MAX, MINIDSP_COL_MAX);
-	if (aic3008_minidsp == NULL) {
-		AUD_ERR("aic3008_probe() aic3008_minidsp alloc failed.");
-		goto minidsp_failed;
-	}
-
 	bulk_tx = kcalloc(MINIDSP_COL_MAX * 2 , sizeof(uint8_t), GFP_KERNEL);
-	if (bulk_tx == NULL) {
-		AUD_ERR("aic3008_probe() bulk_tx alloc failed.");
-		goto bulk_failed;
-	}
 
 	AUD_INFO("Audio Codec Driver init complete in %lld ms\n",
 			 ktime_to_ms(ktime_get()) - drv_up_time);
 	return ret;
-
-bulk_failed:
-	kfree(aic3008_minidsp);
-minidsp_failed:
-	kfree(aic3008_downlink);
-downlink_failed:
-	kfree(aic3008_uplink);
-uplink_failed:
-	return -ENOMEM;
 }
 
 static int __devexit aic3008_remove(struct snd_soc_codec *codec)
@@ -1784,13 +1620,12 @@ static int aic3008_resume(struct snd_soc_codec *codec)
 	return 0;
 }
 
-static struct snd_soc_codec_driver soc_codec_dev_aic3008 = {
+static struct snd_soc_codec_driver soc_codec_dev_aic3008 __refdata = {
 	.probe =	aic3008_probe,
 	.remove =	aic3008_remove,
 	.suspend =	aic3008_suspend,
 	.resume =	aic3008_resume,
 	.set_bias_level = aic3008_set_bias_level,
-	.volatile_register = aic3008_volatile_register,
 };
 
 /*****************************************************************************/
@@ -1798,15 +1633,17 @@ static struct snd_soc_codec_driver soc_codec_dev_aic3008 = {
 /*****************************************************************************/
 static int spi_aic3008_probe(struct spi_device *spi_aic3008)
 {
-	AUD_DBG("spi device: %s, addr = 0x%p. YAY! ***** Start to Test *****\n",
-		spi_aic3008->modalias, spi_aic3008);
+
 	int ret = 0;
-	codec_spi_dev = spi_aic3008; /* assign global pointer to SPI device. */
 
 	struct aic3008_priv *aic3008 = kzalloc(sizeof(struct aic3008_priv), GFP_KERNEL);;
 	if (aic3008 == NULL)
 		return -ENOMEM;
-	
+
+	AUD_DBG("spi device: %s, addr = 0x%p. YAY! ***** Start to Test *****\n",
+		spi_aic3008->modalias, spi_aic3008);
+	codec_spi_dev = spi_aic3008; /* assign global pointer to SPI device. */	
+
 	spi_set_drvdata(spi_aic3008, aic3008);
 
 	ret = snd_soc_register_codec(&spi_aic3008->dev,
@@ -1887,17 +1724,9 @@ static inline void spi_aic3008_exit(void)
 
 static int __init aic3008_modinit(void)
 {
-	int ret = 0;
 	AUD_DBG("Start aic3008_modinit\n");
 	drv_up_time = ktime_to_ms(ktime_get());
 	spi_aic3008_init();
-	sdev_beats.name = "Beats";
-	sdev_beats.print_name = beats_print_name;
-	ret = switch_dev_register(&sdev_beats);
-	if (ret < 0) {
-		pr_err("failed to register beats switch device!\n");
-		return ret;
-	}
 	return 0;
 }
 module_init(aic3008_modinit);

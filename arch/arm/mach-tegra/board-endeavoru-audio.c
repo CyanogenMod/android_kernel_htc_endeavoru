@@ -1,6 +1,14 @@
+#include <linux/kernel.h>
+#include <linux/delay.h>
+#include <linux/gpio.h>
+#include <linux/regulator/consumer.h>
+
+#include <mach/board_htc.h>
+
+#include "gpio-names.h"
 #include "htc_audio_power.h"
 
-static struct aic3008_power *aic3008_power_ctl;
+struct aic3008_power aic3008_power;
 static int pcbid;
 
 static void aic3008_powerinit(void)
@@ -18,29 +26,29 @@ static void aic3008_powerinit(void)
 	sfio_deconfig("AUD_LINEOUT_EN", TEGRA_GPIO_PP7);
 	common_init();
 
-	spin_lock_init(&aic3008_power_ctl->spin_lock);
-	aic3008_power_ctl->isPowerOn = true;
+	spin_lock_init(&aic3008_power.spin_lock);
+	aic3008_power.isPowerOn = true;
 
 	return;
 }
 
 static void aic3008_resume(void)
 {
-	spin_lock(&aic3008_power_ctl->spin_lock);
+	spin_lock(&aic3008_power.spin_lock);
 	power_config("AUD_MCLK_EN", TEGRA_GPIO_PX7, GPIO_OUTPUT);
 	common_config();
-	aic3008_power_ctl->isPowerOn = true;
-	spin_unlock(&aic3008_power_ctl->spin_lock);
+	aic3008_power.isPowerOn = true;
+	spin_unlock(&aic3008_power.spin_lock);
 	return;
 }
 
 static void aic3008_suspend(void)
 {
-	spin_lock(&aic3008_power_ctl->spin_lock);
+	spin_lock(&aic3008_power.spin_lock);
 	power_deconfig("AUD_MCLK_EN", TEGRA_GPIO_PX7, GPIO_OUTPUT);
 	common_deconfig();
-	aic3008_power_ctl->isPowerOn = false;
-	spin_unlock(&aic3008_power_ctl->spin_lock);
+	aic3008_power.isPowerOn = false;
+	spin_unlock(&aic3008_power.spin_lock);
 	return;
 }
 
@@ -114,25 +122,16 @@ static void aic3008_modem_coredump(void)
 	return;
 }
 
-int __init endeavoru_audio_codec_init(struct htc_asoc_platform_data *pdata)
-{
-	pcbid = htc_get_pcbid_info();
-
-	aic3008_power_ctl = &pdata->aic3008_power;
-
-	aic3008_power_ctl->mic_switch = false;
-	aic3008_power_ctl->amp_switch = true;
-	aic3008_power_ctl->i2s_switch = false;
-	aic3008_power_ctl->hs_vol_control = false;
-	aic3008_power_ctl->powerinit = aic3008_powerinit;
-	aic3008_power_ctl->resume = aic3008_resume;
-	aic3008_power_ctl->suspend = aic3008_suspend;
-	aic3008_power_ctl->mic_powerup = aic3008_mic_powerup;
-	aic3008_power_ctl->mic_powerdown = aic3008_mic_powerdown;
-	aic3008_power_ctl->amp_powerup = aic3008_amp_powerup;
-	aic3008_power_ctl->amp_powerdown = aic3008_amp_powerdown;
-	aic3008_power_ctl->i2s_control = aic3008_i2s_control;
-	aic3008_power_ctl->headset_vol_control = aic3008_hs_vol_control;
-	aic3008_power_ctl->modem_coredump = aic3008_modem_coredump;
-}
-
+struct aic3008_power aic3008_power = {
+	.mic_switch = false,
+	.amp_switch = true,
+	.powerinit = aic3008_powerinit,
+	.resume = aic3008_resume,
+	.suspend = aic3008_suspend,
+	.mic_powerup = aic3008_mic_powerup,
+	.mic_powerdown = aic3008_mic_powerdown,
+	.amp_powerup = aic3008_amp_powerup,
+	.amp_powerdown = aic3008_amp_powerdown,
+};
+struct aic3008_power *aic3008_power_ctl = &aic3008_power;
+EXPORT_SYMBOL_GPL(aic3008_power_ctl);
