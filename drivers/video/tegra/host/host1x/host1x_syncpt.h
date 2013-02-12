@@ -27,6 +27,9 @@
  * So if someone decides to add new sync point in future
  * please check both the header files
  */
+#define NVSYNCPT_DISP0_D		     (5)
+#define NVSYNCPT_DISP0_H		     (6)
+#define NVSYNCPT_DISP1_H		     (7)
 #define NVSYNCPT_CSI_VI_0		     (11)
 #define NVSYNCPT_CSI_VI_1		     (12)
 #define NVSYNCPT_VI_ISP_0		     (13)
