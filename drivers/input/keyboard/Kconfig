@@ -563,4 +563,9 @@ config KEYBOARD_W90P910
 	  To compile this driver as a module, choose M here: the
 	  module will be called w90p910_keypad.
 
+config TOUCHSCREEN_SYNAPTICS_SWEEP2WAKE
+	tristate "Sweep2Wake for SYNAPTICS_3k based touchscreens"
+	depends on TOUCHSCREEN_SYNAPTICS_3k
+	default n
+
 endif
