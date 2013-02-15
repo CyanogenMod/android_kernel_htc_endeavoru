@@ -195,14 +195,6 @@ static void tegra_audio_route(struct aic3008_priv *audio_data,
 		break;
 
 	case AIC3008_IO_CONFIG_MEDIA:
-// maxwen TODO
-#if 0
-        if (idx == 20 ){
-            idx = 9;
-        } else if( idx == 7 ){
-            return;
-        }
-#endif
 		AUD_DBG("tegra_audio_route, AIC3008_IO_CONFIG_MEDIA, idx = %d, call mode %d \n",
 				idx, audio_data->is_call_mode);
 		aic3008_setMode(cmd, idx, audio_data->is_call_mode);
