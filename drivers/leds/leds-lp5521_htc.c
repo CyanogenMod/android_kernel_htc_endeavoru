@@ -50,6 +50,13 @@ static struct workqueue_struct *g_led_work_queue;
 static struct work_struct led_powerkey_work;
 static struct workqueue_struct *led_powerkey_work_queue;
 
+typedef struct {
+	struct work_struct fade_work;
+	int fade_mode;
+	struct i2c_client *client;
+} button_fade_work_t;
+static button_fade_work_t button_fade_work;
+
 
 struct lp5521_led {
 	int			id;
@@ -565,48 +572,47 @@ static void lp5521_dual_color_blink(struct i2c_client *client)
 	I(" %s ---\n" , __func__);
 }
 
-static void lp5521_backlight_on(struct i2c_client *client)
-{
+static inline int button_fade_in(struct i2c_client *client) {
 	uint8_t data = 0x00;
 	int i, ret, brightness;
 
-	I(" %s +++\n" , __func__);
-	if( current_mode == 0 && backlight_mode == 0 )
+	if (current_mode == 0 && backlight_mode == 0)
 		lp5521_led_enable(client);
 	brightness = button_brightness/5;
 	backlight_mode = 1;
 	mutex_lock(&led_mutex);
+
 	/* === set blue pwm to 255 === */
-	for( i=1;i<=5;i++) {
+	for (i=1;i<=5;i++) {
 		data = (u8)i*brightness;
 		ret = i2c_write_block(client, 0x04, &data, 1);
-		if( ret < 0 )
+		if (ret < 0)
 			break;
 		msleep(25);
 	}
 	mutex_unlock(&led_mutex);
-	I(" %s ---\n" , __func__);
+	return ret;
 }
 
-static void lp5521_backlight_off(struct i2c_client *client)
-{
+static inline int button_fade_out(struct i2c_client *client) {
 	uint8_t data = 0x00;
 	int i, ret, brightness;
 	struct led_i2c_platform_data *pdata;
 
-	I(" %s +++\n" , __func__);
 	pdata = client->dev.platform_data;
 	brightness = button_brightness/5;
 	backlight_mode = 0;
 	mutex_lock(&led_mutex);
+
 	/* === set blue pwm to 0 === */
-	for( i=4;i>=0;i--) {
+	for (i=4;i>=0;i--) {
 		data = (u8)i*brightness;
 		ret = i2c_write_block(client, 0x04, &data, 1);
-		if( ret < 0 )
+		if (ret < 0)
 			break;
 		msleep(25);
 	}
+
 	if( current_mode == 0 ) {
 		if( suspend_mode == 1 ) {
 			/* === reset register === */
@@ -625,8 +631,48 @@ static void lp5521_backlight_off(struct i2c_client *client)
 		}
 	}
 	mutex_unlock(&led_mutex);
-	I(" %s ---\n" , __func__);
+	return ret;
+}
 
+static void button_fade_work_func(struct work_struct *work)
+{
+	button_fade_work_t *fade_work;
+	int ret;
+	struct i2c_client *client;
+
+	D(" %s\n", __func__);
+
+	fade_work = (button_fade_work_t *) work;
+	client = fade_work->client;
+
+	if (fade_work->fade_mode) {
+		ret = button_fade_in(client);
+	} else {
+		ret = button_fade_out(client);
+	}
+
+	if (ret < 0)
+		I(" %s: mode=%d, ret=%d\n", __func__, fade_work->fade_mode, ret);
+
+	D(" %s\n", __func__);
+}
+
+static void lp5521_backlight_on(struct i2c_client *client)
+{
+	I(" %s +++\n" , __func__);
+	button_fade_work.fade_mode = 1;
+	button_fade_work.client = client;
+	queue_work(led_powerkey_work_queue, (struct work_struct *) &button_fade_work);
+	I(" %s ---\n" , __func__);
+}
+
+static void lp5521_backlight_off(struct i2c_client *client)
+{
+	I(" %s +++\n" , __func__);
+	button_fade_work.fade_mode = 0;
+	button_fade_work.client = client;
+	queue_work(led_powerkey_work_queue, (struct work_struct *) &button_fade_work);
+	I(" %s ---\n" , __func__);
 }
 
 static void lp5521_dual_off(struct i2c_client *client)
@@ -1324,7 +1370,7 @@ static int lp5521_led_probe(struct i2c_client *client
 		pr_err("[LED] %s: gpio_direction_output failed %d\n", __func__, ret);
 		gpio_free(pdata->ena_gpio);
 		return ret;
-	}   
+	}
    	tegra_gpio_enable(pdata->ena_gpio);
 	button_brightness = pdata->led_config[2].led_lux * 255 / 100;
 
@@ -1335,6 +1381,7 @@ static int lp5521_led_probe(struct i2c_client *client
 	led_powerkey_work_queue = create_workqueue("led_powerkey");
 	if (!led_powerkey_work_queue)
 		goto err_create_work_queue;
+
 	/* intail LED config */
 	for (i = 0; i < pdata->num_leds; i++) {
 		cdata->leds[i].cdev.name = pdata->led_config[i].name;
@@ -1375,6 +1422,7 @@ static int lp5521_led_probe(struct i2c_client *client
 				   led_alarm_handler);
 	}
 	INIT_WORK(&led_powerkey_work, led_powerkey_work_func);
+	INIT_WORK((struct work_struct *) &button_fade_work, button_fade_work_func);
 
 	/* === create device node === */
 	ret = device_create_file(&client->dev, &dev_attr_behavior);
