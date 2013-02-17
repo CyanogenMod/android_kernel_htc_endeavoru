@@ -1957,9 +1957,11 @@ static void endeavortd_usb_init(void)
 	android_usb_pdata.serial_number = board_serialno();
 	android_usb_pdata.products[0].product_id = android_usb_pdata.product_id;
 
+#if 0
 	if (board_mfg_mode() == BOARD_MFG_MODE_NORMAL /* normal mode */) {
 		android_usb_pdata.cdrom_lun = 0x1;
 	}
+#endif
 
 	platform_device_register(&android_usb_device);
 }
