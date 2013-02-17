@@ -655,6 +655,13 @@ config REMOVE_HSIC_L3_STATE
 	help
 	  Remove HSIC L3 suspend state.
 
+config TEGRA_LP1_950
+	bool "LP1 low core voltage"
+	default n
+	depends on ARCH_TEGRA_3x_SOC
+	help
+	  Enable support for LP1 Core voltage to set to lowest
+
 config HTC_HEADSET_MGR
 	tristate "HTC headset manager driver"
 	default n

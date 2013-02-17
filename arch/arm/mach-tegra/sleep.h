@@ -223,6 +223,10 @@ void tegra2_sleep_wfi(unsigned long v2p);
 #else
 extern unsigned int tegra3_iram_start;
 extern unsigned int tegra3_iram_end;
+extern unsigned int lp1_register_pmuslave_addr;
+extern unsigned int lp1_register_i2c_base_addr;
+extern unsigned int lp1_register_core_lowvolt;
+extern unsigned int lp1_register_core_highvolt;
 void tegra3_sleep_core(unsigned long v2p);
 void tegra3_sleep_cpu_secondary(unsigned long v2p);
 void tegra3_hotplug_shutdown(void);
@@ -243,6 +247,42 @@ static inline void *tegra_iram_end(void)
 	return &tegra2_iram_end;
 #else
 	return &tegra3_iram_end;
+#endif
+}
+
+static inline void *tegra_lp1_register_pmuslave_addr(void)
+{
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	return NULL;
+#else
+	return &lp1_register_pmuslave_addr;
+#endif
+}
+
+static inline void *tegra_lp1_register_i2c_base_addr(void)
+{
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	return NULL;
+#else
+	return &lp1_register_i2c_base_addr;
+#endif
+}
+
+static inline void *tegra_lp1_register_core_lowvolt(void)
+{
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	return NULL;
+#else
+	return &lp1_register_core_lowvolt;
+#endif
+}
+
+static inline void *tegra_lp1_register_core_highvolt(void)
+{
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	return NULL;
+#else
+	return &lp1_register_core_highvolt;
 #endif
 }
 #endif
