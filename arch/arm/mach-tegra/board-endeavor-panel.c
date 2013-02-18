@@ -289,7 +289,94 @@ static struct resource endeavor_disp2_resources[] = {
 };
 
 static struct tegra_dc_sd_settings endeavor_sd_settings = {
-	.enable = 0, /* Normal mode operation */
+	.enable = 1, /* Normal mode operation */
+	.use_auto_pwm = false,
+	.hw_update_delay = 0,
+	.bin_width = -1,
+	.aggressiveness = 1,
+	.phase_in_adjustments = true,
+	.use_vid_luma = false,
+	/* Default video coefficients */
+	.coeff = {5, 9, 2},
+	.fc = {0, 0},
+	/* Immediate backlight changes */
+	.blp = {1024, 255},
+	/* Gammas: R: 2.2 G: 2.2 B: 2.2 */
+	/* Default BL TF */
+	.bltf = {
+			{
+				{57, 65, 74, 83},
+				{93, 103, 114, 126},
+				{138, 151, 165, 179},
+				{194, 209, 225, 242},
+			},
+			{
+				{58, 66, 75, 84},
+				{94, 105, 116, 127},
+				{140, 153, 166, 181},
+				{196, 211, 227, 244},
+			},
+			{
+				{60, 68, 77, 87},
+				{97, 107, 119, 130},
+				{143, 156, 170, 184},
+				{199, 215, 231, 248},
+			},
+			{
+				{64, 73, 82, 91},
+				{102, 113, 124, 137},
+				{149, 163, 177, 192},
+				{207, 223, 240, 255},
+			},
+		},
+	/* Default LUT */
+	.lut = {
+			{
+				{250, 250, 250},
+				{194, 194, 194},
+				{149, 149, 149},
+				{113, 113, 113},
+				{82, 82, 82},
+				{56, 56, 56},
+				{34, 34, 34},
+				{15, 15, 15},
+				{0, 0, 0},
+			},
+			{
+				{246, 246, 246},
+				{191, 191, 191},
+				{147, 147, 147},
+				{111, 111, 111},
+				{80, 80, 80},
+				{55, 55, 55},
+				{33, 33, 33},
+				{14, 14, 14},
+				{0, 0, 0},
+			},
+			{
+				{239, 239, 239},
+				{185, 185, 185},
+				{142, 142, 142},
+				{107, 107, 107},
+				{77, 77, 77},
+				{52, 52, 52},
+				{30, 30, 30},
+				{12, 12, 12},
+				{0, 0, 0},
+			},
+			{
+				{224, 224, 224},
+				{173, 173, 173},
+				{133, 133, 133},
+				{99, 99, 99},
+				{70, 70, 70},
+				{46, 46, 46},
+				{25, 25, 25},
+				{7, 7, 7},
+				{0, 0, 0},
+			},
+		},
+	.sd_brightness = &sd_brightness,
 	.bl_device = &endeavor_disp1_backlight_device,
 };
 
@@ -3984,6 +4071,7 @@ static struct tegra_fb_data endeavor_dsi_fb_data = {
 static struct tegra_dc_out endeavor_disp1_out = {
 	.align		= TEGRA_DC_ALIGN_MSB,
 	.order		= TEGRA_DC_ORDER_RED_BLUE,
+	.sd_settings	= &endeavor_sd_settings,
 
 	.flags		= DC_CTRL_MODE,
 
