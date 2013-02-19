@@ -120,9 +120,16 @@ static void composite_request_reset(struct work_struct *w)
 		if (usb_autobot_mode() || board_mfg_mode()) return;
 
 		INFO(cdev, "%s\n", __func__);
+#ifdef YES_WE_WANT_THE_OS_TYPE_CHECK
+                /* Both board_mfg_mode() and usb_autobot_mode() return 0 if the
+                   device is booted normally.
+                   This check will cause a different USB interface to be set for
+                   Linux which is not wanted. Disable it to get UMS back.
+                */
 		if (os_type == OS_LINUX)
 			fsg_update_mode(1);
 		else
+#endif
 			fsg_update_mode(0);
 		composite_disconnect(cdev->gadget);
 		usb_composite_force_reset(cdev);
