@@ -77,7 +77,6 @@ static int aic3008_rx_mode;
 static int aic3008_tx_mode;
 static int aic3008_dsp_mode;
 static bool first_boot_path = false;
-static bool dspindex_init_done = false;
 static struct pm_qos_request_list aud_cpu_minfreq_req;
 
 struct aic3008_power *aic3008_power_ctl;
@@ -874,51 +873,6 @@ static void aic3008_set_loopback(int mode)
 	}
 }
 
-static void init_default_dspindex() {
-    aic3008_dspindex[0] = 1;
-    aic3008_dspindex[1] = 2;
-    aic3008_dspindex[2] = 3;
-    aic3008_dspindex[3] = 4;
-    aic3008_dspindex[4] = 5;
-    aic3008_dspindex[5] = 6;
-    aic3008_dspindex[6] = 7;
-    aic3008_dspindex[7] = 11;
-    aic3008_dspindex[8] = 12;
-    aic3008_dspindex[9] = 13;
-    aic3008_dspindex[10] = 20;
-    aic3008_dspindex[11] = 21;
-    aic3008_dspindex[12] = 22;
-    aic3008_dspindex[13] = 23;
-    aic3008_dspindex[14] = 24;
-    aic3008_dspindex[15] = 25;
-    aic3008_dspindex[16] = 26;
-    aic3008_dspindex[17] = 27;
-    aic3008_dspindex[18] = 28;
-    aic3008_dspindex[19] = 29;
-    aic3008_dspindex[20] = 30;
-    aic3008_dspindex[21] = 31;
-    aic3008_dspindex[22] = 32;
-    aic3008_dspindex[23] = 33;
-    aic3008_dspindex[24] = 34;
-    aic3008_dspindex[25] = 35;
-    aic3008_dspindex[26] = 36;
-    aic3008_dspindex[27] = 37;
-    aic3008_dspindex[28] = 38;
-    aic3008_dspindex[29] = 39;
-    aic3008_dspindex[30] = -1;
-    aic3008_dspindex[31] = -1;
-    aic3008_dspindex[32] = -1;
-    aic3008_dspindex[33] = -1;
-    aic3008_dspindex[34] = -1;
-    aic3008_dspindex[35] = -1;
-    aic3008_dspindex[36] = -1;
-    aic3008_dspindex[37] = -1;
-    aic3008_dspindex[38] = -1;
-    aic3008_dspindex[39] = -1;
-
-    dspindex_init_done = true;
-}
-
 static int aic3008_set_config(int config_tbl, int idx, int en)
 {
 	int rc = 0, len = 0;
@@ -1146,10 +1100,6 @@ static int aic3008_set_config(int config_tbl, int idx, int en)
 
 		/* i2s config */
 		if (aic3008_power_ctl->i2s_switch) {
-			if (!dspindex_init_done) {
-				init_default_dspindex();
-			}
-
 			if (aic3008_dspindex[idx] != -1) {
 				aic3008_power_ctl->i2s_control(aic3008_dspindex[idx]);
 			} else {
@@ -1340,7 +1290,6 @@ static long aic3008_ioctl(struct file *file, unsigned int cmd,
 		break;
 
 	/* third io command from HAL */
-	case 0x40047320:
 	case AIC3008_IO_SET_DSP_PARAM:
 		if (copy_from_user(&para, (void *) argc, sizeof(para))) {
 			AUD_ERR("failed on copy_from_user\n");
@@ -1373,7 +1322,6 @@ static long aic3008_ioctl(struct file *file, unsigned int cmd,
 				para.row_num, para.col_num);
 		break;
 
-	/* this below fourth io command doesnt exist in ICS AUDIO HAL*/
 	/* fourth io command from HAL */
 	case AIC3008_IO_SET_DSP_INDEX:
 		if (copy_from_user(&para, (void *) argc, sizeof(para))) {
@@ -1765,7 +1713,6 @@ static int __devinit aic3008_probe(struct snd_soc_codec *codec)
 {
 	AUD_INFO("aic3008_probe() start... aic3008_codec:%p", codec);
 	int ret = 0;
-	int i = 0;
 
 	struct aic3008_priv *aic3008 = snd_soc_codec_get_drvdata(codec);
 	if (!aic3008) {
@@ -1793,10 +1740,6 @@ static int __devinit aic3008_probe(struct snd_soc_codec *codec)
 	if (aic3008_minidsp == NULL) {
 		AUD_ERR("aic3008_probe() aic3008_minidsp alloc failed.");
 		goto minidsp_failed;
-	}
-
-	for (i=0; i<MINIDSP_ROW_MAX; i++) {
-		aic3008_dspindex[i] = -1;
 	}
 
 	bulk_tx = kcalloc(MINIDSP_COL_MAX * 2 , sizeof(uint8_t), GFP_KERNEL);
