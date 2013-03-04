@@ -53,11 +53,9 @@ static void map_iovmm_area(struct nvmap_handle *h)
 	for (va = h->pgalloc.area->iovm_start, i = 0;
 	     va < (h->pgalloc.area->iovm_start + h->size);
 	     i++, va += PAGE_SIZE) {
-		unsigned long pfn;
-
-		pfn = page_to_pfn(h->pgalloc.pages[i]);
-		BUG_ON(!pfn_valid(pfn));
-		tegra_iovmm_vm_insert_pfn(h->pgalloc.area, va, pfn);
+		BUG_ON(!pfn_valid(page_to_pfn(h->pgalloc.pages[i])));
+		tegra_iovmm_vm_insert_pfn(h->pgalloc.area, va,
+					  page_to_pfn(h->pgalloc.pages[i]));
 	}
 	h->pgalloc.dirty = false;
 }
