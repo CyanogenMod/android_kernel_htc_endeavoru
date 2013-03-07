@@ -49,6 +49,7 @@
 #include "cpu-tegra.h"
 #include "dvfs.h"
 #include "pm.h"
+#include "tegra_pmqos.h"
 
 extern unsigned int get_powersave_freq();
 /* Symbol to store resume resume */
@@ -551,7 +552,8 @@ int tegra_update_cpu_speed(unsigned long rate)
 	if (freqs.old == freqs.new)
 		return ret;
 
-	if (freqs.new < rate_save && rate_save >= 880000) {
+//	if (freqs.new < rate_save && rate_save >= 880000) { // HTC code
+	if (rate_save > T3_LP_MAX_FREQ) {
 		if (is_lp_cluster()) {
 			orig_nice = task_nice(current);
 
