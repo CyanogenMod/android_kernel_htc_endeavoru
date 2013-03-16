@@ -102,7 +102,7 @@ const int dma_req_sel[] = {
 #define TEGRA_UART_TX_TRIG_1B  0x30
 
 #ifdef TI_A2DP_TUNING_SUPPORTED
-#define TI_A2DP_CPU_FREQ_MIN 102000
+#define TI_A2DP_CPU_FREQ_MIN 204000
 #endif
 
 #ifdef CONFIG_BT_CTS_WAKEUP
