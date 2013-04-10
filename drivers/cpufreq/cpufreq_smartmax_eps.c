@@ -56,7 +56,7 @@ static unsigned int ideal_freq;
  * Zero disables and causes to always jump straight to max frequency.
  * When below the ideal freqeuncy we always ramp up to the ideal freq.
  */
-#define DEFAULT_RAMP_UP_STEP 300000
+#define DEFAULT_RAMP_UP_STEP 150000
 static unsigned int ramp_up_step;
 
 /*
@@ -70,13 +70,13 @@ static unsigned int ramp_down_step;
 /*
  * CPU freq will be increased if measured load > max_cpu_load;
  */
-#define DEFAULT_MAX_CPU_LOAD 80
+#define DEFAULT_MAX_CPU_LOAD 95
 static unsigned int max_cpu_load;
 
 /*
  * CPU freq will be decreased if measured load < min_cpu_load;
  */
-#define DEFAULT_MIN_CPU_LOAD 50
+#define DEFAULT_MIN_CPU_LOAD 60
 static unsigned int min_cpu_load;
 
 /*
@@ -101,7 +101,7 @@ static unsigned int sampling_rate;
 #define DEFAULT_INPUT_BOOST_DURATION 50000000
 static unsigned int input_boost_duration;
 
-static unsigned int touch_poke_freq = 760000;
+static unsigned int touch_poke_freq = 640000;
 static bool touch_poke = true;
 
 /*
@@ -120,7 +120,7 @@ static bool ramp_up_during_boost = true;
  * external boost interface - boost if duration is written
  * to sysfs for boost_duration
  */
-static unsigned int boost_freq = 760000;
+static unsigned int boost_freq = 640000;
 static bool boost = true;
 
 /* in nsecs */
@@ -162,7 +162,7 @@ static DEFINE_PER_CPU(struct smartmax_info_s, smartmax_info);
 
 #if SMARTMAX_DEBUG
 #define dprintk(flag,msg...) do { \
-	if (debug_mask & flag) printk(KERN_DEBUG "[smartmax]" ":" msg); \
+	if (debug_mask & flag) printk(KERN_DEBUG "[smartmax_eps]" ":" msg); \
 	} while (0)
 #else
 #define dprintk(flag,msg...)
@@ -200,14 +200,14 @@ static unsigned int cur_boost_freq = 0;
 static unsigned int cur_boost_duration = 0;
 static bool boost_running = false;
 
-static int cpufreq_governor_smartmax(struct cpufreq_policy *policy,
+static int cpufreq_governor_smartmax_eps(struct cpufreq_policy *policy,
 		unsigned int event);
 
-#ifndef CONFIG_CPU_FREQ_DEFAULT_GOV_SMARTMAX
+#ifndef CONFIG_CPU_FREQ_DEFAULT_GOV_SMARTMAX_EPS
 static
 #endif
-struct cpufreq_governor cpufreq_gov_smartmax = { .name = "smartmax", .governor =
-		cpufreq_governor_smartmax, .max_transition_latency = 9000000, .owner =
+struct cpufreq_governor cpufreq_gov_smartmax_eps = { .name = "smartmax_eps", .governor =
+		cpufreq_governor_smartmax_eps, .max_transition_latency = 9000000, .owner =
 		THIS_MODULE , };
 
 static inline cputime64_t get_cpu_idle_time_jiffy(unsigned int cpu,
@@ -992,7 +992,7 @@ static struct attribute * smartmax_attributes[] = {
 	NULL , };
 
 static struct attribute_group smartmax_attr_group = { .attrs =
-		smartmax_attributes, .name = "smartmax", };
+		smartmax_attributes, .name = "smartmax_eps", };
 
 static int cpufreq_smartmax_boost_task(void *data) {
 	struct cpufreq_policy *policy;
@@ -1111,9 +1111,9 @@ static const struct input_device_id dbs_ids[] = { { .driver_info = 1 }, { }, };
 
 static struct input_handler dbs_input_handler = { .event = dbs_input_event,
 		.connect = dbs_input_connect, .disconnect = dbs_input_disconnect,
-		.name = "cpufreq_smartmax", .id_table = dbs_ids, };
+		.name = "cpufreq_smartmax_eps", .id_table = dbs_ids, };
 
-static int cpufreq_governor_smartmax(struct cpufreq_policy *new_policy,
+static int cpufreq_governor_smartmax_eps(struct cpufreq_policy *new_policy,
 		unsigned int event) {
 	unsigned int cpu = new_policy->cpu;
 	int rc;
@@ -1240,17 +1240,17 @@ static int __init cpufreq_smartmax_init(void) {
 		this_smartmax->cur_cpu_load = 0;
 	}
 
-	return cpufreq_register_governor(&cpufreq_gov_smartmax);
+	return cpufreq_register_governor(&cpufreq_gov_smartmax_eps);
 }
 
-#ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_SMARTMAX
+#ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_SMARTMAX_EPS
 fs_initcall(cpufreq_smartmax_init);
 #else
 module_init(cpufreq_smartmax_init);
 #endif
 
 static void __exit cpufreq_smartmax_exit(void) {
-	cpufreq_unregister_governor(&cpufreq_gov_smartmax);
+	cpufreq_unregister_governor(&cpufreq_gov_smartmax_eps);
 }
 
 module_exit(cpufreq_smartmax_exit);
