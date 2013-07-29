@@ -47,7 +47,7 @@ struct proc_dir_entry *ts27010_uart_proc_alloc(void);
 #ifdef PROC_DEBUG_MUX_STAT
 struct proc_dir_entry *ts27010_uart_proc_stat_alloc(void);
 #endif
-inline void ts27010_uart_proc_free(
+void ts27010_uart_proc_free(
 	struct proc_dir_entry *seq_no, const char *name);
 #endif
 
