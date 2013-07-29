@@ -47,7 +47,7 @@ struct proc_dir_entry *ts27010_uart_proc_alloc(void);
 #ifdef PROC_DEBUG_MUX_STAT
 struct proc_dir_entry *ts27010_uart_proc_stat_alloc(void);
 #endif
-inline void ts27010_uart_proc_free(
+void ts27010_uart_proc_free(
 	struct proc_dir_entry *seq_no, const char *name);
 #endif
 
@@ -61,11 +61,11 @@ inline void ts27010_uart_proc_free(
 /***************************** sequence number ********************************/
 struct sequence_number_t;
 struct sequence_number_t *ts27010_sequence_number_alloc(void);
-inline void ts27010_sequence_number_free(struct sequence_number_t *seq_no);
-inline int ts27010_sequence_number_lock(struct sequence_number_t *seq_no);
-inline void ts27010_sequence_number_unlock(struct sequence_number_t *seq_no);
-inline u8 ts27010_sequence_number_get(struct sequence_number_t *seq_no);
-inline void ts27010_sequence_number_inc(struct sequence_number_t *seq_no);
+void ts27010_sequence_number_free(struct sequence_number_t *seq_no);
+int ts27010_sequence_number_lock(struct sequence_number_t *seq_no);
+void ts27010_sequence_number_unlock(struct sequence_number_t *seq_no);
+u8 ts27010_sequence_number_get(struct sequence_number_t *seq_no);
+void ts27010_sequence_number_inc(struct sequence_number_t *seq_no);
 
 /***************************** timer param ********************************/
 struct ts27010_timer_para_t;

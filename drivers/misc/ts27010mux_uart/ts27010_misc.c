@@ -315,7 +315,7 @@ struct proc_dir_entry *ts27010_uart_proc_stat_alloc(void)
 }
 #endif
 
-inline void ts27010_uart_proc_free(struct proc_dir_entry *proc_entry,
+void ts27010_uart_proc_free(struct proc_dir_entry *proc_entry,
 	const char *name)
 {
 	remove_proc_entry(name, NULL);
@@ -348,13 +348,13 @@ struct sequence_number_t *ts27010_sequence_number_alloc(void)
 	return seq_no;
 }
 
-inline void ts27010_sequence_number_free(struct sequence_number_t *seq_no)
+void ts27010_sequence_number_free(struct sequence_number_t *seq_no)
 {
 	kfree(seq_no);
 	seq_no = NULL;
 }
 
-inline int ts27010_sequence_number_lock(struct sequence_number_t *seq_no)
+int ts27010_sequence_number_lock(struct sequence_number_t *seq_no)
 {
 	FUNC_ENTER();
 	mutex_lock(&seq_no->m_lock);
@@ -362,19 +362,19 @@ inline int ts27010_sequence_number_lock(struct sequence_number_t *seq_no)
 	return 0;
 }
 
-inline void ts27010_sequence_number_unlock(struct sequence_number_t *seq_no)
+void ts27010_sequence_number_unlock(struct sequence_number_t *seq_no)
 {
 	FUNC_ENTER();
 	mutex_unlock(&seq_no->m_lock);
 	FUNC_EXIT();
 }
 
-inline u8 ts27010_sequence_number_get(struct sequence_number_t *seq_no)
+u8 ts27010_sequence_number_get(struct sequence_number_t *seq_no)
 {
 	return seq_no->m_sn;
 }
 
-inline void ts27010_sequence_number_inc(struct sequence_number_t *seq_no)
+void ts27010_sequence_number_inc(struct sequence_number_t *seq_no)
 {
 /*/	seq_no->m_sn = (seq_no->m_sn + 1) % MAX_TRANS_SN; /*/
 	seq_no->m_sn = (seq_no->m_sn + 1) & (MAX_TRANS_SN - 1);
