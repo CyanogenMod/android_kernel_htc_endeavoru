@@ -336,3 +336,5 @@ obj-y 					+= htc_util.o
 obj-$(CONFIG_HTC_MONITOR) += htc_monitor.o
 
 obj-$(CONFIG_HTC_FIQ_DUMPER) += fiq_dumper.o
+
+obj-y += htc_lpm.o
