@@ -175,7 +175,7 @@ static cputime64_t s2w_double_tap_start = 0;
 // screen y barrier below that touch events will be recognized
 static unsigned int s2w_double_tap_barrier_y = 1300;
 
-static bool s2w_switch = true;
+static bool s2w_switch = false;
 static bool scr_suspended = false;
 static bool exec_count = true;
 static bool barrier = false;
