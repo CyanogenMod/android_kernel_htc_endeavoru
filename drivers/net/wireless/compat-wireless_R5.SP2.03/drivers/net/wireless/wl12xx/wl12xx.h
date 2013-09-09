@@ -106,6 +106,9 @@ int sqos_tx_fail_get(void); //HTC_WIFI, Vito Smart Qos feature 0128
 
 #define NUM_MAC_ADDRESSES          3
 
+/* wl12xx maximum transmission power (in dBm) */
+#define WL12XX_MAX_TX_POWER        25
+
 enum wlcore_state {
 	WLCORE_STATE_OFF,
 	WLCORE_STATE_RESTARTING,

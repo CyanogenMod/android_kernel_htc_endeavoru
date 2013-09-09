@@ -407,7 +407,7 @@ static int wl1271_prepare_tx_frame(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 		is_wep = (cipher == WLAN_CIPHER_SUITE_WEP40) ||
 			 (cipher == WLAN_CIPHER_SUITE_WEP104);
 
-		if (unlikely(is_wep && wlvif->default_key != idx)) {
+		if (unlikely(is_wep && wlvif && wlvif->default_key != idx)) {
 			WARN_ON(1);
 			ret = wl1271_set_default_wep_key(wl, wlvif, idx);
 			if (ret < 0)
@@ -646,8 +646,9 @@ static void wl1271_skb_queue_head(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 		skb_queue_head(&wl->links[hlid].tx_queue[q], skb);
 
 		/* make sure we dequeue the same packet next time */
-		wlvif->last_tx_hlid = (hlid + WL12XX_MAX_LINKS - 1) %
-				      WL12XX_MAX_LINKS;
+		if (wlvif)
+			wlvif->last_tx_hlid = (hlid + WL12XX_MAX_LINKS - 1) %
+					      WL12XX_MAX_LINKS;
 	}
 
 	spin_lock_irqsave(&wl->wl_lock, flags);
@@ -1054,13 +1055,14 @@ void wl12xx_tx_reset_wlvif(struct wl1271 *wl, struct wl12xx_vif *wlvif)
 
 	/* TX failure */
 	for_each_set_bit(i, wlvif->links_map, WL12XX_MAX_LINKS) {
-		if (wlvif->bss_type == BSS_TYPE_AP_BSS)
+		if (wlvif->bss_type == BSS_TYPE_AP_BSS) {
+			/* this calls wl12xx_free_link */
 			wl1271_free_sta(wl, wlvif, i);
-		else
+		} else {
+			u8 hlid = i;
 			wlvif->sta.ba_rx_bitmap = 0;
-
-		wl->links[i].allocated_pkts = 0;
-		wl->links[i].prev_freed_pkts = 0;
+			wl12xx_free_link(wl, wlvif, &hlid);
+		}
 	}
 	wlvif->last_tx_hlid = 0;
 
