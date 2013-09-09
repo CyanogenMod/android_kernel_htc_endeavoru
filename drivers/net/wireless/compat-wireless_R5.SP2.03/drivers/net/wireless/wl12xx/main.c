@@ -96,6 +96,9 @@ int pre_drop = 0;
 #define WL12XX_CORE_DUMP_CHUNK_SIZE	(4 * PAGE_SIZE)
 #define WL12XX_CORE_DUMP_ENABLED	(false)
 
+#define WL1271_FW_ASSERT_POLL_COUNT	50
+#define WL1271_FW_ASSERT_TIMEOUT	100
+
 static struct conf_drv_settings default_conf = {
 	.sg = {
 		.params = {
@@ -145,7 +148,7 @@ static struct conf_drv_settings default_conf = {
 			[CONF_SG_RXT] = 1200,
 			[CONF_SG_TXT] = 1000,
 			[CONF_SG_ADAPTIVE_RXT_TXT] = 1,
-			[CONF_SG_GENERAL_USAGE_BIT_MAP] = 3,
+			[CONF_SG_GENERAL_USAGE_BIT_MAP] = 19,
 			[CONF_SG_HV3_MAX_SERVED] = 6,
 			[CONF_SG_PS_POLL_TIMEOUT] = 10,
 			[CONF_SG_UPSD_TIMEOUT] = 10,
@@ -301,7 +304,7 @@ static struct conf_drv_settings default_conf = {
 		.forced_ps                   = false,
 		.keep_alive_interval         = 55000,
 		.max_listen_interval         = 20,
-		.elp_timeout                 = 200,
+		.elp_timeout                 = 20,
 	},
 	.itrim = {
 		.enable = false,
@@ -1351,6 +1354,21 @@ u8 wl12xx_open_count(struct wl1271 *wl)
 	return open_count;
 }
 
+static inline int wl12xx_running_vif_type(struct wl1271 *wl,
+					  enum nl80211_iftype iftype)
+{
+	struct wl12xx_vif *wlvif;
+
+	wl12xx_for_each_wlvif(wl, wlvif) {
+		struct ieee80211_vif *vif = wl12xx_wlvif_to_vif(wlvif);
+
+		if (iftype == ieee80211_vif_type_p2p(vif))
+			return 1;
+	}
+
+	return 0;
+}
+
 static int wl12xx_fetch_firmware(struct wl1271 *wl, bool plt)
 {
 	const struct firmware *fw;
@@ -1519,8 +1537,16 @@ void wl12xx_queue_recovery_work(struct wl1271 *wl)
 
 	/* Avoid a recursive recovery */
 	if (wl->state == WLCORE_STATE_ON) {
+		int ret;
+
 		wl->state = WLCORE_STATE_RESTARTING;
 		set_bit(WL1271_FLAG_RECOVERY_IN_PROGRESS, &wl->flags);
+
+		/* Call ELP wakeup to allow general recovery processing */
+		ret = wl1271_ps_elp_wakeup(wl);
+		if (ret < 0)
+			wl1271_error("FAILED wl1271_ps_elp_wakeup");
+
 		wlcore_disable_interrupts_nosync(wl);
 #ifdef CONFIG_HAS_WAKELOCK
 		/* give us a grace period for recovery */
@@ -1532,19 +1558,10 @@ void wl12xx_queue_recovery_work(struct wl1271 *wl)
 
 size_t wl12xx_copy_fwlog(struct wl1271 *wl, u8 *memblock, size_t maxlen)
 {
-	size_t len = 0;
-
-	/* The FW log is a length-value list, find where the log end */
-	while (len < maxlen) {
-		if (memblock[len] == 0)
-			break;
-		if (len + memblock[len] + 1 > maxlen)
-			break;
-		len += memblock[len] + 1;
-	}
+	size_t len;
 
 	/* Make sure we have enough room */
-	len = min(len, (size_t)(PAGE_SIZE - wl->fwlog_size));
+	len = min(maxlen, (size_t)(PAGE_SIZE - wl->fwlog_size));
 
 	/* Fill the FW log file, consumed by the sysfs fwlog entry */
 	memcpy(wl->fwlog + wl->fwlog_size, memblock, len);
@@ -1736,6 +1753,97 @@ static void wl12xx_print_recovery(struct wl1271 *wl)
 	wl1271_info("pc: 0x%x", pc);
 }
 
+static void wl12xx_trigger_fw_recovery(struct wl1271 *wl)
+{
+	int ret;
+	u16 poll_count = 0;
+	unsigned long timeout;
+
+	struct wl1271_partition_set part = {
+		.mem  = {
+			.start = WL12XX_FW_ASSERT_MEM_ADDR,
+			.size  = sizeof(u32)
+		},
+		.reg  = {0, 0},
+		.mem2 = {0, 0},
+		.mem3 = {0, 0}
+	};
+
+	struct wl1271_partition_set old_part;
+
+	if (wl->watchdog_recovery ||
+	    test_bit(WL1271_FLAG_INTENDED_FW_RECOVERY, &wl->flags) ||
+	    test_bit(WL1271_FLAG_IO_FAILED, &wl->flags))
+		goto out;
+
+	/*
+	 * Map partition so we can write into FW Assert mem address -
+	 *  Save old partition so we can resume it afterwards
+	 */
+	old_part = wl->part;
+
+	ret = wl1271_set_partition(wl, &part);
+	if (ret < 0) {
+		wl1271_error("FW Assert set mem partition failed");
+		goto out;
+	}
+
+	ret = wl1271_write32(wl, WL12XX_FW_ASSERT_MEM_ADDR,
+			     WL12XX_FW_ASSERT_MEM_DWORD);
+	if (ret < 0) {
+		wl1271_error("Write FW Assert Error");
+		goto out;
+	}
+
+	/* Resume Normal Partition for the rest */
+	ret = wl1271_set_partition(wl, &old_part);
+	if (ret < 0) {
+		wl1271_error("FW Assert resume normal mem partition failed");
+		goto out;
+	}
+
+	ret = wl1271_write32(wl, WL12XX_FW_ASSERT_INTR_LOW ?
+			     ACX_REG_INTERRUPT_TRIG : ACX_REG_INTERRUPT_TRIG_H,
+			     WL12XX_FW_ASSERT_INTR_TRIG);
+	if (ret < 0) {
+		wl1271_error("Write FW Assert Intr Trig Error");
+		goto out;
+	}
+
+	timeout = jiffies + msecs_to_jiffies(WL1271_FW_ASSERT_TIMEOUT);
+
+	while (!wl->watchdog_recovery) {
+		u32 intr;
+
+		ret = wl12xx_fw_status(wl, wl->fw_status);
+		if (ret < 0)
+			goto out;
+
+		intr = le32_to_cpu(wl->fw_status->intr);
+
+		if (intr & WL1271_ACX_INTR_WATCHDOG) {
+			wl1271_info(
+			"watchdog interrupt received! continue with recovery");
+			wl->watchdog_recovery = true;
+			break;
+		}
+
+		if (time_after(jiffies, timeout)) {
+			wl1271_error("FW Assert Watchdog timeout");
+			goto out;
+		}
+
+		poll_count++;
+		if (poll_count < WL1271_FW_ASSERT_POLL_COUNT)
+			udelay(10);
+		else
+			msleep(1);
+	}
+
+out:
+	return;
+}
+
 static void wl1271_recovery_work(struct work_struct *work)
 {
 	struct wl1271 *wl =
@@ -1748,7 +1856,18 @@ static void wl1271_recovery_work(struct work_struct *work)
 	if (wl->state == WLCORE_STATE_OFF || wl->plt)
 		goto out_unlock;
 
-	if (!test_bit(WL1271_FLAG_INTENDED_FW_RECOVERY, &wl->flags)) {
+	/*
+	 * We now first try to trigger FW side recovery and wait for recovery
+	 * watchdog. If successful, wl->watchdog_recovery will be set.
+	 */
+	wl12xx_trigger_fw_recovery(wl);
+
+	/*
+	 * Perform recovery ops with FW only if we got recovery watchdog
+	 * interrupt. Only this means that FW is still alive.
+	 */
+	if (!test_bit(WL1271_FLAG_INTENDED_FW_RECOVERY, &wl->flags) &&
+	    wl->watchdog_recovery) {
 		wl12xx_read_core_dump_panic(wl);
 		wl12xx_read_fwlog_panic(wl);
 		wl12xx_print_recovery(wl);
@@ -2784,7 +2903,9 @@ static void wl1271_op_stop_locked(struct wl1271 *wl)
 		if (test_and_clear_bit(WL1271_FLAG_RECOVERY_IN_PROGRESS,
 				       &wl->flags))
 			wl1271_enable_interrupts(wl);
-
+		mutex_lock(&wl_list_mutex);
+		list_del(&wl->list);
+		mutex_unlock(&wl_list_mutex);
 		return;
 	}
 
@@ -2820,8 +2941,8 @@ static void wl1271_op_stop_locked(struct wl1271 *wl)
 	cancel_delayed_work_sync(&wl->tx_watchdog_work);
 
 	/* let's notify MAC80211 about the remaining pending TX frames */
-	wl12xx_tx_reset(wl);
 	mutex_lock(&wl->mutex);
+	wl12xx_tx_reset(wl);
 
 	wl1271_power_off(wl);
 	/*
@@ -3217,6 +3338,11 @@ static int wl1271_op_add_interface(struct ieee80211_hw *hw,
 	u8 role_type;
 	bool booted = false;
 
+	if (wl->plt) {
+		wl1271_error("Adding Interface not allowed while in PLT mode");
+		return -EBUSY;
+	}
+
 	wl1271_debug(DEBUG_MAC80211, "mac80211 add interface type %d mac %pM",
 		     ieee80211_vif_type_p2p(vif), vif->addr);
 
@@ -3322,7 +3448,7 @@ static void __wl1271_op_remove_interface(struct wl1271 *wl,
 	if (wl->state == WLCORE_STATE_OFF)
 		return;
 
-	wl1271_info("down");
+	wl1271_info("removing interface %pM", vif->addr);
 
 	if (wl->scan.state != WL1271_SCAN_STATE_IDLE &&
 	    wl->scan_vif == vif) {
@@ -3470,6 +3596,9 @@ static int wl12xx_op_change_interface(struct ieee80211_hw *hw,
 	struct wl1271 *wl = hw->priv;
 	int ret;
 
+	wl1271_debug(DEBUG_MAC80211, "mac80211 change interface: vif %p"
+		     " new_type %d p2p %d", vif, new_type, p2p);
+
 	set_bit(WL1271_FLAG_VIF_CHANGE_IN_PROGRESS, &wl->flags);
 	wl1271_op_remove_interface(hw, vif);
 
@@ -3505,8 +3634,10 @@ static int wl1271_join(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 	if (set_assoc)
 		set_bit(WLVIF_FLAG_STA_ASSOCIATED, &wlvif->flags);
 
-	if (wl12xx_change_fw_if_needed(wl))
+	if (wl12xx_change_fw_if_needed(wl)) {
+		ret = -EBUSY;
 		goto out;
+	}
 
 	if (is_ibss)
 		ret = wl12xx_cmd_role_start_ibss(wl, wlvif);
@@ -4252,6 +4383,13 @@ static int wl1271_op_hw_scan(struct ieee80211_hw *hw,
 		 * there won't be any call.
 		 */
 		ret = -EAGAIN;
+		goto out;
+	}
+
+	if (wl12xx_running_vif_type(wl, NL80211_IFTYPE_P2P_CLIENT)) {
+		ret = -EBUSY;
+		wl1271_debug(DEBUG_MAC80211, "blocking sched scan because "
+			     "p2p client is running");
 		goto out;
 	}
 
@@ -5394,8 +5532,6 @@ void wl1271_free_sta(struct wl1271 *wl, struct wl12xx_vif *wlvif, u8 hlid)
 		return;
 
 	clear_bit(hlid, wlvif->ap.sta_hlid_map);
-	memset(wl->links[hlid].addr, 0, ETH_ALEN);
-	wl->links[hlid].ba_bitmap = 0;
 	__clear_bit(hlid, &wl->ap_ps_map);
 	__clear_bit(hlid, (unsigned long *)&wl->ap_fw_ps_map);
 	wl12xx_free_link(wl, wlvif, &hlid);
@@ -5427,6 +5563,10 @@ static void wl12xx_update_sta_state(struct wl1271 *wl,
 
 		ret = wl1271_acx_set_ht_capabilities(wl, &sta->ht_cap, true,
 						     hlid);
+		if (ret < 0)
+			return;
+
+		ret = wl1271_acx_ap_conn_estab_complete(wl);
 		if (ret < 0)
 			return;
 	}
@@ -6647,6 +6787,7 @@ static void wl1271_unregister_hw(struct wl1271 *wl)
 
 static int wl1271_init_ieee80211(struct wl1271 *wl)
 {
+	int i;
 	static const u32 cipher_suites[] = {
 		WLAN_CIPHER_SUITE_WEP40,
 		WLAN_CIPHER_SUITE_WEP104,
@@ -6710,6 +6851,22 @@ static int wl1271_init_ieee80211(struct wl1271 *wl)
 	BUILD_BUG_ON(ARRAY_SIZE(wl1271_channels) +
 		     ARRAY_SIZE(wl1271_channels_5ghz) >
 		     WL1271_MAX_CHANNELS);
+
+	/*
+	 * clear channel flags from the previous usage
+	 * and restore max_power & max_antenna_gain values.
+	 */
+	for (i = 0; i < ARRAY_SIZE(wl1271_channels); i++) {
+		wl1271_band_2ghz.channels[i].flags = 0;
+		wl1271_band_2ghz.channels[i].max_power = WL12XX_MAX_TX_POWER;
+		wl1271_band_2ghz.channels[i].max_antenna_gain = 0;
+	}
+	for (i = 0; i < ARRAY_SIZE(wl1271_channels_5ghz); i++) {
+		wl1271_band_5ghz.channels[i].flags = 0;
+		wl1271_band_5ghz.channels[i].max_power = WL12XX_MAX_TX_POWER;
+		wl1271_band_5ghz.channels[i].max_antenna_gain = 0;
+	}
+
 	/*
 	 * We keep local copies of the band structs because we need to
 	 * modify them on a per-device basis.
