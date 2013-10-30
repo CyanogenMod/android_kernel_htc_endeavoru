@@ -18,17 +18,7 @@
  *
  */
 
-/*
-** Note:
-** This driver was taken from:
-** http://git.omapzoom.org/?p=kernel/omap.git;a=blob_plain;f=drivers/misc/ti-st/tty_hci.c;hb=p-android-omap-3.4
-**
-** The device name has been changed to hci_tty to tihci to avoid compatibility issues
-** with HTC blobs
-**
-*/
-
-/*
+/** define one of the following for debugging
 #define DEBUG
 #define VERBOSE
 */
@@ -152,13 +142,8 @@ int hci_tty_open(struct inode *inod, struct file *file)
 	pr_info("inside %s (%p, %p)\n", __func__, inod, file);
 
 	hst = kzalloc(sizeof(*hst), GFP_KERNEL);
-	if (!hst)
-		return -ENOMEM;
-
 	file->private_data = hst;
-
-	skb_queue_head_init(&hst->rx_list);
-	init_waitqueue_head(&hst->data_q);
+	hst = file->private_data;
 
 	for (i = 0; i < MAX_BT_CHNL_IDS; i++) {
 		ti_st_proto[i].priv_data = hst;
@@ -176,21 +161,12 @@ int hci_tty_open(struct inode *inod, struct file *file)
 		hst->reg_status = -EINPROGRESS;
 
 		err = st_register(&ti_st_proto[i]);
-		if (!err) {
-			hst->st_write = ti_st_proto[i].write;
-			if (!hst->st_write) {
-				pr_err("undefined ST write function");
-				err = -EIO;
-				goto unreg;
-			}
-			continue;
-		}
+		if (!err)
+			goto done;
 
 		if (err != -EINPROGRESS) {
 			pr_err("st_register failed %d", err);
-			/* this channel is not registered - don't unregister */
-			--i;
-			goto unreg;
+			goto error;
 		}
 
 		/* ST is busy with either protocol
@@ -206,7 +182,7 @@ int hci_tty_open(struct inode *inod, struct file *file)
 					"completion signal from ST",
 					BT_REGISTER_TIMEOUT / 1000);
 			err = -ETIMEDOUT;
-			goto unreg;
+			goto error;
 		}
 
 		/* Is ST registration callback
@@ -215,20 +191,32 @@ int hci_tty_open(struct inode *inod, struct file *file)
 			pr_err("ST registration completed with invalid "
 					"status %d", hst->reg_status);
 			err = -EAGAIN;
-			goto unreg;
+			goto error;
+		}
+
+done:
+		hst->st_write = ti_st_proto[i].write;
+		if (!hst->st_write) {
+			pr_err("undefined ST write function");
+			for (i = 0; i < MAX_BT_CHNL_IDS; i++) {
+				/* Undo registration with ST */
+				err = st_unregister(&ti_st_proto[i]);
+				if (err)
+					pr_err("st_unregister() failed with "
+							"error %d", err);
+				hst->st_write = NULL;
+			}
+			return -EIO;
 		}
 	}
 
+	skb_queue_head_init(&hst->rx_list);
+	init_waitqueue_head(&hst->data_q);
+
 	return 0;
 
-unreg:
-	while (i-- >=  0)
-		/* Undo registration with ST */
-		if (st_unregister(&ti_st_proto[i]))
-			pr_err("st_unregister() failed with ");
-
+error:
 	kfree(hst);
-
 	return err;
 }
 
@@ -409,7 +397,7 @@ static long hci_tty_ioctl(struct file *file,
 		unsigned int cmd, unsigned long arg)
 {
 	struct sk_buff *skb = NULL;
-	int		retCode = 0;
+	int		retcode = 0;
 	struct ti_st	*hst;
 
 	pr_debug("inside %s (%p, %u, %lx)", __func__, file, cmd, arg);
@@ -441,11 +429,11 @@ static long hci_tty_ioctl(struct file *file,
 		break;
 	default:
 		pr_debug("Un-Identified IOCTL %d", cmd);
-		retCode = 0;
+		retcode = 0;
 		break;
 	}
 
-	return retCode;
+	return retcode;
 }
 
 /** hci_tty_poll Function
@@ -510,8 +498,8 @@ static int __init hci_tty_init(void)
 	/* Expose the device DEVICE_NAME to user space
 	 * And obtain the major number for the device
 	 */
-	hci_tty_major = register_chrdev(0, DEVICE_NAME, \
-			&hci_tty_chrdev_ops);
+	hci_tty_major = register_chrdev(0, DEVICE_NAME, &hci_tty_chrdev_ops);
+
 	if (0 > hci_tty_major) {
 		pr_err("Error when registering to char dev");
 		return hci_tty_major;

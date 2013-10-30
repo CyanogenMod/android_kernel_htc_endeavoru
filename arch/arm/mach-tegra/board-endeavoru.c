@@ -319,7 +319,7 @@ int plat_kim_resume(struct platform_device *pdev)
 static struct wake_lock st_wk_lock;
 
 /* Release the wakelock when chip is asleep */
-static int plat_chip_asleep(void)
+static int plat_chip_asleep(struct kim_data_s * data)
 {
 	pr_info("plat_chip_asleep\n");
 	wake_unlock(&st_wk_lock);
@@ -327,7 +327,7 @@ static int plat_chip_asleep(void)
 }
 
 /* Aquire the wakelock when chip is awake */
-static int plat_chip_awake(void)
+static int plat_chip_awake(struct kim_data_s * data)
 {
 
 	pr_info("plat_chip_awake\n");

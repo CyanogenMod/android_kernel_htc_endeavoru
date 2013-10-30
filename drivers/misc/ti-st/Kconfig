@@ -5,7 +5,7 @@
 menu "Texas Instruments shared transport line discipline"
 config TI_ST
 	tristate "Shared transport core driver"
-	depends on RFKILL
+	depends on NET && GPIOLIB
 	select FW_LOADER
 	help
 	  This enables the shared transport core driver for TI
@@ -13,6 +13,15 @@ config TI_ST
 	  to register themselves with core and send data, the responses
 	  are returned to relevant protocol drivers based on their
 	  packet types.
+
+config ST_HCI
+	tristate "HCI TTY emulation driver for Bluetooth"
+	depends on TI_ST
+	help
+	  This enables the TTY device like emulation for HCI used by
+	  user-space Bluetooth stacks.
+	  It will provide a character device for user space Bluetooth stack to
+	  send/receive data over shared transport.
 
 config ST_GPS
 	tristate "gps driver for ST"
