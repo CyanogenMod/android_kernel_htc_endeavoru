@@ -24,9 +24,9 @@
 
 #ifndef TI_WILINK_ST_H
 #define TI_WILINK_ST_H
-#include <linux/wakelock.h>
 
-#include <linux/serial_core.h>
+#include <linux/skbuff.h>
+
 /**
  * enum proto-type - The protocol on WiLink chips which share a
  *	common physical interface like UART.
@@ -158,7 +158,6 @@ struct st_data_s {
 	unsigned long ll_state;
 	void *kim_data;
 	struct tty_struct *tty;
-	struct wake_lock st_wk_lock;
 };
 
 /*
@@ -272,8 +271,6 @@ struct kim_data_s {
 	unsigned char dev_name[UART_DEV_NAME_LEN];
 	unsigned char flow_cntrl;
 	unsigned long baud_rate;
-	//wakelock
-	struct wake_lock ST_wakelock;
 };
 
 /**
@@ -284,9 +281,10 @@ struct kim_data_s {
 long st_kim_start(void *);
 long st_kim_stop(void *);
 
-void st_kim_recv(void *, const unsigned char *, long count);
 void st_kim_complete(void *);
 void kim_st_list_protocols(struct st_data_s *, void *);
+void st_kim_recv(void *, const unsigned char *, long);
+
 
 /*
  * BTS headers
@@ -376,8 +374,6 @@ struct hci_command {
 #define LL_WAKE_UP_IND	0x32
 #define LL_WAKE_UP_ACK	0x33
 
-#define HCILL_SLEEP_MODE_OPCODE 0xFD0C
-
 /* initialize and de-init ST LL */
 long st_ll_init(struct st_data_s *);
 long st_ll_deinit(struct st_data_s *);
@@ -396,9 +392,6 @@ void st_ll_disable(struct st_data_s *);
 unsigned long st_ll_getstate(struct st_data_s *);
 unsigned long st_ll_sleep_state(struct st_data_s *, unsigned char);
 void st_ll_wakeup(struct st_data_s *);
-int bluesleep_start(struct uart_port *);
-void bluesleep_stop(void);
-
 
 /*
  * header information used by st_core.c for FM and GPS
@@ -449,12 +442,10 @@ struct ti_st_plat_data {
 	unsigned long baud_rate;
 	int (*suspend)(struct platform_device *, pm_message_t);
 	int (*resume)(struct platform_device *);
-
-	int (*chip_enable) (void);
-	int (*chip_disable) (void);
-	int (*chip_asleep) (void);
-	int (*chip_awake) (void);
-
+	int (*chip_enable) (struct kim_data_s *);
+	int (*chip_disable) (struct kim_data_s *);
+	int (*chip_asleep) (struct kim_data_s *);
+	int (*chip_awake) (struct kim_data_s *);
 };
 
 #endif /* TI_WILINK_ST_H */
