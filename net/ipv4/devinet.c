@@ -975,6 +975,12 @@ __be32 inet_select_addr(const struct net_device *dev, __be32 dst, int scope)
 	struct net *net = dev_net(dev);
 
 	rcu_read_lock();
+/*#ifdef CONFIG_HTC_NETWORK_MODIFY*/
+	if ((!dev->ip_ptr) || (IS_ERR(dev->ip_ptr))) {
+		printk(KERN_DEBUG "[NET][WARN] dev->ip_ptr is illegal in %s \n", __func__);
+		goto no_in_dev;
+	}
+/*#endif*/
 	in_dev = __in_dev_get_rcu(dev);
 	if (!in_dev)
 		goto no_in_dev;

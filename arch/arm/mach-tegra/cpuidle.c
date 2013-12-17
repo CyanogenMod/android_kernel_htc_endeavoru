@@ -111,6 +111,8 @@ static int tegra_idle_enter_lp2(struct cpuidle_device *dev,
 	ktime_t enter, exit;
 	s64 us;
 
+	mf_irq_leave(NULL);
+
 	if (!lp2_in_idle || lp2_disabled_by_suspend ||
 	    !tegra_lp2_is_allowed(dev, state)) {
 		dev->last_state = &dev->states[0];

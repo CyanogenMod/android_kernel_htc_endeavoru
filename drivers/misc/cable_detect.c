@@ -311,7 +311,7 @@ static int cable_detect_get_type(struct cable_detect_info *pInfo)
 		if (adc >= 0 && adc < 50)
 			type = sec_detect(pInfo);
 		else {
-			if (adc >= 150 && adc < 170)
+			if (adc >= 140 && adc < 173)
 				type = DOCK_STATE_CAR;
 			else
 				type = DOCK_STATE_UNDEFINED;

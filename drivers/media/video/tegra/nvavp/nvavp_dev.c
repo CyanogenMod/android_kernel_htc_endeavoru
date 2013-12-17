@@ -1089,7 +1089,9 @@ static int nvavp_set_nvmapfd_ioctl(struct file *filp, unsigned int cmd,
 	if (IS_ERR(new_client))
 		return PTR_ERR(new_client);
 
+	mutex_lock(&clientctx->nvavp->open_lock);
 	clientctx->nvmap = new_client;
+	mutex_unlock(&clientctx->nvavp->open_lock);
 	return 0;
 }
 

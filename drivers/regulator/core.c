@@ -1437,6 +1437,7 @@ static int _regulator_enable(struct regulator_dev *rdev)
 			/* Allow the regulator to ramp; it would be useful
 			 * to extend this for bulk operations so that the
 			 * regulators can ramp together.  */
+			pr_info("[REGULATOR]+_regulator_enable ri=%s\n", rdev_get_name(rdev));
 			ret = rdev->desc->ops->enable(rdev);
 			if (ret < 0)
 				return ret;
@@ -1452,6 +1453,7 @@ static int _regulator_enable(struct regulator_dev *rdev)
 
 			_notifier_call_chain(
 				rdev, REGULATOR_EVENT_POST_ENABLE, NULL);
+			pr_info("[REGULATOR]-_regulator_enable ri=%s\n", rdev_get_name(rdev));
 			trace_regulator_enable_complete(rdev_get_name(rdev));
 
 		} else if (ret < 0) {
@@ -1516,13 +1518,13 @@ static int _regulator_disable(struct regulator_dev *rdev)
 		if (_regulator_can_change_status(rdev) &&
 		    rdev->desc->ops->disable) {
 			trace_regulator_disable(rdev_get_name(rdev));
-
+			pr_info("[REGULATOR]+_regulator_disable ri=%s\n", rdev_get_name(rdev));
 			ret = rdev->desc->ops->disable(rdev);
 			if (ret < 0) {
 				rdev_err(rdev, "failed to disable\n");
 				return ret;
 			}
-
+			pr_info("[REGULATOR]-_regulator_disable ri=%s\n", rdev_get_name(rdev));
 			trace_regulator_disable_complete(rdev_get_name(rdev));
 
 			_notifier_call_chain(rdev, REGULATOR_EVENT_DISABLE,

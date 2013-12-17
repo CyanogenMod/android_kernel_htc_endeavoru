@@ -198,6 +198,12 @@ static inline void tegra3_lp2_restore_affinity(void)
 #endif
 }
 
+#define MF_STEP() \
+	do { \
+		mf_irq_leave(NULL); \
+		mf_irq_enter(__builtin_return_address(0)); \
+	} while (0)
+
 static void tegra3_idle_enter_lp2_cpu_0(struct cpuidle_device *dev,
 			   struct cpuidle_state *state, s64 request)
 {
@@ -208,11 +214,14 @@ static void tegra3_idle_enter_lp2_cpu_0(struct cpuidle_device *dev,
 	int bin;
 	s64 sleep_time;
 
+	MF_STEP();
+
 	/* LP2 entry time */
 	entry_time = ktime_get();
 
 	if (request < state->target_residency) {
 		/* Not enough time left to enter LP2 */
+		MF_STEP();
 		tegra3_lp3_fall_back(dev);
 		return;
 	}
@@ -222,6 +231,8 @@ static void tegra3_idle_enter_lp2_cpu_0(struct cpuidle_device *dev,
 	if (multi_cpu_entry) {
 		s64 wake_time;
 		unsigned int i;
+
+		MF_STEP();
 
 		/* Disable the distributor -- this is the only way to
 		   prevent the other CPUs from responding to interrupts
@@ -270,6 +281,8 @@ static void tegra3_idle_enter_lp2_cpu_0(struct cpuidle_device *dev,
 	}
 #endif
 
+	MF_STEP();
+
 	sleep_time = request -
 		lp2_exit_latencies[cpu_number(dev->cpu)];
 
@@ -290,6 +303,8 @@ static void tegra3_idle_enter_lp2_cpu_0(struct cpuidle_device *dev,
 		idle_stats.lp2_int_count[irq]++;
 	}
 
+	MF_STEP();
+
 	clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_EXIT, &dev->cpu);
 	exit_time = ktime_get();
 	if (!is_lp_cluster())
@@ -299,6 +314,8 @@ static void tegra3_idle_enter_lp2_cpu_0(struct cpuidle_device *dev,
 
 	if (multi_cpu_entry)
 		tegra3_lp2_restore_affinity();
+
+	MF_STEP();
 
 	if (sleep_completed) {
 		/*

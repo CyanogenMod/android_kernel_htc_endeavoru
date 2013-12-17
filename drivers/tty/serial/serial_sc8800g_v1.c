@@ -838,9 +838,9 @@ static int sc8800g_write_v1(struct sc8800g_mdm_dev *mdv, const u8 * buf,
 
 	int ret = 0;
 	DBG("[%s] %d bytes\n", __func__, count);
-#ifdef SC8800_DATA_DEBUG
-	hexdump_v1(buf, count);
-#endif//SC8800_DATA_DEBUG
+//#ifdef SC8800_DATA_DEBUG
+	error_hexdump_v1(buf, count>10?10:count);
+//#endif//SC8800_DATA_DEBUG
 #if 1
 	memset(&t, 0, sizeof(struct spi_transfer));
 	t.tx_buf = buf;
@@ -2176,7 +2176,7 @@ static int sc8800g_power_onoff_v1(struct serial_sc8800g_platform_data *pdata, MO
 			sc8800g_gpio_print_ext_v1(pdata, MDM_TO_AP1);
 
 			/* Wait MDM_ALIVE high for 10 seconds */
-			for ( i = 0; i < 200; i++ ) {
+			for ( i = 0; i < 100; i++ ) {
 				/* print message every 500 ms*/
 				if ( i % 10 == 0 ) {
 					sc8800g_gpio_print_ext_v1(pdata, MDM_POWER);
@@ -2220,7 +2220,7 @@ static int sc8800g_power_onoff_v1(struct serial_sc8800g_platform_data *pdata, MO
 						break;
 					}
 				}
-				mdelay(50);
+				msleep_interruptible(100);
 			}
 
 			if ( is_turn_on_gpio == false ) {

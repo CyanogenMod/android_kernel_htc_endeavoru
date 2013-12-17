@@ -120,6 +120,7 @@ struct nvhost_device {
 	struct nvhost_channel *channel;	/* Channel assigned for the module */
 	struct kobject *power_kobj;	/* kobject to hold power sysfs entries */
 	struct nvhost_device_power_attr *power_attrib;	/* sysfs attributes */
+	ktime_t last_idle_time;
 };
 
 struct nvhost_device_power_attr {
@@ -172,6 +173,10 @@ struct nvhost_driver {
 	/* Allocates a context handler for the device */
 	struct nvhost_hwctx_handler *(*alloc_hwctx_handler)(u32 syncpt,
 			u32 waitbase, struct nvhost_channel *ch);
+
+	/* Clock gating callbacks */
+	int (*prepare_clockoff)(struct nvhost_device *dev);
+	void (*finalize_clockon)(struct nvhost_device *dev);
 };
 
 extern int nvhost_driver_register(struct nvhost_driver *);
@@ -210,5 +215,6 @@ int nvhost_syncpt_wait_timeout_ext(struct nvhost_device *dev, u32 id, u32 thresh
 	u32 timeout, u32 *value);
 
 void nvhost_scale3d_set_throughput_hint(int hint);
+void nvhost_scale3d_set_idle_clock(void);
 
 #endif

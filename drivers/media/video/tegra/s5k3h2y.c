@@ -30,7 +30,7 @@
 
 struct i2c_client *s5k3h2yx_i2c_client;
 #define S5K3H2YX_REG_MODEL_ID 0x0000
-#define S5K3H2YX_MODEL_ID 0x382b
+#define S5K3H2YX_MODEL_ID 0x382B
 
 #define SIZEOF_I2C_TRANSBUF 32
 
@@ -276,7 +276,6 @@ static struct s5k3h2yx_reg mode_start[] = {
     { 0x307B, 0x28 },
     { 0x307C, 0x31 },
 #if 0 /* Maverick modify (Black level)*/
-
     { 0x304E, 0x40 },
     { 0x304F, 0x01 },
     { 0x3050, 0x00 },
@@ -290,15 +289,15 @@ static struct s5k3h2yx_reg mode_start[] = {
     { 0x31A7, 0x0F },
 #endif
     //MIPI
-    {0x0305, 0x04},/*pre_pll_clk_div = 4*/
-    {0x0306, 0x00},/*pll_multiplier*/
-    {0x0307, 0x98},/*pll_multiplier  = 152*/
-    {0x0303, 0x01},/*vt_sys_clk_div = 1*/
-    {0x0301, 0x05},/*vt_pix_clk_div = 5*/
-    {0x030B, 0x01},/*op_sys_clk_div = 1*/
-    {0x0309, 0x05},/*op_pix_clk_div = 5*/
-    {0x30CC, 0xE0},/*DPHY_band_ctrl 870 MHz ~ 950 MHz*/
-    {0x31A1, 0x5A},
+    { 0x0305, 0x04 },   /*pre_pll_clk_div = 4*/
+    { 0x0306, 0x00 },   /*pll_multiplier*/
+    { 0x0307, 0x98 },   /*pll_multiplier  = 152*/
+    { 0x0303, 0x01 },   /*vt_sys_clk_div = 1*/
+    { 0x0301, 0x05 },   /*vt_pix_clk_div = 5*/
+    { 0x030B, 0x01 },   /*op_sys_clk_div = 1*/
+    { 0x0309, 0x05 },   /*op_pix_clk_div = 5*/
+    { 0x30CC, 0xE0 },   /*DPHY_band_ctrl 870 MHz ~ 950 MHz*/
+    { 0x31A1, 0x5A },
 
     { S5K3H2YX_TABLE_END, 0x0000 }
 };
@@ -418,7 +417,7 @@ static struct s5k3h2yx_reg mode_3084x1736[] = {
     // totally 20 more lines comparing to initial setting from vendor
     // 0x6DB => 0x6EC
 #if 1// CONFIG_RAWCHIP
-    { 0x0341, 0xEC },
+    {0x0341, 0xEC},
 #else
     {0x0341, 0xE8},
 #endif
@@ -933,7 +932,7 @@ static int s5k3h2yx_set_mode(struct s5k3h2yx_info *info, struct s5k3h2yx_mode *m
 	struct s5k3h2yx_reg reg_list[6];
 	struct rawchip_sensor_data rawchip_data;
 	int retry = 0;
-     struct clk *spi_clk = NULL;
+	struct clk *spi_clk = NULL;
 
 	pr_info("[CAM] %s++\n", __func__);
 
@@ -944,7 +943,13 @@ static int s5k3h2yx_set_mode(struct s5k3h2yx_info *info, struct s5k3h2yx_mode *m
 		return err;
 	}
 
-	sensor_mode = s5k3h2yx_get_mode(mode);
+	err = s5k3h2yx_get_mode(mode);
+	if (err < 0) {
+		goto s5k3h2yx_set_mode_error;
+	} else {
+		sensor_mode = err;
+	}
+
 	if (sensor_mode == info->mode)
 			goto s5k3h2yx_set_mode_done;
 
@@ -952,7 +957,7 @@ static int s5k3h2yx_set_mode(struct s5k3h2yx_info *info, struct s5k3h2yx_mode *m
 		if (spi_clk) {
 			pr_info("[CAM] set spi4 clock to 24MHz\n");
 			clk_set_rate(spi_clk, 96000000);
-	}
+		}
 
 		if ( info->pdata->rawchip_need_powercycle && (rawchip_mode_table[info->mode].pixel_clk != rawchip_mode_table[sensor_mode].pixel_clk) && !FirstTimeSetMode ){
 			s5k3h2yx_reset(info);
@@ -1003,8 +1008,16 @@ retry:
 	} else {
 		// HTC_Optical: modify for initial AE
 		// AE breakdown 875*45 == 1240*32 sensor default
-		s5k3h2yx_get_coarse_time_regs(reg_list, 1240);	//2190
-		s5k3h2yx_get_gain_reg(reg_list + 2, 32);        //38
+		if (info->pdata->hardware == 0) {
+			/* Hardware is AP33: Endeavor#U or Endeavor#TD */
+			s5k3h2yx_get_coarse_time_regs(reg_list, 1240);	//2190
+			s5k3h2yx_get_gain_reg(reg_list + 2, 32);        //38
+		}
+		else {
+			/* Hardware is AP37: EndeavorC2 */
+			s5k3h2yx_get_coarse_time_regs(reg_list, 1240);
+			s5k3h2yx_get_gain_reg(reg_list + 2, 32);
+		}
 	}
 	/*sensor stream off*/
 	err = s5k3h2yx_write_table(info->i2c_client, reset_seq, NULL, 0);
@@ -1049,7 +1062,7 @@ static void set_mode_handler(struct work_struct *work)
 	if (info->pdata && info->pdata->power_on) {
 		info->pdata->power_on();
 	}
-	if ( info->pdata->use_rawchip )
+	if (info->pdata && info->pdata->use_rawchip)
 		rawchip_open_init();
 
 
@@ -1127,18 +1140,9 @@ static int s5k3h2yx_set_gain(struct s5k3h2yx_info *info, u16 gain)
 static int s5k3h2yx_set_group_hold(struct s5k3h2yx_info *info,
 	struct s5k3h2yx_ae *ae)
 {
-	int ret;
-	int count = 0;
-	bool groupHoldEnabled = false;
+	int ret = 0;
 
-	if (ae->gain_enable)
-		count++;
-	if (ae->coarse_time_enable)
-		count++;
-	if (ae->frame_length_enable)
-		count++;
-	if ((count >= 2) || (ae->coarse_time_enable) || (ae->frame_length_enable))
-		groupHoldEnabled = true;
+	bool groupHoldEnabled = ae->gain_enable | ae->coarse_time_enable | ae->frame_length_enable;
 
 	if (groupHoldEnabled) {
 		ret = s5k3h2yx_write_reg(info->i2c_client, 0x0104, 0x01);
@@ -1154,12 +1158,12 @@ static int s5k3h2yx_set_group_hold(struct s5k3h2yx_info *info,
 		s5k3h2yx_set_frame_length(info, ae->frame_length);
 
 	if (groupHoldEnabled) {
-		ret = s5k3h2yx_write_reg(info->i2c_client, 0x0104, 0x0);
+		ret = s5k3h2yx_write_reg(info->i2c_client, 0x0104, 0x00);
 		if (ret)
 			return ret;
 	}
 
-	return 0;
+	return ret;
 }
 
 #if 0
@@ -1324,7 +1328,7 @@ static int s5k3h2yx_open(struct inode *inode, struct file *file)
 int s5k3h2yx_release(struct inode *inode, struct file *file)
 {
 	pr_info("%s ++\n", __func__);
-	if ( info->pdata->use_rawchip )
+	if (info->pdata && info->pdata->use_rawchip)
 		rawchip_release();
 	if (info->pdata && info->pdata->power_off)
 		info->pdata->power_off();

@@ -986,10 +986,26 @@ static ssize_t mtp_debug_level_store(
 	return size;
 }
 
+static ssize_t mtp_iobusy_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	/* We will hold perf lock during I/O jobs */
+	return sprintf(buf, "%d\n", _mtp_dev->mtp_perf_lock_on?1:0);
+}
+static ssize_t mtp_open_state_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", htc_mtp_open_state);
+}
+
 static DEVICE_ATTR(mtp_debug_level, S_IRUGO | S_IWUSR, mtp_debug_level_show,
 						    mtp_debug_level_store);
+static DEVICE_ATTR(iobusy, S_IRUGO, mtp_iobusy_show, NULL);
+static DEVICE_ATTR(mtp_open_state, S_IRUGO, mtp_open_state_show, NULL);
 static struct device_attribute *mtp_function_attributes[] = {
 	&dev_attr_mtp_debug_level,
+	&dev_attr_iobusy,
+	&dev_attr_mtp_open_state,
 	NULL
 };
 
@@ -1581,6 +1597,40 @@ static ssize_t projector_auth_store(
 static DEVICE_ATTR(auth, S_IWUSR, NULL,
 		projector_auth_store);
 
+static ssize_t projector_debug_mode_store(
+		struct device *dev, struct device_attribute *attr,
+		const char *buff, size_t size)
+{
+	struct android_usb_function *f = dev_get_drvdata(dev);
+	struct htcmode_protocol *config = f->config;
+	int value, i;
+	int framesize = DEFAULT_PROJ_HEIGHT * DEFAULT_PROJ_WIDTH;
+
+	if (sscanf(buff, "%d", &value) == 1) {
+
+		if (!test_frame)
+			test_frame = kzalloc(framesize * 2, GFP_KERNEL);
+
+		if (test_frame)
+			for (i = 0 ; i < framesize ; i++)
+				if (i < framesize/4)
+					test_frame[i] = 0xF800;
+				else if (i < framesize*2/4)
+					test_frame[i] = 0x7E0;
+				else if (i < framesize*3/4)
+					test_frame[i] = 0x1F;
+				else
+					test_frame[i] = 0xFFFF;
+
+		config->debug_mode = value;
+		return size;
+	}
+	return -EINVAL;
+}
+
+static DEVICE_ATTR(debug_mode, S_IWUSR, NULL,
+		projector_debug_mode_store);
+
 static struct device_attribute *projector_function_attributes[] = {
 	&dev_attr_width,
 	&dev_attr_height,
@@ -1591,6 +1641,7 @@ static struct device_attribute *projector_function_attributes[] = {
 	&dev_attr_client_sig,
 	&dev_attr_server_sig,
 	&dev_attr_auth,
+	&dev_attr_debug_mode,
 	NULL
 };
 

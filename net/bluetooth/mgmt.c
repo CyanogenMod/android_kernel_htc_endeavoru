@@ -812,6 +812,8 @@ static int remove_uuid(struct sock *sk, u16 index, unsigned char *data, u16 len)
 			continue;
 
 		list_del(&match->list);
+		BT_DBG("kfree uuid");
+		kfree(match);
 		found++;
 	}
 

@@ -84,7 +84,6 @@ struct tegra_pwm_bl_data {
 	struct tegra_dc_pwm_params params;
 	int (*check_fb)(struct device *dev, struct fb_info *info);
 };
-static bool bkl_debug = true;
 
 static int tegra_pwm_backlight_update_status(struct backlight_device *bl)
 {
@@ -92,7 +91,10 @@ static int tegra_pwm_backlight_update_status(struct backlight_device *bl)
 	int brightness = bl->props.brightness;
 	int max = bl->props.max_brightness;
 	struct tegra_dc *dc;
-	u8 pdata[]={0x53,0x2C,0x51,0xFF};
+	u8 *cur;
+	int n_cur;
+
+	u8 pdata[]={0x51,0xFF};
 	if (!bl->props.bkl_on) {
 		/*printk(KERN_DEBUG "[DISP] %s skip brightness=%d ,duty_cycle=%d\n",__FUNCTION__,brightness,tbl->params.duty_cycle);*/
 		return 0;
@@ -117,22 +119,22 @@ static int tegra_pwm_backlight_update_status(struct backlight_device *bl)
 #else
 	tbl->params.duty_cycle = brightness & 0xFF;
 #endif
-	if (brightness == 0) {
-		bkl_debug = true;
-		printk(KERN_INFO "[DISP] %s brightness=%d ,duty_cycle=%d\n",__FUNCTION__,brightness,tbl->params.duty_cycle);
-	}
-	else if (bkl_debug && (brightness > 0)) {
-		bkl_debug = false;
-		printk(KERN_INFO "[DISP] %s brightness=%d ,duty_cycle=%d\n",__FUNCTION__,brightness,tbl->params.duty_cycle);
-	}
-	pdata[3]=tbl->params.duty_cycle;
+
+	printk(KERN_INFO "[DISP] %s brightness=%d ,duty_cycle=%d\n",__FUNCTION__,brightness,tbl->params.duty_cycle);
+
+	pdata[1]=tbl->params.duty_cycle;
 	/* Call tegra display controller function to update backlight */
 	dc = tegra_dc_get_dc(tbl->which_dc);
 	if (tbl->params.backlight_mode==MIPI_BACKLIGHT){
-		if ((brightness == 0) || !tbl->params.dimming_enable)
-			pdata[1] = 0x24;
+		if ((brightness == 0) && tbl->params.dimming_off_cmd) {
+			cur = tbl->params.dimming_off_cmd;
+			n_cur = tbl->params.n_dimming_off_cmd;
+		} else {
+			cur = pdata;
+			n_cur = ARRAY_SIZE(pdata);
+		}
 		if (dc)
-			tegra_dsi_send_panel_short_cmd(dc, pdata, ARRAY_SIZE(pdata));
+			tegra_dsi_send_panel_short_cmd(dc, cur, n_cur);
 	}
 	else if (dc)
 		tegra_dc_config_pwm(dc, &tbl->params);
@@ -192,7 +194,8 @@ static int tegra_pwm_backlight_probe(struct platform_device *pdev)
 	tbl->params.clk_div = data->clk_div;
 	tbl->params.clk_select = data->clk_select;
 	tbl->params.backlight_mode = data->backlight_mode;
-	tbl->params.dimming_enable = data->dimming_enable;
+	tbl->params.dimming_off_cmd = data->dimming_off_cmd;
+	tbl->params.n_dimming_off_cmd = data->n_dimming_off_cmd;
 
 	memset(&props, 0, sizeof(struct backlight_properties));
 	props.cam_launch_bkl_value = data->cam_launch_bkl_value;

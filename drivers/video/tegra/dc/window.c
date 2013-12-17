@@ -458,6 +458,11 @@ int tegra_dc_update_windows(struct tegra_dc_win *windows[], int n)
 				dc->out_ops->send_cmd(dc, cur, n);
 			}
 		}
+
+		if (dc->request_dimming_on && dsi->dsi_cabc_dimming_on_cmd) {
+			mod_timer(&dc->dimming_update_timer, jiffies + msecs_to_jiffies(1000));
+			dc->request_dimming_on = false;
+		}
 	}
 
 	return 0;

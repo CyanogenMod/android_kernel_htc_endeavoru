@@ -35,6 +35,7 @@ unsigned int nvhost_debug_trace_cmdbuf;
 pid_t nvhost_debug_force_timeout_pid;
 u32 nvhost_debug_force_timeout_val;
 u32 nvhost_debug_force_timeout_channel;
+u32 nvhost_debug_force_timeout_dump;
 
 void nvhost_debug_output(struct output *o, const char* fmt, ...)
 {
@@ -76,7 +77,6 @@ static int show_channels(struct device *dev, void *data)
 static void show_syncpts(struct nvhost_master *m, struct output *o)
 {
 	int i;
-	BUG_ON(!nvhost_get_chip_ops()->syncpt.name);
 	nvhost_debug_output(o, "---- syncpts ----\n");
 	for (i = 0; i < nvhost_syncpt_nb_pts(&m->syncpt); i++) {
 		u32 max = nvhost_syncpt_read_max(&m->syncpt, i);
@@ -218,6 +218,9 @@ void nvhost_debug_init(struct nvhost_master *master)
 			&nvhost_debug_force_timeout_val);
 	debugfs_create_u32("force_timeout_channel", S_IRUGO|S_IWUSR, de,
 			&nvhost_debug_force_timeout_channel);
+	debugfs_create_u32("force_timeout_dump", S_IRUGO|S_IWUSR, de,
+			&nvhost_debug_force_timeout_dump);
+	nvhost_debug_force_timeout_dump = 0;
 }
 #else
 void nvhost_debug_init(struct nvhost_master *master)

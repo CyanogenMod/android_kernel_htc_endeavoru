@@ -104,7 +104,9 @@ static void aic3008_powerdown(void);
 static void aic3008_powerup(void);
 void aic3008_votecpuminfreq(bool bflag);
 static struct switch_dev sdev_beats;
-
+#if defined(CONFIG_AUDIO_LISTEN_NOTIFICATION)
+static struct switch_dev sdev_listen_notification;
+#endif
 /*****************************************************************************/
 /* Specific SPI read/write command for AIC3008                               */
 /*****************************************************************************/
@@ -1090,6 +1092,28 @@ static int aic3008_set_config(int config_tbl, int idx, int en)
 			aic3008_power_ctl->modem_coredump();
 			AUD_ERR("%s trigger_modem_coredump -----\n", __func__);
 		}
+#if defined(CONFIG_AUDIO_LISTEN_NOTIFICATION)
+//enable listen notification
+		else if(idx == 62)
+		{
+			AUD_INFO("[DSP] idx = %d, enable listen notification!!", idx);
+			int new_state = 1, old_state = 0;
+			old_state = switch_get_state(&sdev_listen_notification);
+			if (new_state != old_state)
+				switch_set_state(&sdev_listen_notification, new_state);
+			break;
+		}
+//disable listen notification
+		else if(idx == 63)
+		{
+			AUD_INFO("[DSP] idx = %d, disable listen notification!!", idx);
+			int new_state = 0, old_state = 0;
+			old_state = switch_get_state(&sdev_listen_notification);
+			if (new_state != old_state)
+				switch_set_state(&sdev_listen_notification, new_state);
+			break;
+		}
+#endif
 		else if(idx < 0 || idx >= End_Audio_Effect)
 		{
 			AUD_ERR("[DSP] AIC3008_IO_CONFIG_MEDIA: idx %d is out of range.", idx);
@@ -1230,6 +1254,7 @@ static long aic3008_ioctl(struct file *file, unsigned int cmd,
 		unsigned long argc)
 {
 	struct AIC3008_PARAM para;
+	struct pid *pid_struct = NULL;
 	void *table;
 	int ret = 0, i = 0, mem_size, volume = 0;
 	CODEC_SPI_CMD reg[4];
@@ -1516,6 +1541,25 @@ static long aic3008_ioctl(struct file *file, unsigned int cmd,
 		}
 		break;
 
+	case AIC3008_IO_KILL_PID:
+
+		if (copy_from_user(&i, (void *) argc, sizeof(int))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		AUD_INFO("AIC3008_IO_KILL_PID: %d\n", i);
+
+		if (i <= 0)
+			break;
+
+		pid_struct = find_get_pid(i);
+		if (pid_struct) {
+			kill_pid(pid_struct, SIGKILL, 1);
+			AUD_INFO("kill pid: %d", i);
+		}
+		break;
+
 	default:
 		AUD_ERR("invalid command %d\n", _IOC_NR(cmd));
 		ret = -EINVAL;
@@ -1542,6 +1586,12 @@ static ssize_t beats_print_name(struct switch_dev *sdev, char *buf){
 	return sprintf(buf, "Beats\n");
 }
 
+#if defined(CONFIG_AUDIO_LISTEN_NOTIFICATION)
+//Add for listen_notification
+static ssize_t listen_notification_print_name(struct switch_dev *sdev, char *buf){
+	return sprintf(buf, "Listen_notification\n");
+}
+#endif
 /*****************************************************************************/
 /* Audio Codec specific DAI callback functions                               */
 /*****************************************************************************/
@@ -1898,6 +1948,16 @@ static int __init aic3008_modinit(void)
 		pr_err("failed to register beats switch device!\n");
 		return ret;
 	}
+#if defined(CONFIG_AUDIO_LISTEN_NOTIFICATION)
+//Add for listen_notification
+	sdev_listen_notification.name = "Listen_notification";
+	sdev_listen_notification.print_name = listen_notification_print_name;
+	ret = switch_dev_register(&sdev_listen_notification);
+	if (ret < 0) {
+		pr_err("failed to register listen_notification switch device!\n");
+		return ret;
+	}
+#endif
 	return 0;
 }
 module_init(aic3008_modinit);

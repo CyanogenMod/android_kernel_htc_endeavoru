@@ -29,6 +29,12 @@ struct tps80032_adc_reply {
 #define TPS80032_GPADC_FAIL_VALUE	0xFFFF
 #define TPS80032_GPADC_FAKE_VALUE	0xFFFFF
 
+#define TPS80032_ADC_VREF_MV	    	(1250)
+#define TPS80032_ADC_12BITS_RANGE	(4096)
+
+/* GPADC conversion */
+#define ADC_BITS_TO_MV(adc) (((adc) * TPS80032_ADC_VREF_MV) / (TPS80032_ADC_12BITS_RANGE -1))
+
 struct tps80032_adc_platform_data {
 	uint32_t adc_vref;	/* reference voltage */
 	int gpadc_rt_irq;

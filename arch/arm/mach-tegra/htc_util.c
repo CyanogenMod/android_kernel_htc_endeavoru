@@ -34,6 +34,7 @@ extern void htc_print_active_wake_locks(int type);
 extern void htc_show_interrupts(void);
 extern void htc_timer_stats_onoff(char onoff);
 extern void htc_timer_stats_show(u16 water_mark);
+extern void htc_print_active_wake_locks(int type);
 
 static int msm_htc_util_delay_time = HTC_PM_STATSTIC_DELAY;
 module_param_named(
@@ -204,7 +205,6 @@ void htc_pm_monitor_work(struct work_struct *work)
 	htc_print_active_wake_locks(WAKE_LOCK_SUSPEND);
 #endif
 
-	if (get_kernel_flag() & KERNEL_FLAG_PM_MONITOR)
 	{
 		htc_show_interrupts();
 
@@ -219,7 +219,9 @@ void htc_pm_monitor_work(struct work_struct *work)
 		htc_timer_stats_show(300);/*Show timer events which greater than 0 every 10 sec*/
 		htc_timer_stats_onoff('1');
 		/*htc_print_active_perf_locks();*/
-
+		/* Kernel 3.4 removes WAKE_LOCK_IDLE */
+		/* htc_print_active_wake_locks(WAKE_LOCK_IDLE); */
+		htc_print_active_wake_locks(WAKE_LOCK_SUSPEND);
 		htc_kernel_top();
 	}
 

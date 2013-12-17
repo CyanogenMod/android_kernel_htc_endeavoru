@@ -2801,15 +2801,23 @@ static struct rtable *ip_route_output_slow(struct net *net, struct flowi4 *fl4)
 		fl4->saddr = FIB_RES_PREFSRC(net, res);
 
 	dev_out = FIB_RES_DEV(res);
-	// ** remove original code
-	//fl4->flowi4_oif = dev_out->ifindex;
-	// ** add protection for dev_out
-	if((!dev_out) || IS_ERR(dev_out)) {
-		goto out;
-	} else {
-		fl4->flowi4_oif = dev_out->ifindex;
-	}
 
+//#ifdef CONFIG_HTC_NETWORK_MODIFY
+	if (IS_ERR(fl4) || (!fl4))
+	{
+		printk("[NET] f14 is illegal in %s\n", __func__);
+		rth = ERR_PTR(-EINVAL);
+		goto out;
+	}
+	else if (IS_ERR(dev_out) || (!dev_out))
+	{
+		printk("[NET] dev_out is illegal in %s\n", __func__);
+		rth = ERR_PTR(-EINVAL);
+		goto out;
+	}
+	else
+		fl4->flowi4_oif = dev_out->ifindex;
+//#endif
 
 make_route:
 	rth = __mkroute_output(&res, fl4, orig_daddr, orig_saddr, orig_oif,
@@ -2832,6 +2840,7 @@ struct rtable *__ip_route_output_key(struct net *net, struct flowi4 *flp4)
 	struct rtable *rth;
 	unsigned int hash;
 
+//#ifdef CONFIG_HTC_NETWORK_MODIFY
 	if (IS_ERR(net) || (!net)) {
 		printk("[NET] net is NULL in %s\n", __func__);
 		return NULL;
@@ -2841,6 +2850,7 @@ struct rtable *__ip_route_output_key(struct net *net, struct flowi4 *flp4)
 		printk("[NET] flp4 is NULL in %s\n", __func__);
 		return NULL;
 	}
+//#endif
 
 	if (!rt_caching(net))
 		goto slow_output;

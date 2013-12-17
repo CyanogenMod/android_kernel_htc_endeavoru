@@ -101,6 +101,7 @@ struct htcmode_protocol {
 	u8 notify_authenticator;
 	u8 auth_in_progress;
 	u8 auth_result;
+	u8 debug_mode;
 };
 
 struct hsml_header {

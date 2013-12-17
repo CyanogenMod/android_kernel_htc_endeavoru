@@ -77,17 +77,6 @@ static int l2cap_ertm_data_rcv(struct sock *sk, struct sk_buff *skb);
 
 /* ---- L2CAP channels ---- */
 
-static inline void chan_hold(struct l2cap_chan *c)
-{
-	atomic_inc(&c->refcnt);
-}
-
-static inline void chan_put(struct l2cap_chan *c)
-{
-	if (atomic_dec_and_test(&c->refcnt))
-		kfree(c);
-}
-
 static struct l2cap_chan *__l2cap_get_chan_by_dcid(struct l2cap_conn *conn, u16 cid)
 {
 	struct l2cap_chan *c;
@@ -302,7 +291,13 @@ struct l2cap_chan *l2cap_chan_create(struct sock *sk)
 void l2cap_chan_destroy(struct l2cap_chan *chan)
 {
 	write_lock_bh(&chan_list_lock);
-	list_del(&chan->global_l);
+	if (test_and_set_bit(CONF_CHAN_DESTROYED, &chan->conf_state) == 0) {
+		BT_INFO(">>>>>>> l2cap_chan_destroy calling list_del on chan %X",chan);
+		list_del(&chan->global_l);
+	} else {
+		BT_INFO(">>>>>>> l2cap_chan_destroy skipping list_del on chan %X",chan);
+	}
+
 	write_unlock_bh(&chan_list_lock);
 
 	chan_put(chan);
@@ -1009,10 +1004,12 @@ static void l2cap_conn_del(struct hci_conn *hcon, int err)
 	/* Kill channels */
 	list_for_each_entry_safe(chan, l, &conn->chan_l, list) {
 		sk = chan->sk;
+		chan_hold(chan);
 		bh_lock_sock(sk);
 		l2cap_chan_del(chan, err);
 		bh_unlock_sock(sk);
 		chan->ops->close(chan->data);
+		chan_put(chan);
 	}
 
 	hci_chan_del(conn->hchan);
@@ -3007,10 +3004,15 @@ static inline int l2cap_disconnect_req(struct l2cap_conn *conn, struct l2cap_cmd
 		return 0;
 	}
 
+	chan_hold(chan);
 	l2cap_chan_del(chan, ECONNRESET);
+
 	bh_unlock_sock(sk);
 
 	chan->ops->close(chan->data);
+
+	chan_put(chan);
+
 	return 0;
 }
 
@@ -3040,11 +3042,12 @@ static inline int l2cap_disconnect_rsp(struct l2cap_conn *conn, struct l2cap_cmd
 		bh_unlock_sock(sk);
 		return 0;
 	}
-
+	chan_hold(chan);
 	l2cap_chan_del(chan, 0);
 	bh_unlock_sock(sk);
 
 	chan->ops->close(chan->data);
+	chan_put(chan);
 	return 0;
 }
 

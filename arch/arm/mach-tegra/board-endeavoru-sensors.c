@@ -346,9 +346,35 @@ static void config_nfc_gpios(void)
     }
     tegra_gpio_enable(RUBY_GPIO_NFC_INT);
 
-    gpio_set_value(RUBY_GPIO_NFC_VEN, 1);
+    tegra_pinmux_set_pullupdown(TEGRA_PINGROUP_SDMMC1_DAT1, TEGRA_PUPD_NORMAL);
+
     pr_info("%s\n", __func__);
 
+}
+
+static void nfc_gpio_deinit(void)
+{
+	tegra_pinmux_set_pullupdown(TEGRA_PINGROUP_SDMMC1_DAT1, TEGRA_PUPD_PULL_DOWN);
+	return;
+}
+
+static int nfc_init_check(void)
+{
+	int board_id = 0;
+	board_id = htc_get_pcbid_info();
+
+	/* Get HTC engineer-id */
+	if ((board_id >= PROJECT_PHASE_A) && ((engineer_id & 0x08) == 0)) {
+		printk(KERN_INFO "%s: engineer_id=[0x%x], with NFC chip\n", __func__, engineer_id);
+		return 1;
+	}
+	else if (board_id < PROJECT_PHASE_A) {
+		printk(KERN_INFO "%s: with NFC chip\n", __func__);
+		return 1;
+	}
+
+	printk(KERN_INFO "%s: engineer_id=[0x%x], without NFC chip.\n", __func__, engineer_id);
+	return 0;
 }
 
 static struct pn544_i2c_platform_data nfc_platform_data = {
@@ -357,6 +383,8 @@ static struct pn544_i2c_platform_data nfc_platform_data = {
     .ven_gpio = RUBY_GPIO_NFC_VEN,
     .firm_gpio = RUBY_GPIO_NFC_DL,
     .ven_isinvert = 1,
+    .gpio_deinit = nfc_gpio_deinit,
+    .check_nfc_exist = nfc_init_check,
 };
 
 static struct i2c_board_info pn544_i2c_boardinfo[] = {
@@ -514,12 +542,12 @@ struct endeavoru_battery_gpio {
 	const char *label;
 };
 
-static struct tps65200_platform_data tps65200_data = {
+static struct tps65200_platform_data __initdata tps65200_data = {
 	.gpio_chg_stat = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PW0),
 	.gpio_chg_int  = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PX5),
 };
 
-static struct i2c_board_info tps_65200_boardinfo[] = {
+static struct i2c_board_info __initdata tps_65200_boardinfo[] = {
 	{
 		I2C_BOARD_INFO("tps65200", 0xD4 >> 1),
 		.platform_data = &tps65200_data,
@@ -532,7 +560,7 @@ static struct i2c_board_info tps_65200_boardinfo[] = {
 		.label = _label,		\
 	}
 
-struct endeavoru_battery_gpio endeavoru_battery_gpio_data[] ={
+struct endeavoru_battery_gpio __initdata endeavoru_battery_gpio_data[] ={
 	[0] = TEGRA_BATTERY_GPIO(TEGRA_GPIO_PU4, "mbat_in"),
 	[1] = TEGRA_BATTERY_GPIO(TEGRA_GPIO_PW0, "chg_stat"),
 	[2] = TEGRA_BATTERY_GPIO(TEGRA_GPIO_PX5, "chg_int"),
@@ -547,9 +575,25 @@ static struct htc_battery_platform_data htc_battery_pdev_data = {
 	.volt_adc_offset = 0,
 	.power_off_by_id = 1,
 	.sw_temp_25 = TEGRA_GPIO_INVALID,
+	.adc2temp_map = {{  23,  1620},
+			 { 321,   677},
+			 { 406,   606},
+			 { 455,   572},
+			 { 625,   480},
+			 { 697,   449},
+			 { 766,   422},
+			 { 982,   350},
+			 {1375,   250},
+			 {1864,   150},
+			 {2132,   100},
+			 {2414,    50},
+			 {2689,     0},
+			 {3570,  -200},
+			 {4095,  -789},
+			},
 };
 
-static struct platform_device htc_battery_pdev = {
+static struct platform_device __initdata htc_battery_pdev = {
 	.name	= "htc_battery",
 	.id	= -1,
 	.dev	= {
@@ -747,6 +791,8 @@ static void endeavoru_comp_irq_init(void)
 int __init endeavoru_sensors_init(void)
 {
 	int ret = 0;
+	int board_id = 0;
+	board_id = htc_get_pcbid_info();
 #if 0
 	endeavoru_isl_init();
 #endif
@@ -774,7 +820,9 @@ int __init endeavoru_sensors_init(void)
 
 
 	psensor_init();
+
 	endeavoru_nfc_init();
+
 	endeavoru_battery_init();
 	return ret;
 }

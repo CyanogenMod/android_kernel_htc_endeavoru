@@ -827,6 +827,10 @@ cleanup:
 #endif
 /*-------------------------------------------------------------------------*/
 
+#ifdef CONFIG_QCT_9K_MODEM
+#define RESUME_RETRY_LIMIT 3
+#define RESUME_SIGNAL_TIME_US_THRESHOLD (23000)
+#endif //CONFIG_QCT_9K_MODEM
 static int ehci_hub_control (
 	struct usb_hcd	*hcd,
 	u16		typeReq,
@@ -846,6 +850,12 @@ static int ehci_hub_control (
 	int		retval = 0;
 	unsigned	selector;
 	int			wait_time_us = 25000;
+
+	#ifdef CONFIG_QCT_9K_MODEM
+	ktime_t	ktime_before_resume, ktime_after_resume, ktime_set_run_bit;
+	int retry_cnt;
+	s64 resume_us;
+	#endif //CONFIG_QCT_9K_MODEM
 
 	/*
 	 * FIXME:  support SetPortFeatures USB_PORT_FEAT_INDICATOR.
@@ -909,6 +919,17 @@ static int ehci_hub_control (
 				msleep(5);/* wait to leave low-power mode */
 				spin_lock_irqsave(&ehci->lock, flags);
 			}
+
+			#ifdef CONFIG_QCT_9K_MODEM
+			retry_cnt = 0;
+
+resume_again:
+
+			pr_info("%s[%d] before resume, PORTSC = %0x\n", __func__, __LINE__, ehci_readl(ehci, status_reg));
+			ktime_before_resume = ktime_get();
+			wait_time_us = 25000;
+			#endif //CONFIG_QCT_9K_MODEM
+
 			/* resume signaling for 20 msec */
 			temp &= ~(PORT_RWC_BITS | PORT_WAKE_BITS);
 			ehci_writel(ehci, temp | PORT_RESUME, status_reg);
@@ -917,6 +938,32 @@ static int ehci_hub_control (
 				udelay(1);
 				temp = ehci_readl(ehci, status_reg);
 			}
+
+			#ifdef CONFIG_QCT_9K_MODEM
+			ktime_after_resume = ktime_get();
+			resume_us = ktime_to_us(ktime_sub(ktime_after_resume, ktime_before_resume));
+
+			if (resume_us > ((s64)RESUME_SIGNAL_TIME_US_THRESHOLD)) {
+				pr_info("***resume_us:%lld takes too long time, retry_cnt:%d\n", resume_us, retry_cnt);
+				if (retry_cnt++ < RESUME_RETRY_LIMIT) {
+					pr_info("***suspend\n");
+					spin_unlock_irqrestore(&ehci->lock, flags);
+					temp = ehci_readl(ehci, status_reg);
+					temp &= ~PORT_RWC_BITS;
+					temp |= PORT_SUSPEND;
+					ehci_writel(ehci, temp, status_reg);
+					/* Keep the bus idle for 15ms so that peripheral
+					 * can detect and initiate suspend
+					 */
+					msleep(15);
+					spin_lock_irqsave(&ehci->lock, flags);
+
+					pr_info("***resume_again\n");
+					goto resume_again;
+				}
+			}
+			#endif //CONFIG_QCT_9K_MODEM
+
 			local_irq_save(flags);
 			udelay(3);
 
@@ -926,8 +973,18 @@ static int ehci_hub_control (
 			ehci_writel(ehci, temp, command_reg);
 			local_irq_restore(flags);
 
+			#ifdef CONFIG_QCT_9K_MODEM
+			ktime_set_run_bit = ktime_get();
+			#endif //CONFIG_QCT_9K_MODEM
+
 			pr_info("%s(%d) Waiting %d loops to finish resume.\n", __func__, __LINE__, 25000 - wait_time_us);
 			pr_info("%s*** PORTSC = %0x\n", __func__, ehci_readl(ehci, status_reg));
+
+			#ifdef CONFIG_QCT_9K_MODEM
+			pr_info("resume_us:%lld, resume_to_run_us:%lld\n",
+				ktime_to_us(ktime_sub(ktime_after_resume, ktime_before_resume)),
+				ktime_to_us(ktime_sub(ktime_set_run_bit, ktime_after_resume)));
+			#endif //CONFIG_QCT_9K_MODEM
 
 			ehci->reset_done[wIndex] = jiffies
 					+ msecs_to_jiffies(20);

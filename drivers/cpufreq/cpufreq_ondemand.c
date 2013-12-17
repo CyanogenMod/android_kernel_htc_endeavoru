@@ -676,7 +676,7 @@ static struct attribute_group dbs_attr_group = {
 
 static void dbs_freq_increase(struct cpufreq_policy *p, unsigned int load, unsigned int freq)
 {
-	if (dbs_tuners_ins.powersave_bias)
+	if (dbs_tuners_ins.powersave_bias && freq > 475000 )
 		freq = powersave_bias_target(p, freq, CPUFREQ_RELATION_H);
 	//else if (p->cur == p->max)
 	//	return;
@@ -995,9 +995,15 @@ static void dbs_check_cpu(struct cpu_dbs_info_s *this_dbs_info)
 			__cpufreq_driver_target(policy, freq_next,
 					CPUFREQ_RELATION_L);
 		} else {
-			int freq = powersave_bias_target(policy, freq_next,
+			int freq = 0;
+			if( freq_next > 475000 )
+			{
+				freq = powersave_bias_target(policy, freq_next,
 					CPUFREQ_RELATION_L);
-			debug_freq = freq;
+				debug_freq = freq;
+			}
+			else
+				debug_freq = freq = freq_next;
 
             trace_cpufreq_interactive_target (policy->cpu,
                                               debug_load,
@@ -1014,10 +1020,10 @@ static void dbs_check_cpu(struct cpu_dbs_info_s *this_dbs_info)
         CPU_DEBUG_PRINTK(CPU_DEBUG_GOVERNOR,
                          " cpu%d,"
                          " load=%3u, iowait=%3u,"
-                         " freq=%7u(%7u), counter=%d, phase=%d, min_freq=%7u",
+                         " freq=%7u, %7u(%7u), counter=%d, phase=%d, min_freq=%7u",
                          policy->cpu,
                          debug_load, debug_iowait,
-                         debug_freq, policy->cur, counter, phase, policy->min);
+                         freq_next, debug_freq, policy->cur, counter, phase, policy->min);
 #else
         CPU_DEBUG_PRINTK(CPU_DEBUG_GOVERNOR,
                          " cpu%d,"

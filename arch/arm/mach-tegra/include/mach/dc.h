@@ -198,6 +198,9 @@ struct tegra_dsi_out {
 	u16		n_cabc_cmd;
 	/* for modify skew-rate of phy-timing test */
 	u8		impedance_para;
+
+	struct tegra_dsi_cmd	*dsi_cabc_dimming_on_cmd;
+	u16		n_cabc_dimming_on_cmd;
 };
 
 enum {
@@ -584,7 +587,8 @@ struct tegra_dc_pwm_params {
 	unsigned int clk_select;
 	unsigned int duty_cycle;
 	int backlight_mode;
-	bool dimming_enable;
+	u8 *dimming_off_cmd;
+	int n_dimming_off_cmd;
 };
 
 void tegra_dc_config_pwm(struct tegra_dc *dc, struct tegra_dc_pwm_params *cfg);

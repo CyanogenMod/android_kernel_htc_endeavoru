@@ -29,9 +29,15 @@ struct embedded_fd_set {
 	unsigned long fds_bits[1];
 };
 
+struct fdt_user {
+	pid_t remover;
+	pid_t installer;
+};
+
 struct fdtable {
 	unsigned int max_fds;
 	struct file __rcu **fd;      /* current fd array */
+	struct fdt_user *user;       /* current installer and previous remover */
 	fd_set *close_on_exec;
 	fd_set *open_fds;
 	struct rcu_head rcu;
@@ -56,6 +62,7 @@ struct files_struct {
 	struct embedded_fd_set close_on_exec_init;
 	struct embedded_fd_set open_fds_init;
 	struct file __rcu * fd_array[NR_OPEN_DEFAULT];
+	struct fdt_user user_array[NR_OPEN_DEFAULT];
 };
 
 #define rcu_dereference_check_fdtable(files, fdtfd) \

@@ -169,6 +169,11 @@ struct tegra_dc {
 	bool isyuv_lasttime;
 
 	u32 suspend_status;
+
+	struct workqueue_struct *dimming_wq;
+	struct work_struct dimming_work;
+	struct timer_list dimming_update_timer;
+	bool request_dimming_on;
 };
 
 #define print_mode_info(dc, mode) do {					\

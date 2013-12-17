@@ -97,6 +97,7 @@
 
 #define PMC_WAKE_STATUS         0x14
 extern bool is_resume_from_deep_suspend(void);
+extern void aic3008_set_mic_bias(int en);
 
 #ifdef CONFIG_USB_G_ANDROID
 #include <linux/usb/android_composite.h>
@@ -315,7 +316,7 @@ int plat_kim_suspend_td(struct platform_device *pdev, pm_message_t state)
 static struct wake_lock st_wk_lock;
 
 /* Release the wakelock when chip is asleep */
-static int plat_chip_asleep(void)
+static int plat_chip_asleep(struct kim_data_s * data)
 {
 	pr_info("plat_chip_asleep\n");
 	wake_unlock(&st_wk_lock);
@@ -323,7 +324,7 @@ static int plat_chip_asleep(void)
 }
 
 /* Aquire the wakelock when chip is awake */
-static int plat_chip_awake(void)
+static int plat_chip_awake(struct kim_data_s * data)
 {
 
 	pr_info("plat_chip_awake\n");
@@ -630,7 +631,6 @@ static struct platform_device tegra_rawchip_device = {
 
 /* HTC_HEADSET_GPIO Driver */
 static struct htc_headset_gpio_platform_data htc_headset_gpio_data = {
-	.eng_cfg		= HS_EDE_U,
 	.hpin_gpio		= TEGRA_GPIO_PW2,
 	.key_gpio		= TEGRA_GPIO_PBB6,
 	.key_enable_gpio	= 0,
@@ -647,10 +647,10 @@ static struct platform_device htc_headset_gpio = {
 
 /* HTC_HEADSET_PMIC Driver */
 static struct htc_headset_pmic_platform_data htc_headset_pmic_data_xe = {
-	.eng_cfg		= HS_EDE_U,
-	.driver_flag	= DRIVER_HS_PMIC_RPC_KEY,
-	.adc_mic_bias	= {HS_DEF_MIC_ADC_12_BIT_MIN,
-				   HS_DEF_MIC_ADC_12_BIT_MAX},
+	.driver_flag	= DRIVER_HS_PMIC_ADC,
+	.adc_mic_bias	= {HS_DEF_MIC_ADC_16_BIT_MIN,
+				   HS_DEF_MIC_ADC_16_BIT_MAX},
+	.adc_channel	= 4,
 	.adc_remote	= {0, 164, 165, 379, 380, 830},
 };
 
@@ -699,7 +699,7 @@ static struct htc_headset_1wire_platform_data htc_headset_1wire_data = {
 	.tx_level_shift_en	= TEGRA_GPIO_PZ0,
 	.uart_sw		= 0,
 	.one_wire_remote	={0x7E, 0x7F, 0x7D, 0x7F, 0x7B, 0x7F},
-	.remote_press		= TEGRA_GPIO_PBB6,
+	.remote_press		= 0,
 	.onewire_tty_dev	= "/dev/ttyHS4",
 };
 
@@ -715,11 +715,17 @@ static struct platform_device htc_headset_one_wire = {
 static struct platform_device *headset_devices_xe[] = {
 //	&htc_headset_microp,
 	&htc_headset_pmic_xe,
-	&htc_headset_gpio,
 	&htc_headset_one_wire,
+	&htc_headset_gpio,
 //	&htc_headset_misc,
 	/* Please put the headset detection driver on the last */
 };
+
+static void headset_power(int hs_enable)
+{
+	pr_info("[HS_BOARD]hs_enable = %d\n", hs_enable);
+	aic3008_set_mic_bias(hs_enable);
+}
 
 static void headset_init(void)
 {
@@ -750,18 +756,13 @@ static void uart_lv_shift_en(int enable)
 }
 
 static struct htc_headset_mgr_platform_data htc_headset_mgr_data_xe = {
-	.eng_cfg				= HS_EDE_U,
 	.driver_flag		= DRIVER_HS_MGR_FLOAT_DET,
 	.headset_devices_num	= ARRAY_SIZE(headset_devices_xe),
 	.headset_devices	= headset_devices_xe,
-	.enable_1wire			= 0,
-	.tx_1wire_gpio			= TEGRA_GPIO_PY4,
-	.rx_1wire_gpio			= TEGRA_GPIO_PY5,
-	.level_1wire_gpio		= TEGRA_GPIO_PZ0,
-	.dev_1wire				= "/dev/ttyHS4",
 	.headset_config_num	= ARRAY_SIZE(htc_headset_mgr_config_xe),
 	.headset_config		= htc_headset_mgr_config_xe,
 	.headset_init		= headset_init,
+	.headset_power		= headset_power,
 	.uart_tx_gpo		= uart_tx_gpo,
 	.uart_lv_shift_en	= uart_lv_shift_en,
 };
@@ -1160,6 +1161,7 @@ static struct tegra_spi_platform_data endeavortd_spi_pdata = {
 	.max_dma_buffer		= (16 * 1024),
 	.is_clkon_always	= false,
 	.max_rate		= 100000000,
+	.disable_runtime_pm	= true,
 };
 
 static struct wake_lock g_sc8800g_wakelock_debug = {NULL};
@@ -2348,8 +2350,8 @@ static int enrkey_wakeup() {
 
 static struct gpio_keys_button ENDEAVORTD_PROJECT_keys[] = {
 	[0] = GPIO_KEY(KEY_POWER, PU6, 1),
-	[1] = GPIO_KEY(KEY_VOLUMEUP, PS0, 1),
-	[2] = GPIO_KEY(KEY_VOLUMEDOWN, PW3, 1),
+	[1] = GPIO_KEY(KEY_VOLUMEUP, PS0, 0),
+	[2] = GPIO_KEY(KEY_VOLUMEDOWN, PW3, 0),
  };
 
 static struct gpio_keys_platform_data ENDEAVORTD_PROJECT_keys_platform_data = {
@@ -2478,6 +2480,12 @@ static void __init endeavortd_init(void)
 		mhl_sii_device_data.enMhlD3Guard = true;
 	}
 
+#if defined(CONFIG_HTC_FIQ_DUMPER)
+	fiq_dumper_init();
+#endif
+#if defined(CONFIG_MEMORY_FOOTPRINT_DEBUGGING)
+	htc_memory_footprint_init();
+#endif
 	tegra_ram_console_debug_init();
 	endeavortd_regulator_init();
 	ENDEAVORTD_PROJECT_keys_init();
@@ -2519,10 +2527,14 @@ static void __init endeavortd_init(void)
 	if (!proc)
 		printk(KERN_ERR"Create /proc/dying_processes FAILED!\n");
 
-	if (!!(get_kernel_flag() & KERNEL_FLAG_PM_MONITOR) && board_mfg_mode() != BOARD_MFG_MODE_OFFMODE_CHARGING) {
-		htc_monitor_init();
-		htc_pm_monitor_init();
-	}
+	if (board_mfg_mode() != BOARD_MFG_MODE_OFFMODE_CHARGING)
+#if ! defined(CONFIG_HTC_PERFORMANCE_MONITOR_ALWAYS_ON)
+		if (get_kernel_flag() & KERNEL_FLAG_PM_MONITOR)
+#endif
+		{
+			htc_monitor_init();
+			htc_pm_monitor_init();
+		}
 }
 
 static void __init endeavortd_reserve(void)
@@ -2533,6 +2545,12 @@ static void __init endeavortd_reserve(void)
 	tegra_reserve(SZ_128M, SZ_4M, SZ_8M);
 #endif
 	tegra_ram_console_debug_reserve(SZ_1M);
+#if defined(CONFIG_MEMORY_FOOTPRINT_DEBUGGING)
+	htc_memory_footprint_space_reserve(SZ_4K);
+#endif
+#if defined(CONFIG_HTC_FIQ_DUMPER)
+	fiq_dumper_space_reserve(SZ_4K);
+#endif
 }
 
 MACHINE_START(ENDEAVORTD, "endeavortd")

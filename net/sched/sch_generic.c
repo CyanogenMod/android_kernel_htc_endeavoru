@@ -612,6 +612,7 @@ void qdisc_reset(struct Qdisc *qdisc)
 		ops->reset(qdisc);
 
 	if ((qdisc->gso_skb) && (!IS_ERR(qdisc->gso_skb))) {
+
 		kfree_skb(qdisc->gso_skb);
 		qdisc->gso_skb = NULL;
 		qdisc->q.qlen = 0;

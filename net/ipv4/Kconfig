@@ -631,3 +631,9 @@ config HTC_NETWORK_DEBUG
 	---help---
 	HTC_NETWORK_DEBUG
 
+config HTC_MONITOR
+		tristate "HTC_MONITOR"
+		default n
+		---help---
+		Come up with a way to add information of data usage in attribute file
+		for identifying the process that requested for data transmission.

@@ -33,9 +33,7 @@
 #include <linux/usb/htc_info.h>
 #include <video/tegrafb.h>
 
-#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
-#include "f_projector_debug.h"
-#endif
+unsigned short *test_frame;
 
 #ifdef DBG
 #undef DBG
@@ -79,6 +77,7 @@
 
 #define BITSPIXEL 16
 #define PROJECTOR_FUNCTION_NAME "projector"
+#define FRAME_INTERVAL_TIME 200
 
 #define htc_mode_info(fmt, args...) \
 	printk(KERN_INFO "[htc_mode] " pr_fmt(fmt), ## args)
@@ -89,6 +88,7 @@ static struct wake_lock prj_idle_wake_lock;
 static int keypad_code[] = {KEY_WAKEUP, 0, 0, 0, KEY_HOME, KEY_MENU, KEY_BACK};
 static const char cand_shortname[] = "htc_cand";
 static const char htcmode_shortname[] = "htcmode";
+static ktime_t start;
 
 #ifdef DISPLAY_READY
 extern struct tegra_usb_projector_info usb_pjt_info;
@@ -150,6 +150,7 @@ struct projector_dev {
 
 	struct workqueue_struct *wq_display;
 	struct work_struct send_fb_work;
+	struct work_struct send_fb_work_legacy;
 	int start_send_fb;
 
 	/* HTC Mode Protocol Info */
@@ -469,7 +470,7 @@ char *get_fb1_addr(void)
 {
 #ifdef DISPLAY_READY
 	usb_pjt_info.usb_offset = usb_pjt_info.latest_offset;
-	return  registered_fb[1]-> screen_base + usb_pjt_info.usb_offset;
+	return  registered_fb[0]-> screen_base + usb_pjt_info.usb_offset;
 #else
 	return NULL;
 #endif
@@ -488,18 +489,13 @@ static void send_fb(struct projector_dev *dev)
 	struct usb_request *req;
 	int xfer;
 	int count = dev->framesize;
-#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
-	unsigned short *frame;
-#else
-	char *frame;
-#endif
+	char *frame = NULL;
 
+	if (projector_dev->htcmode_proto->debug_mode)
+		frame = (char *)test_frame;
+	else
+		frame = get_fb1_addr();
 
-#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
-	frame = test_frame;
-#else
-	frame = get_fb1_addr();
-#endif
 	if (frame == NULL) {
 		printk(KERN_WARNING "send_fb: frame == NULL\n");
 		return;
@@ -510,19 +506,18 @@ static void send_fb(struct projector_dev *dev)
 			xfer = count > TXN_MAX? TXN_MAX : count;
 			req->length = xfer;
 			memcpy(req->buf, frame, xfer);
+
+			count -= xfer;
+			frame += xfer;
+
+			if (count <= 0)
+				req->zero = 1;
 			if (usb_ep_queue(dev->ep_in, req, GFP_ATOMIC) < 0) {
 				proj_req_put(dev, &dev->tx_idle, req);
 				printk(KERN_WARNING "%s: failed to queue req %p\n",
 					__func__, req);
 				break;
 			}
-
-			count -= xfer;
-#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
-			frame += xfer/2;
-#else
-			frame += xfer;
-#endif
 		} else {
 			printk(KERN_ERR "send_fb: no req to send\n");
 			break;
@@ -588,29 +583,34 @@ static void send_fb2(struct projector_dev *dev)
 {
 	struct usb_request *req;
 	int xfer;
-
-#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
-	unsigned short *frame;
-	int count = dev->framesize;
-#else
-	char *frame;
+	static char *frame, *pre_frame;
 	int count = dev->htcmode_proto->server_info.width *
 				dev->htcmode_proto->server_info.height * (BITSPIXEL / 8);
-#endif
+	ktime_t diff;
 
-#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
-	frame = test_frame;
-#else
-	frame = get_fb1_addr();
-#endif
+	if (projector_dev->htcmode_proto->debug_mode)
+		frame = (char *)test_frame;
+	else
+		frame = get_fb1_addr();
+
 	if (frame == NULL)
 		return;
+
+	if (frame == pre_frame) {
+		diff = ktime_sub(ktime_get(), start);
+		if (ktime_to_ms(diff) < FRAME_INTERVAL_TIME)
+			return;
+		else
+			start = ktime_get();
+	}
 
 	if (dev->htcmode_proto->version >= 0x0006 &&
 		send_hsml_header(dev) < 0) {
 			printk(KERN_WARNING "%s: failed to send hsml header\n", __func__);
 			return;
 	}
+
+	pre_frame = frame;
 
 	while (count > 0 && dev->online) {
 
@@ -638,11 +638,7 @@ static void send_fb2(struct projector_dev *dev)
 				break;
 			}
 			count -= xfer;
-#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
-			frame += xfer/2;
-#else
 			frame += xfer;
-#endif
 		} else {
 			printk(KERN_ERR "send_fb: no req to send\n");
 			break;
@@ -653,13 +649,28 @@ static void send_fb2(struct projector_dev *dev)
 void send_fb_do_work(struct work_struct *work)
 {
 	struct projector_dev *dev = projector_dev;
+	start = ktime_get();
 	while (dev->start_send_fb) {
 		send_fb2(dev);
 		msleep(1);
 	}
 }
 
+void send_fb_do_work_legacy(struct work_struct *work)
+{
+	struct projector_dev *dev = projector_dev;
 
+	if (!dev->online)
+		return;
+
+	send_fb(dev);
+	dev->frame_count++;
+	/* 30s send system wake code */
+	if (dev->frame_count == 30 * 30) {
+		projector_send_Key_event(dev, 0);
+		dev->frame_count = 0;
+	}
+}
 
 static void send_info(struct projector_dev *dev)
 {
@@ -793,7 +804,24 @@ static void projector_enable_fb_work(struct projector_dev *dev, int enabled)
 	schedule_work(&dev->htcmode_notifier_work);
 }
 
+/*
+ * Handle common messages and return 1 if message has been handled
+ */
+static int projector_handle_common_msg(struct projector_dev *dev, struct usb_request *req)
+{
+	unsigned char *data = req->buf;
+	int handled = 1;
 
+	if (!strncmp("startfb", data, 7)) {
+		projector_enable_fb_work(dev, 1);
+	} else if (!strncmp("endfb", data, 5)) {
+		projector_enable_fb_work(dev, 0);
+	} else {
+		handled = 0;
+	}
+
+	return handled;
+}
 /*
  * Handle HTC Mode specific messages and return 1 if message has been handled
  */
@@ -822,10 +850,6 @@ static int projector_handle_htcmode_msg(struct projector_dev *dev, struct usb_re
 	} else if (dev->htcmode_proto->version >= 0x0006 &&
 			data[0] == HSML_KEY_EVENT_ID) {
 		projector_report_key_event(dev, (struct key_event *)data);
-	} else if (!strncmp("startfb", data, 7)) {
-		projector_enable_fb_work(dev, 1);
-	} else if (!strncmp("endfb", data, 5)) {
-		projector_enable_fb_work(dev, 0);
 	} else if (!strncmp("startcand", data, 9)) {
 		/*
 		 * Ignore this message because we already started the CAN daemon at
@@ -837,7 +861,7 @@ static int projector_handle_htcmode_msg(struct projector_dev *dev, struct usb_re
 
 		schedule_work(&dev->notifier_work);
 	} else {
-		handled = 0;
+		handled = projector_handle_common_msg(dev, req);
 	}
 
 	return handled;
@@ -858,7 +882,6 @@ static void projector_complete_out(struct usb_ep *ep, struct usb_request *req)
 	int handled = 0;
 	VDBG("%s: status %d, %d bytes\n", __func__,
 		req->status, req->actual);
-
 	if (req->status != 0) {
 		dev->error = 1;
 		proj_req_put(dev, &dev->rx_idle, req);
@@ -867,6 +890,9 @@ static void projector_complete_out(struct usb_ep *ep, struct usb_request *req)
 
 	if (dev->is_htcmode)
 		handled = projector_handle_htcmode_msg(dev, req);
+
+	if (!handled)
+		handled = projector_handle_common_msg(dev, req);
 
 	if (!handled) {
 		/* for mouse event type, 1 :move, 2:down, 3:up */
@@ -889,13 +915,7 @@ static void projector_complete_out(struct usb_ep *ep, struct usb_request *req)
 			    atomic_read(&htc_mode_status));
 			schedule_work(&dev->htcmode_notifier_work);
 		} else if (*data == ' ') {
-			send_fb(dev);
-			dev->frame_count++;
-			/* 30s send system wake code */
-			if (dev->frame_count == 30 * 30) {
-				projector_send_Key_event(dev, 0);
-				dev->frame_count = 0;
-			}
+			queue_work(dev->wq_display, &dev->send_fb_work_legacy);
 		} else if (mouse_data[0] > 0) {
 			 if (mouse_data[0] < 4) {
 				for (i = 0; i < 3; i++)
@@ -1261,8 +1281,8 @@ static ssize_t print_htcmode_switch_name(struct switch_dev *sdev, char *buf)
 
 static ssize_t print_htcmode_switch_state(struct switch_dev *htcmode_sdev, char *buf)
 {
-	return sprintf(buf, "%s\n", (atomic_read(&htc_mode_status)==HTC_MODE_RUNNING ?
-		    "projecting" : (atomic_read(&htc_mode_status)==DOCK_ON_AUTOBOT ? "online" : "offline")));
+	return sprintf(buf, "%s\n", (atomic_read(&htc_mode_status) == HTC_MODE_RUNNING ?
+		    "projecting" : (atomic_read(&htc_mode_status) == DOCK_ON_AUTOBOT ? "online" : "offline")));
 }
 
 
@@ -1368,9 +1388,10 @@ static int projector_bind_config(struct usb_configuration *c)
 	if (!dev->wq_display)
 		goto err_free;
 
-	workqueue_set_max_active(dev->wq_display,1);
+	workqueue_set_max_active(dev->wq_display, 1);
 
 	INIT_WORK(&dev->send_fb_work, send_fb_do_work);
+	INIT_WORK(&dev->send_fb_work_legacy, send_fb_do_work_legacy);
 
 	return 0;
 
@@ -1383,6 +1404,7 @@ static int projector_setup(struct htcmode_protocol *config)
 {
 	struct projector_dev *dev;
 	int ret = 0;
+
 	const char sig[] = {
 		0xFF, 0xFF, 0x48, 0x53,
 		0x4D, 0x4C, 0xFF, 0xFF

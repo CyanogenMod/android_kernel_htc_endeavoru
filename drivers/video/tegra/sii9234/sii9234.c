@@ -707,7 +707,7 @@ static int sii9234_probe(struct i2c_client *client,
 {
 	int ret = E_MHL_OK;
 	bool rv = TRUE;
-	T_MHL_SII9234_INFO *pInfo;
+	T_MHL_SII9234_INFO *pInfo = NULL;
 	T_MHL_PLATFORM_DATA *pdata;
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {

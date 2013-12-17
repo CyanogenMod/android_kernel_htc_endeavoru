@@ -353,7 +353,7 @@ static __initdata struct tegra_pingroup_config endeavoru_pinmux_common[] = {
     DEFAULT_PINMUX(ULPI_DIR,        RSVD,            NORMAL,    NORMAL,     OUTPUT),             //LED_DRV_TRIG
     DEFAULT_PINMUX(ULPI_NXT,        ULPI,            NORMAL,    NORMAL,     OUTPUT),            //MHL_3V3_EN
     DEFAULT_PINMUX(ULPI_STP,        ULPI,            NORMAL,    NORMAL,     INPUT),             //PEH_V_SRIO_1V8_EN
-    DEFAULT_PINMUX(SDMMC1_DAT1,     RSVD,            NORMAL,	TRISTATE,   INPUT),             //NFC_IRQ
+    DEFAULT_PINMUX(SDMMC1_DAT1,     RSVD,            PULL_DOWN,	TRISTATE,   INPUT),             //NFC_IRQ
     DEFAULT_PINMUX(SDMMC1_DAT3,     UARTE,           NORMAL,    NORMAL,     OUTPUT),            //AUD_REMO_TX
     DEFAULT_PINMUX(SDMMC1_DAT2,     UARTE,           NORMAL,    NORMAL,     INPUT),             //AUD_REMO_RX
     DEFAULT_PINMUX(SDMMC1_DAT0,     SDMMC1,          PULL_UP,   NORMAL,     INPUT),             //test point

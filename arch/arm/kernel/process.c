@@ -40,6 +40,7 @@
 #include <asm/stacktrace.h>
 #include <asm/mach/time.h>
 
+#include <mach/cpuidle_notifier.h>
 #ifdef CONFIG_CC_STACKPROTECTOR
 #include <linux/stackprotector.h>
 unsigned long __stack_chk_guard __read_mostly;
@@ -122,6 +123,7 @@ void arm_machine_flush_console(void)
 	else
 		pr_emerg("arm_restart: Console was locked!\n");
 	console_unlock();
+	mf_irq_leave(NULL);
 }
 #else
 void arm_machine_flush_console(void)
@@ -217,6 +219,7 @@ void cpu_idle(void)
 	/* endless idle loop with no priority at all */
 	while (1) {
 		idle_notifier_call_chain(IDLE_START);
+        tegra_cpuidle_enter();
 		tick_nohz_stop_sched_tick(1);
 		while (!need_resched()) {
 #ifdef CONFIG_HOTPLUG_CPU
@@ -247,6 +250,7 @@ void cpu_idle(void)
 		}
 		tick_nohz_restart_sched_tick();
 		idle_notifier_call_chain(IDLE_END);
+        tegra_cpuidle_exit();
 		preempt_enable_no_resched();
 		schedule();
 		preempt_disable();

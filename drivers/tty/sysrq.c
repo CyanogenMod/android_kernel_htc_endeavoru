@@ -517,7 +517,8 @@ void __handle_sysrq(int key, bool check_mask)
 		 * should not) and is the invoked operation enabled?
 		 */
 		if (!check_mask || sysrq_on_mask(op_p->enable_mask)) {
-			printk("%s\n", op_p->action_msg);
+			printk("%s (triggered by %s:%d)\n", op_p->action_msg,
+					current->comm, current->tgid);
 			console_loglevel = orig_log_level;
 			op_p->handler(key);
 		} else {

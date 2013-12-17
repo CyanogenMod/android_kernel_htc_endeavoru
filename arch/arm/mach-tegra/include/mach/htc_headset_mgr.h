@@ -20,16 +20,21 @@
 #ifndef HTC_HEADSET_MGR_H
 #define HTC_HEADSET_MGR_H
 
-//FIXME #include <mach/msm_rpcrouter.h>
-#include <linux/platform_device.h>
-
 #include <linux/earlysuspend.h>
-#include <mach/msm_rpcrouter.h>
-
 #include <linux/input.h>
 #include <linux/switch.h>
 #include <linux/wakelock.h>
-#include <mach/board_htc.h>
+
+#include <mach/msm_rpcrouter.h>
+#include <mach/htc_headset_config.h>
+
+#ifdef HTC_HEADSET_KERNEL_3_0
+#define set_irq_type(irq, type) irq_set_irq_type(irq, type)
+#define set_irq_wake(irq, on) irq_set_irq_wake(irq, on)
+#else
+#define set_irq_type(irq, type) set_irq_type(irq, type)
+#define set_irq_wake(irq, on) set_irq_wake(irq, on)
+#endif
 
 #define HS_ERR(fmt, arg...) \
 	printk(KERN_INFO "[" DRIVER_NAME "_ERR] (%s) " fmt "\n", \
@@ -64,11 +69,6 @@
 #define DRIVER_HS_MGR_FLOAT_DET		(1 << 1)
 #define DRIVER_HS_MGR_OLD_AJ		(1 << 2)
 
-#define UART_DEV_NAME_LEN 32
-#define CHECK_COUNT 5
-#define DET_CHECK_COUNT 10
-
-
 #define DEBUG_FLAG_LOG		(1 << 0)
 #define DEBUG_FLAG_ADC		(1 << 1)
 
@@ -87,7 +87,6 @@
 #define BIT_HDMI_AUDIO		(1 << 12)
 #define BIT_USB_AUDIO_OUT	(1 << 13)
 #define BIT_UNDEFINED		(1 << 14)
-#define BIT_HEADSET_UART	(1 << 15)
 
 #define MASK_HEADSET		(BIT_HEADSET | BIT_HEADSET_NO_MIC)
 #define MASK_35MM_HEADSET	(BIT_HEADSET | BIT_HEADSET_NO_MIC | \
@@ -95,9 +94,22 @@
 #define MASK_FM_ATTRIBUTE	(BIT_FM_HEADSET | BIT_FM_SPEAKER)
 #define MASK_USB_HEADSET	(BIT_USB_AUDIO_OUT)
 
+#define GOOGLE_BIT_HEADSET		(1 << 0)
+#define GOOGLE_BIT_HEADSET_NO_MIC	(1 << 1)
+#define GOOGLE_BIT_USB_HEADSET_ANLG	(1 << 2)
+#define GOOGLE_BIT_USB_HEADSET_DGTL	(1 << 3)
+#define GOOGLE_BIT_HDMI_AUDIO		(1 << 4)
+
+#define GOOGLE_SUPPORTED_HEADSETS	(GOOGLE_BIT_HEADSET | \
+					GOOGLE_BIT_HEADSET_NO_MIC | \
+					GOOGLE_BIT_USB_HEADSET_ANLG | \
+					GOOGLE_BIT_USB_HEADSET_DGTL | \
+					GOOGLE_BIT_HDMI_AUDIO)
+#define GOOGLE_HEADSETS_WITH_MIC	GOOGLE_BIT_HEADSET
+#define GOOGLE_USB_HEADSETS		(GOOGLE_BIT_USB_HEADSET_ANLG | \
+					GOOGLE_BIT_USB_HEADSET_DGTL)
+
 #define HS_DEF_MIC_ADC_10_BIT		200
-#define HS_DEF_MIC_ADC_12_BIT_MAX	4000
-#define HS_DEF_MIC_ADC_12_BIT_MIN	800
 #define HS_DEF_MIC_ADC_15_BIT_MAX	25320
 #define HS_DEF_MIC_ADC_15_BIT_MIN	7447
 #define HS_DEF_MIC_ADC_16_BIT_MAX	50641
@@ -108,14 +120,14 @@
 #define HS_DEF_HPTV_ADC_16_BIT_MIN	6456
 
 #define HS_DEF_MIC_DETECT_COUNT		10
-#define HS_BUTTON_EVENT_QUEUE		20
 
 #define HS_DELAY_ZERO			0
 #define HS_DELAY_SEC			1000
 #define HS_DELAY_MIC_BIAS		200
 #define HS_DELAY_MIC_DETECT		1000
-#define HS_DELAY_INSERT			500
+#define HS_DELAY_INSERT			300
 #define HS_DELAY_REMOVE			200
+#define HS_DELAY_REMOVE_LONG		500
 #define HS_DELAY_BUTTON			500
 #define HS_DELAY_1WIRE_BUTTON		800
 #define HS_DELAY_1WIRE_BUTTON_SHORT	20
@@ -126,12 +138,13 @@
 #define HS_JIFFIES_MIC_DETECT		msecs_to_jiffies(HS_DELAY_MIC_DETECT)
 #define HS_JIFFIES_INSERT		msecs_to_jiffies(HS_DELAY_INSERT)
 #define HS_JIFFIES_REMOVE		msecs_to_jiffies(HS_DELAY_REMOVE)
+#define HS_JIFFIES_REMOVE_LONG		msecs_to_jiffies(HS_DELAY_REMOVE_LONG)
 #define HS_JIFFIES_BUTTON		msecs_to_jiffies(HS_DELAY_BUTTON)
 #define HS_JIFFIES_1WIRE_BUTTON		msecs_to_jiffies(HS_DELAY_1WIRE_BUTTON)
 #define HS_JIFFIES_1WIRE_BUTTON_SHORT	msecs_to_jiffies(HS_DELAY_1WIRE_BUTTON_SHORT)
 #define HS_JIFFIES_IRQ_INIT		msecs_to_jiffies(HS_DELAY_IRQ_INIT)
 
-#define HS_WAKE_LOCK_TIMEOUT		(5 * HZ)
+#define HS_WAKE_LOCK_TIMEOUT		(2 * HZ)
 #define HS_RPC_TIMEOUT			(5 * HZ)
 #define HS_MIC_DETECT_TIMEOUT		(HZ + HZ / 2)
 
@@ -165,25 +178,14 @@
 #define HS_MGR_2X_HOLD_MEDIA	HS_MGR_KEY_HOLD(HS_MGR_2X_KEY_MEDIA)
 #define HS_MGR_3X_HOLD_MEDIA	HS_MGR_KEY_HOLD(HS_MGR_3X_KEY_MEDIA)
 
-#define HS_DEF				0
-#define HS_QUO_F			1
-#define HS_QUO_U			2
-#define HS_QUO_F_U			3
-#define HS_BLE				4
-#define HS_EDE_U			5
-#define HS_EDE_TD			6
-#define HS_EDE_U_TD			7
-#define HS_QUO_F_U_XB		8
-#define HS_ENRC2_U_XB		9
-
 enum {
 	HEADSET_UNPLUG		= 0,
 	HEADSET_NO_MIC		= 1,
 	HEADSET_MIC		= 2,
 	HEADSET_METRICO		= 3,
 	HEADSET_UNKNOWN_MIC	= 4,
-	HEADSET_TV_OUT		= 5,
-	HEADSET_UNSTABLE	= 6,
+	HEADSET_UNSTABLE	= 5,
+	HEADSET_TV_OUT		= 6,
 	HEADSET_INDICATOR	= 7,
 	HEADSET_BEATS		= 8,
 	HEADSET_BEATS_SOLO	= 9,
@@ -191,8 +193,11 @@ enum {
 };
 
 enum {
-	HEADSET_ADC		= 0,
-	HEADSET_1WIRE = 1,
+	GOOGLE_USB_AUDIO_UNPLUG	= 0,
+	GOOGLE_USB_AUDIO_ANLG	= 1,
+#ifdef CONFIG_SUPPORT_USB_SPEAKER
+	GOOGLE_USB_AUDIO_DGTL	= 2,
+#endif
 };
 
 enum {
@@ -238,13 +243,14 @@ enum {
 	H2W_TVOUT		= 6,
 	USB_NO_HEADSET		= 7,
 	USB_AUDIO_OUT		= 8,
+#ifdef CONFIG_SUPPORT_USB_SPEAKER
+	USB_AUDIO_OUT_DGTL	= 9,
+#endif
 };
 
 struct hs_rpc_server_args_key {
 	uint32_t adc;
 };
-//FIXME 
-/*
 
 struct hs_rpc_client_req_adc {
 	struct rpc_request_hdr hdr;
@@ -254,7 +260,6 @@ struct hs_rpc_client_rep_adc {
 	struct rpc_reply_hdr hdr;
 	uint32_t adc;
 };
-*/
 
 struct external_headset {
 	int type;
@@ -267,12 +272,6 @@ struct headset_adc_config {
 	uint32_t adc_min;
 };
 
-struct headset_1wire_config {
-	int type;
-	int value;
-};
-
-
 struct headset_notifier {
 	int id;
 	void *func;
@@ -281,7 +280,6 @@ struct headset_notifier {
 struct hs_notifier_func {
 	int (*hpin_gpio)(void);
 	int (*remote_adc)(int *);
-	int (*get_adc)(int *);
 	int (*remote_keycode)(int);
 	void (*rpc_key)(int);
 	int (*mic_status)(void);
@@ -299,20 +297,11 @@ struct hs_notifier_func {
 };
 
 struct htc_headset_mgr_platform_data {
-	unsigned int eng_cfg;
 	unsigned int driver_flag;
 	int headset_devices_num;
 	struct platform_device **headset_devices;
 	int headset_config_num;
 	struct headset_adc_config *headset_config;
-	int headset_config_1wire_num;
-	struct headset_1wire_config *headset_config_1wire;
-	unsigned int enable_1wire;
-	unsigned int tx_1wire_gpio;
-	unsigned int rx_1wire_gpio;
-	unsigned int level_1wire_gpio;
-	unsigned int uart_1wire_gpio;
-	unsigned char dev_1wire[UART_DEV_NAME_LEN];
 
 	unsigned int hptv_det_hp_gpio;
 	unsigned int hptv_det_tv_gpio;
@@ -341,7 +330,8 @@ struct htc_headset_mgr_info {
 	struct device *debug_dev;
 	struct mutex mutex_lock;
 
-	struct switch_dev sdev;
+	struct switch_dev sdev_h2w;
+	struct switch_dev sdev_usb_audio;
 	struct input_dev *input;
 	unsigned long insert_jiffies;
 
@@ -362,7 +352,7 @@ struct htc_headset_mgr_info {
 	int mic_detect_counter;
 	int metrico_status; /* For HW Metrico lab test */
 	int quick_boot_status;
-	int detect_type; /* For beats 1-wire solution*/
+
 	/*Variables for one wire driver*/
 	int driver_one_wire_exist;
 	int one_wire_mode;
@@ -378,7 +368,7 @@ void headset_ext_button(int headset_type, int key_code, int press);
 
 void hs_notify_driver_ready(char *name);
 void hs_notify_hpin_irq(void);
-int hs_notify_plug_event(int insert);
+int hs_notify_plug_event(int insert, unsigned int intr_id);
 int hs_notify_key_event(int key_code);
 int hs_notify_key_irq(void);
 
@@ -391,5 +381,9 @@ int headset_get_type(void);
 int headset_get_type_sync(int count, unsigned int interval);
 
 extern int switch_send_event(unsigned int bit, int on);
+
+#if defined(CONFIG_FB_MSM_TVOUT) && defined(CONFIG_ARCH_MSM8X60)
+extern void tvout_enable_detection(unsigned int on);
+#endif
 
 #endif

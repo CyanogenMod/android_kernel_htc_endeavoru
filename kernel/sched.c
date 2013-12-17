@@ -7240,6 +7240,13 @@ void sched_show_task(struct task_struct *p)
 				jiffies_to_msecs(jiffies - p->blocked_since));
 #endif
 
+	cputime_t utime, stime;
+	task_times(p, &utime, &stime);
+	printk(KERN_CONT "  schedstat=( %llu %llu %lu ) utm=%lu stm=%lu\n",
+			(unsigned long long)p->se.sum_exec_runtime,
+			(unsigned long long)p->sched_info.run_delay,
+			p->sched_info.pcount, utime, stime);
+
 	show_stack(p, NULL);
 }
 

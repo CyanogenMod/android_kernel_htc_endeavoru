@@ -264,6 +264,19 @@ int tegra_emc_backup(unsigned long rate);
 bool tegra_clk_is_parent_allowed(struct clk *c, struct clk *p);
 #endif
 
+//htc ++
+#ifdef CONFIG_QCT_9K_MODEM
+//#define HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+#endif //CONFIG_QCT_9K_MODEM
+
+#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+extern int htc_hsic_phy_power_debug_flag;
+extern struct task_struct *hsic_phy_tsk;
+extern unsigned int HTC_HSIC_PHY_FOOTPRINT;
+extern struct clk *hsic_par_emc_clk;
+#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+//htc--
+
 static inline bool clk_is_auto_dvfs(struct clk *c)
 {
 	return c->auto_dvfs;
@@ -287,10 +300,22 @@ static inline void clk_lock_save(struct clk *c, unsigned long *flags)
 	} else {
 		spin_lock_irqsave(&c->spinlock, *flags);
 	}
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (htc_hsic_phy_power_debug_flag) {
+		trace_printk("%s(%s)\n", __func__, c->name);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
 }
 
 static inline void clk_unlock_restore(struct clk *c, unsigned long *flags)
 {
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (htc_hsic_phy_power_debug_flag) {
+		trace_printk("%s(%s)\n", __func__, c->name);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	if (clk_cansleep(c))
 		mutex_unlock(&c->mutex);
 	else

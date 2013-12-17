@@ -154,7 +154,8 @@ int rawchip_set_size(struct rawchip_sensor_data data, bool *clock_init_done)
 		}
 		rawchip_init_data.use_rawchip = data.use_rawchip;
 		rc = Yushan_sensor_open_init(rawchip_init_data, clock_init_done);
-		rawchipCtrl->rawchip_init = 1;
+		if (rc >= 0)
+			rawchipCtrl->rawchip_init = 1;
 		return rc;
 	}
 

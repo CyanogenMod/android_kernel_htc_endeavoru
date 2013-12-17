@@ -230,6 +230,34 @@ static void print_active_locks(int type)
 	}
 }
 
+void htc_print_active_wake_locks(int type)
+{
+	struct wake_lock *lock;
+	unsigned long irqflags;
+	spin_lock_irqsave(&list_lock, irqflags);
+	if((!list_empty(&active_wake_locks[type]))){
+#if 0 /* Kernel 3.4 removes WAKE_LOCK_IDLE */
+		if(type==WAKE_LOCK_IDLE)
+			printk("idle lock: ");
+		else
+#endif
+		printk("wakelock: ");
+		list_for_each_entry(lock, &active_wake_locks[type], link) {
+			if (lock->flags & WAKE_LOCK_AUTO_EXPIRE) {
+				long timeout = lock->expires - jiffies;
+				if (timeout > 0)
+					printk(" '%s', time left %ld; ",
+						lock->name, timeout);
+			} else {
+				printk(" '%s' ", lock->name);
+			}
+		}
+		printk("\n");
+	}
+	spin_unlock_irqrestore(&list_lock, irqflags);
+}
+
+
 static long has_wake_lock_locked(int type)
 {
 	struct wake_lock *lock, *n;

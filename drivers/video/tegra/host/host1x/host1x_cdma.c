@@ -3,7 +3,7 @@
  *
  * Tegra Graphics Host Command DMA
  *
- * Copyright (c) 2010-2012, NVIDIA Corporation.
+ * Copyright (c) 2010-2013, NVIDIA Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -22,6 +22,7 @@
 #include "nvhost_acm.h"
 #include "nvhost_cdma.h"
 #include "nvhost_channel.h"
+#include "debug.h"
 #include "dev.h"
 #include "chip_support.h"
 #include "nvhost_memmgr.h"
@@ -68,7 +69,6 @@ static int push_buffer_init(struct push_buffer *pb)
 	pb->phys = 0;
 	pb->client_handle = NULL;
 
-	BUG_ON(!cdma_pb_op().reset);
 	cdma_pb_op().reset(pb);
 
 	/* allocate and map pushbuffer memory */
@@ -142,7 +142,7 @@ static void push_buffer_push_to(struct push_buffer *pb,
 	u32 cur = pb->cur;
 	u32 *p = (u32 *)((u32)pb->mapped + cur);
 	u32 cur_nvmap = (cur/8) & (NVHOST_GATHER_QUEUE_SIZE - 1);
-	BUG_ON(cur == pb->fence);
+	WARN_ON(cur == pb->fence);
 	*(p++) = op1;
 	*(p++) = op2;
 	pb->client_handle[cur_nvmap].client = client;
@@ -267,7 +267,6 @@ static void cdma_start(struct nvhost_cdma *cdma)
 	if (cdma->running)
 		return;
 
-	BUG_ON(!cdma_pb_op().putptr);
 	cdma->last_put = cdma_pb_op().putptr(&cdma->push_buffer);
 
 	writel(host1x_channel_dmactrl(true, false, false),
@@ -302,7 +301,6 @@ static void cdma_timeout_restart(struct nvhost_cdma *cdma, u32 getptr)
 	if (cdma->running)
 		return;
 
-	BUG_ON(!cdma_pb_op().putptr);
 	cdma->last_put = cdma_pb_op().putptr(&cdma->push_buffer);
 
 	writel(host1x_channel_dmactrl(true, false, false),
@@ -342,7 +340,6 @@ static void cdma_timeout_restart(struct nvhost_cdma *cdma, u32 getptr)
 static void cdma_kick(struct nvhost_cdma *cdma)
 {
 	u32 put;
-	BUG_ON(!cdma_pb_op().putptr);
 
 	put = cdma_pb_op().putptr(&cdma->push_buffer);
 
@@ -378,7 +375,10 @@ static void cdma_timeout_teardown_begin(struct nvhost_cdma *cdma)
 	struct nvhost_channel *ch = cdma_to_channel(cdma);
 	u32 cmdproc_stop;
 
-	BUG_ON(cdma->torndown);
+	if (cdma->torndown && !cdma->running) {
+		dev_warn(&dev->dev->dev, "Already torn down\n");
+		return;
+	}
 
 	dev_dbg(&dev->dev->dev,
 		"begin channel teardown (channel id %d)\n", ch->chid);
@@ -409,8 +409,6 @@ static void cdma_timeout_teardown_end(struct nvhost_cdma *cdma, u32 getptr)
 	struct nvhost_master *dev = cdma_to_dev(cdma);
 	struct nvhost_channel *ch = cdma_to_channel(cdma);
 	u32 cmdproc_stop;
-
-	BUG_ON(!cdma->torndown || cdma->running);
 
 	dev_dbg(&dev->dev->dev,
 		"end channel teardown (id %d, DMAGET restart = 0x%x)\n",
@@ -445,6 +443,9 @@ static void cdma_timeout_handler(struct work_struct *work)
 	dev = cdma_to_dev(cdma);
 	sp = &dev->syncpt;
 	ch = cdma_to_channel(cdma);
+
+	if (nvhost_debug_force_timeout_dump)
+		nvhost_debug_dump(cdma_to_dev(cdma));
 
 	mutex_lock(&cdma->lock);
 

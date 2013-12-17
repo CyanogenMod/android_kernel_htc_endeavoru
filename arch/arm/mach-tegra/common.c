@@ -1245,3 +1245,52 @@ void __init htc_memory_footprint_init(void)
 		pr_err("[MF] %s: memory footprint registeration failed (%d)!\n", __func__, err);
 }
 #endif
+
+#if defined(CONFIG_HTC_FIQ_DUMPER)
+static struct resource fiq_dumper_resources[] = {
+	{
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+static struct platform_device fiq_dumper_device = {
+	.name 		= "fiq_dumper",
+	.id 		= -1,
+	.num_resources	= ARRAY_SIZE(fiq_dumper_resources),
+	.resource	= fiq_dumper_resources,
+};
+
+void __init fiq_dumper_space_reserve(unsigned long size)
+{
+	struct resource *res;
+	long ret;
+
+	res = platform_get_resource(&fiq_dumper_device, IORESOURCE_MEM, 0);
+	if (!res) {
+		pr_err("fiq_dumper_space_reserve: failed to find memory resource\n");
+		goto fail;
+	}
+
+	res->start = memblock_end_of_DRAM() - size;
+	res->end = res->start + size - 1;
+	ret = memblock_remove(res->start, size);
+	if (ret) {
+		pr_err("fiq_dumper_space_reserve: failed to reserve memory block\n");
+		goto fail;
+	} else
+		pr_info("fiq_dumper_space_reserve: start=%zx, end=%zx\n", res->start, res->end);
+
+	return;
+fail:
+	fiq_dumper_device.resource = NULL;
+	fiq_dumper_device.num_resources = 0;
+}
+
+void __init fiq_dumper_init(void)
+{
+	int err;
+	err = platform_device_register(&fiq_dumper_device);
+	if (err)
+		pr_err("fiq_dumper_device registeration failed (%d)!\n", err);
+}
+#endif

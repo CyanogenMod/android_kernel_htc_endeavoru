@@ -250,7 +250,11 @@ static void alarm_triggered(struct alarm *alarm)
 static int offalarm_enabled;
 int htc_is_offalarm_enabled(void)
 {
+#if 0	/* default enable offmode alarm since Sense 5.0 */
 	return offalarm_enabled;
+#else
+	return 1;
+#endif
 }
 EXPORT_SYMBOL(htc_is_offalarm_enabled);
 

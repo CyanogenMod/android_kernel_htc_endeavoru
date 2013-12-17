@@ -1383,7 +1383,7 @@ static struct kernel_param_ops bthp_ctrl_ops = {
 	.set = bthp_ctrl_set,
 	.get = bthp_ctrl_get,
 };
-module_param_cb(bthp_en, &bthp_ctrl_ops, &bthp_en, 0664);
+module_param_cb(bthp_en, &bthp_ctrl_ops, &bthp_en, 0444);
 
 /* controller for activity trigger */
 static bool at_en = 1;

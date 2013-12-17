@@ -1,4 +1,5 @@
 #include <linux/ioctl.h> /* for defining the IO controls */
+#include <linux/sched.h>
 
 /*****************************************************************************/
 /* IO CONTROL definition for AIC3008                                         */
@@ -22,6 +23,7 @@
 #define AIC3008_IO_RESET			_IOW(AIC3008_IO_IOCTL_MAGIC, 0x33, unsigned int)
 #define AIC3008_IO_DUMP_DSP			_IOW(AIC3008_IO_IOCTL_MAGIC, 0x34, unsigned int)
 #define AIC3008_IO_GET_PCBID		_IOR(AIC3008_IO_IOCTL_MAGIC, 0x35, unsigned int)
+#define AIC3008_IO_KILL_PID			_IOR(AIC3008_IO_IOCTL_MAGIC, 0x36, unsigned int)
 
 #define IO_CTL_ROW_MAX      64
 #define IO_CTL_COL_MAX      1024

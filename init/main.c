@@ -468,6 +468,32 @@ static void __init mm_init(void)
 	vmalloc_init();
 }
 
+static const char* __init mask_serialno_if_sf(const char* raw)
+{
+	const int MASK_LEN = 8;
+	const char* serialno_postfix = "serialno=";
+	const char* sf = "androidboot.sf=";
+
+	int i;
+	static __initdata char masked[COMMAND_LINE_SIZE];
+	char* ptr;
+
+	if ((ptr = strstr(raw, sf))) {
+		ptr += strlen(sf);
+		if (*ptr == '0')
+			return raw;
+	}
+
+	strcpy(masked, raw);
+	ptr = masked;
+	while ((ptr = strstr(ptr, serialno_postfix))) {
+		ptr += strlen(serialno_postfix);
+		for (i = 0; i < MASK_LEN && ptr[i] != '\0'; i++)
+			ptr[i] = '*';
+	}
+	return masked;
+}
+
 asmlinkage void __init start_kernel(void)
 {
 	char * command_line;
@@ -511,7 +537,7 @@ asmlinkage void __init start_kernel(void)
 	build_all_zonelists(NULL);
 	page_alloc_init();
 
-	printk(KERN_NOTICE "Kernel command line: %s\n", boot_command_line);
+	printk(KERN_NOTICE "Kernel command line: %s\n", mask_serialno_if_sf(boot_command_line));
 	parse_early_param();
 	parse_args("Booting kernel", static_command_line, __start___param,
 		   __stop___param - __start___param,

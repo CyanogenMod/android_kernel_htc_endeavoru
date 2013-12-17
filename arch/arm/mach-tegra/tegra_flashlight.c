@@ -164,10 +164,14 @@ int aat1277_flashlight_control(int mode)
 			return -EINVAL;
 	}
 
+	if (this_fl_str->mode_status == FL_MODE_FLASH) {
+		FLT_INFO_LOG("Cancel hrtimer\n");
+		hrtimer_cancel(&this_fl_str->timer);
+	}
+
 	spin_lock_irqsave(&this_fl_str->spin_lock,
 						this_fl_str->spinlock_flags);
 	if (this_fl_str->mode_status == FL_MODE_FLASH) {
-		hrtimer_cancel(&this_fl_str->timer);
 		flashlight_turn_off();
 	}
 
@@ -259,10 +263,14 @@ int aat3177_flashlight_control(int mode)
 			return -EINVAL;
 	}
 
+	if (this_fl_str->mode_status == FL_MODE_FLASH) {
+		FLT_INFO_LOG("Cancel hrtimer\n");
+		hrtimer_cancel(&this_fl_str->timer);
+	}
+
 	spin_lock_irqsave(&this_fl_str->spin_lock,
 						this_fl_str->spinlock_flags);
 	if (this_fl_str->mode_status == FL_MODE_FLASH) {
-		hrtimer_cancel(&this_fl_str->timer);
 		flashlight_turn_off();
 	}
 
@@ -339,10 +347,13 @@ int aat1271_flashlight_control(int mode)
 			return -EINVAL;
 	}
 
+	if (this_fl_str->mode_status == FL_MODE_FLASH) {
+		FLT_INFO_LOG("Cancel hrtimer\n");
+		hrtimer_cancel(&this_fl_str->timer);
+	}
 	spin_lock_irqsave(&this_fl_str->spin_lock,
 						this_fl_str->spinlock_flags);
 	if (this_fl_str->mode_status == FL_MODE_FLASH) {
-		hrtimer_cancel(&this_fl_str->timer);
 		flashlight_turn_off();
 	}
 	switch (mode) {

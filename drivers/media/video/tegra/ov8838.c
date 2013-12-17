@@ -2017,6 +2017,7 @@ retry:
 	err = rawchip_set_size(rawchip_data, &clock_init_done);
 	if (err < 0 && retry++ < 5) {
 		pr_err("[CAM] rawchip_set_size FAIL!!!\n");
+		ov8838_reset(info);
 		goto retry;
 	}
 

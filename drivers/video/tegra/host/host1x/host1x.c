@@ -308,6 +308,19 @@ static int power_off_host(struct nvhost_device *dev)
 	return 0;
 }
 
+static void clock_on_host(struct nvhost_device *dev)
+{
+	struct nvhost_master *host = nvhost_get_drvdata(dev);
+	nvhost_intr_start(&host->intr, clk_get_rate(dev->clk[0]));
+}
+
+static int clock_off_host(struct nvhost_device *dev)
+{
+	struct nvhost_master *host = nvhost_get_drvdata(dev);
+	nvhost_intr_stop(&host->intr);
+	return 0;
+}
+
 static int __devinit nvhost_user_init(struct nvhost_master *host)
 {
 	int err, devno;
@@ -345,13 +358,11 @@ fail:
 
 struct nvhost_channel *nvhost_alloc_channel(struct nvhost_device *dev)
 {
-	BUG_ON(!host_device_op().alloc_nvhost_channel);
 	return host_device_op().alloc_nvhost_channel(dev);
 }
 
 void nvhost_free_channel(struct nvhost_channel *ch)
 {
-	BUG_ON(!host_device_op().free_nvhost_channel);
 	host_device_op().free_nvhost_channel(ch);
 }
 
@@ -516,6 +527,8 @@ static struct nvhost_driver nvhost_driver = {
 	},
 	.finalize_poweron = power_on_host,
 	.prepare_poweroff = power_off_host,
+	.finalize_clockon = clock_on_host,
+	.prepare_clockoff = clock_off_host,
 };
 
 static int __init nvhost_mod_init(void)

@@ -896,11 +896,14 @@ static int remove_config(struct usb_composite_dev *cdev,
 			/* may free memory for "f" */
 		}
 	}
+	/* config->cdev null when android_bind fail last time  */
+	if (config->cdev != NULL) {
 	list_del(&config->list);
 	if (config->unbind) {
 		DBG(cdev, "unbind config '%s'/%p\n", config->label, config);
 		config->unbind(config);
 			/* may free memory for "c" */
+		}
 	}
 	return 0;
 }

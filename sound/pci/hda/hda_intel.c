@@ -1119,6 +1119,31 @@ static void azx_stream_stop(struct azx *chip, struct azx_dev *azx_dev)
 		   azx_readl(chip, INTCTL) & ~(1 << azx_dev->index));
 }
 
+static void azx_stream_stop_1(struct azx *chip, struct azx_dev *azx_dev)
+{
+	azx_sd_writeb(azx_dev, SD_CTL, azx_sd_readb(azx_dev, SD_CTL) & ~(SD_CTL_DMA_START));
+}
+
+static void azx_stream_stop_2(struct azx *chip, struct azx_dev *azx_dev)
+{
+	int count = 0;
+	while((azx_sd_readb(azx_dev, SD_CTL) & SD_CTL_DMA_START)) {
+		udelay(10);
+		count ++;
+		//10ms timeout condition
+		if(count == 1000) {
+			snd_printk(KERN_ERR "hda_intel: azx_stream_stop timeout");
+			break;
+		}
+	}
+}
+
+static void azx_stream_stop_3(struct azx *chip, struct azx_dev *azx_dev)
+{
+	azx_sd_writeb(azx_dev, SD_CTL, azx_sd_readb(azx_dev, SD_CTL) & ~(SD_INT_MASK));
+	azx_sd_writeb(azx_dev, SD_STS, SD_INT_MASK);
+	azx_writel(chip, INTCTL, azx_readl(chip, INTCTL) & ~(1 << azx_dev->index));
+}
 
 /*
  * reset and start the controller registers
@@ -1976,7 +2001,11 @@ static int azx_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 						azx_dev->period_wallclk;
 			azx_stream_start(chip, azx_dev);
 		} else {
-			azx_stream_stop(chip, azx_dev);
+			azx_stream_stop_1(chip, azx_dev);
+			spin_unlock(&chip->reg_lock);
+			azx_stream_stop_2(chip, azx_dev);
+			spin_lock(&chip->reg_lock);
+			azx_stream_stop_3(chip, azx_dev);
 		}
 		azx_dev->running = start;
 	}

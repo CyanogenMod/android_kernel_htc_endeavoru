@@ -1093,8 +1093,8 @@ static int usb_suspend_interface(struct usb_device *udev,
 	struct usb_driver	*driver;
 	int			status = 0;
 
-	dev_info(&intf->dev, "%s: cnt %d -> %d intf=%p &intf->dev=%p kobje=%s udev->state=%d intf->condition =%d disable_depth = %d\n",
-			__func__, atomic_read(&intf->dev.power.usage_count),status,intf,&intf->dev,kobject_name(&intf->dev.kobj),udev->state,intf->condition,intf->dev.power.disable_depth);
+	dev_info(&intf->dev, "%s: cnt %d kobje=%s disable_depth = %d\n",
+			__func__, atomic_read(&intf->dev.power.usage_count), kobject_name(&intf->dev.kobj), intf->dev.power.disable_depth);
 
 	if (udev->state == USB_STATE_NOTATTACHED ||
 			intf->condition == USB_INTERFACE_UNBOUND)
@@ -1125,9 +1125,9 @@ static int usb_resume_interface(struct usb_device *udev,
 	struct usb_driver	*driver;
 	int			status = 0;
 
-	dev_info(&intf->dev, "%s: cnt %d -> %d intf=%p &intf->dev=%p kobje=%s udev->state=%d intf->condition =%d::intf->needs_binding= %d reset_resume = %d disable_depth = %d\n",
-			__func__, atomic_read(&intf->dev.power.usage_count),status,intf,&intf->dev,kobject_name(&intf->dev.kobj),udev->state,intf->condition,intf->needs_binding, reset_resume, intf->dev.power.disable_depth);
 
+	dev_info(&intf->dev, "%s: cnt %d kobje=%s disable_depth = %d\n",
+			__func__, atomic_read(&intf->dev.power.usage_count), kobject_name(&intf->dev.kobj), intf->dev.power.disable_depth);
 
 	if (udev->state == USB_STATE_NOTATTACHED)
 		goto done;

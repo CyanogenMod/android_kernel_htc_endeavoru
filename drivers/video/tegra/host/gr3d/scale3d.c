@@ -631,6 +631,40 @@ void nvhost_scale3d_set_throughput_hint(int hint)
 }
 EXPORT_SYMBOL(nvhost_scale3d_set_throughput_hint);
 
+void nvhost_scale3d_set_idle_clock()
+{
+       unsigned long hz, curr;
+
+       if (!scale3d.enable)
+               return;
+
+       if (!scale3d.p_use_throughput_hint)
+               return;
+
+       if (scale3d.p_use_throughput_hint) {
+
+               curr = clk_get_rate(scale3d.clk_3d);
+               hz = scale3d.min_rate_3d;
+
+               if (tegra_get_chipid() == TEGRA_CHIPID_TEGRA3)
+                       clk_set_rate(scale3d.clk_3d2, 0);
+
+               clk_set_rate(scale3d.clk_3d, hz);
+
+               if (scale3d.p_scale_emc) {
+                       long after = (long) clk_get_rate(scale3d.clk_3d);
+                       hz = after * scale3d.emc_slope + scale3d.emc_offset;
+                       if (scale3d.p_emc_dip)
+                               hz -=
+                                       (scale3d.emc_dip_slope *
+                                       POW2(after / 1000 - scale3d.emc_xmid) +
+                                       scale3d.emc_dip_offset);
+                       clk_set_rate(scale3d.clk_3d_emc, hz);
+               }
+       }
+}
+EXPORT_SYMBOL(nvhost_scale3d_set_idle_clock);
+
 static void scale3d_idle_handler(struct work_struct *work)
 {
 	int notify_idle = 0;

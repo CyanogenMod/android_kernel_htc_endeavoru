@@ -335,6 +335,7 @@ asmlinkage void __cpuinit secondary_start_kernel(void)
 	 * cpu_active bit is set, so it's safe to enalbe interrupts
 	 * now.
 	 */
+	mf_irq_leave(NULL);
 	local_irq_enable();
 	local_fiq_enable();
 

@@ -541,7 +541,7 @@ static void report_psensor_input_event(struct cm3629_info *lpi, int interrupt_fl
 	/* D("%s: j_end = %lu", __func__, lpi->j_end); */
 
 	ret = get_ps_adc_value(&ps1_adc, &ps2_adc);
-	D("[PS][cm3629] pocket mode flag is %d psensor_enable_by_touch flag is%d\n",pocket_mode_flag,psensor_enable_by_touch);
+	printk("[PS][cm3629] pocket mode flag is %d psensor_enable_by_touch flag is%d\n",pocket_mode_flag,psensor_enable_by_touch);
 	if(pocket_mode_flag == 1 || psensor_enable_by_touch == 1){
 		D("[PS][cm3629] pocket_mode_flag is %d\n",pocket_mode_flag);
 		while(index <=10 && ps1_adc == 0){

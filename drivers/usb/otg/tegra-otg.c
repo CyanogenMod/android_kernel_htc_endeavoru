@@ -317,10 +317,14 @@ static void tegra_change_otg_state(struct tegra_otg_data *tegra,
 		}
 	} else if (to != OTG_STATE_UNDEFINED && from == to) {
 		USBH_INFO("%s --> %s (%d)\n", tegra_state_name(from), tegra_state_name(to), USB_disabled);
-		if (USB_disabled)
+		if (USB_disabled) {
 			usb_gadget_disconnect(otg->gadget);
-		else
+		} else if (to == OTG_STATE_B_PERIPHERAL) {
+			usb_gadget_vbus_connect(otg->gadget);
 			usb_gadget_connect(otg->gadget);
+		} else {
+			usb_gadget_connect(otg->gadget);
+		}
 	}
 }
 

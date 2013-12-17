@@ -275,9 +275,46 @@ int clk_enable(struct clk *c)
 {
 	int ret = 0;
 	unsigned long flags;
+	static int spi_on_cnt = 0;
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (hsic_par_emc_clk == c && hsic_phy_tsk && hsic_phy_tsk == current) {
+		HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
 
 	clk_lock_save(c, &flags);
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (hsic_par_emc_clk == c && hsic_phy_tsk && hsic_phy_tsk == current) {
+		HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (htc_hsic_phy_power_debug_flag) {
+		trace_printk("clk_enable_locked(%s) ++\n", c->name);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
+	if(strcmp("sbc4", c->name)==0)
+	{
+		spi_on_cnt++;
+		if((spi_on_cnt%1000)==0)
+		{
+			pr_info("[CAM] spi_on_cnt == %d", spi_on_cnt);
+			spi_on_cnt = 0;
+		}
+	}
+
 	ret = clk_enable_locked(c);
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (htc_hsic_phy_power_debug_flag) {
+		trace_printk("clk_enable_locked(%s) --\n", c->name);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	clk_unlock_restore(c, &flags);
 	return ret;
 }
@@ -311,7 +348,21 @@ void clk_disable(struct clk *c)
 	unsigned long flags;
 
 	clk_lock_save(c, &flags);
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (htc_hsic_phy_power_debug_flag) {
+		trace_printk("clk_disable_locked(%s) ++\n", c->name);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	clk_disable_locked(c);
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (htc_hsic_phy_power_debug_flag) {
+		trace_printk("clk_disable_locked(%s) --\n", c->name);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	clk_unlock_restore(c, &flags);
 }
 EXPORT_SYMBOL(clk_disable);

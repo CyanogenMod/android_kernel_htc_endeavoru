@@ -181,6 +181,10 @@ int tegra_dc_ext_check_windowattr(struct tegra_dc_ext *ext,
 
 	/* Check the window format */
 	addr = tegra_dc_parse_feature(dc, win->idx, GET_WIN_FORMATS);
+	if (!addr) {
+		dev_err(&dc->ndev->dev, "addr of window %d is invalid.\n", win->idx);
+		goto fail;
+	}
 	if (!test_bit(win->fmt, addr)) {
 		dev_err(&dc->ndev->dev, "Color format of window %d is"
 						" invalid.\n", win->idx);
@@ -189,6 +193,10 @@ int tegra_dc_ext_check_windowattr(struct tegra_dc_ext *ext,
 
 	/* Check window size */
 	addr = tegra_dc_parse_feature(dc, win->idx, GET_WIN_SIZE);
+	if (!addr) {
+		dev_err(&dc->ndev->dev, "addr of window %d is invalid.\n", win->idx);
+		goto fail;
+	}
 	if (CHECK_SIZE(win->out_w, addr[MIN_WIDTH], addr[MAX_WIDTH]) ||
 		CHECK_SIZE(win->out_h, addr[MIN_HEIGHT], addr[MAX_HEIGHT])) {
 		dev_err(&dc->ndev->dev, "Size of window %d is"

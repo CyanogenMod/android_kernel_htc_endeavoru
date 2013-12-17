@@ -308,12 +308,17 @@ obj-${CONFIG_HTC_PROJECT}               += nvdumper.o
 obj-${CONFIG_HTC_BATT_CORE}             += htc_battery_core.o
 obj-$(CONFIG_BATTERY_TPS80032)          += htc_battery_tps80032.o
 obj-y					+= htc_perf.o
+obj-y                                   += cpuidle_notifier.o
 obj-${CONFIG_MEMORY_FOOTPRINT_DEBUGGING}+= mfootprint.o
+obj-${CONFIG_MEMORY_FOOTPRINT_DEBUGGING}+= mfootprint-entry.o
 
 # sophia: add mdm driver
 ifdef CONFIG_QCT_9K_MODEM
 obj-y += mdm2.o mdm_common.o
 obj-y += baseband-qct-mdm-hsic.o
+obj-$(CONFIG_MSM_SYSMON_COMM) += sysmon.o
+obj-$(CONFIG_MSM_HSIC_SYSMON) += hsic_sysmon.o
+obj-$(CONFIG_MSM_HSIC_SYSMON_TEST) += hsic_sysmon_test.o
 endif
 # Mars_Lin@20120521: add subsystem restart function
 ifdef CONFIG_MSM_SUBSYSTEM_RESTART
@@ -328,4 +333,6 @@ obj-y += htc_port_list_lte.o
 
 obj-y 					+= htc_util.o
 
-obj-y += htc_monitor.o
+obj-$(CONFIG_HTC_MONITOR) += htc_monitor.o
+
+obj-$(CONFIG_HTC_FIQ_DUMPER) += fiq_dumper.o

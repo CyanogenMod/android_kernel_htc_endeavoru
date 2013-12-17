@@ -2485,9 +2485,13 @@ static int finish_port_resume(struct usb_device *udev)
 	int	status = 0;
 	u16	devstatus;
 	struct usb_hcd  *hcd = bus_to_hcd(udev->bus);
+	#ifdef CONFIG_QCT_9K_MODEM
+	extern struct usb_hcd *mdm_hsic_usb_hcd;
+	#endif //CONFIG_QCT_9K_MODEM
 
 	//htc++
-	if (machine_is_evitareul())
+	#ifdef CONFIG_QCT_9K_MODEM
+	if (machine_is_evitareul() && hcd == mdm_hsic_usb_hcd)
 	{
 		extern int get_ap2mdm_sw_bc5_status(void);
 		extern void ehci_qct_mdm_resume_suspend_recover(void);
@@ -2505,6 +2509,7 @@ static int finish_port_resume(struct usb_device *udev)
 			ehci_qct_mdm_resume_suspend_recover();
 		}
 	}
+	#endif //CONFIG_QCT_9K_MODEM
 	//htc--
 
 	/* caller owns the udev device lock */
@@ -4025,7 +4030,8 @@ static int usb_reset_and_verify_device(struct usb_device *udev)
 
 	set_bit(port1, parent_hub->busy_bits);
 	for (i = 0; i < SET_CONFIG_TRIES; ++i) {
-
+		if (udev->state == USB_STATE_NOTATTACHED)
+			break;
 		/* ep0 maxpacket size may change; let the HCD know about it.
 		 * Other endpoints will be handled by re-enumeration. */
 		usb_ep0_reinit(udev);

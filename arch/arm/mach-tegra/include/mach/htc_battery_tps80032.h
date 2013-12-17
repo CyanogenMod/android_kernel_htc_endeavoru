@@ -70,6 +70,8 @@
 #define BATTERY_LEVEL_MASK		(0x7F)
 #define BATTERY_LEVEL_NO_VALUE		(0xFF)
 
+#define ADC2TEMP_MAP_NUM (15)
+
 struct battery_adc_reply {
 	u32 adc_voltage[ADC_REPLY_ARRAY_SIZE];
 	u32 adc_current[ADC_REPLY_ARRAY_SIZE];
@@ -82,6 +84,11 @@ struct battery_vol_alarm {
 	int lower_threshold;
 	int upper_threshold;
 	int enable;
+};
+
+struct batt_adc2temp {
+	unsigned int adc;
+	int temperature;
 };
 
 /* information about the system we're running on */
@@ -123,6 +130,7 @@ struct htc_battery_platform_data {
 	int volt_adc_offset;
 	int power_off_by_id;
 	int sw_temp_25;
+	struct batt_adc2temp adc2temp_map[ADC2TEMP_MAP_NUM];
 };
 
 #endif

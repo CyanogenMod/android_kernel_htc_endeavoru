@@ -265,6 +265,7 @@ restart:
 
 	account_system_vtime(current);
 	__local_bh_enable(SOFTIRQ_OFFSET);
+	mf_irq_leave(NULL);
 }
 
 #ifndef __ARCH_HAS_DO_SOFTIRQ

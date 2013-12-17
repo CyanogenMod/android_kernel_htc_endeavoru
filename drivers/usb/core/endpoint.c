@@ -193,6 +193,8 @@ int usb_create_ep_devs(struct device *parent,
 	ep_dev->dev.release = ep_device_release;
 	dev_set_name(&ep_dev->dev, "ep_%02x", endpoint->desc.bEndpointAddress);
 
+	pr_info("   ep:0x%02x attr:0x%02x", endpoint->desc.bEndpointAddress, endpoint->desc.bmAttributes);
+
 	retval = device_register(&ep_dev->dev);
 	if (retval)
 		goto error_register;

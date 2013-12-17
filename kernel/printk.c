@@ -380,12 +380,16 @@ static int check_syslog_permissions(int type, bool from_file)
 	return 0;
 }
 
+#define KERNEL_BUF_MAX (256)
+
 int do_syslog(int type, char __user *buf, int len, bool from_file)
 {
 	unsigned i, j, limit, count;
 	int do_clear = 0;
 	char c;
 	int error;
+	char kbuf[KERNEL_BUF_MAX];
+	int k = -1;
 
 	error = check_syslog_permissions(type, from_file);
 	if (error)
@@ -467,12 +471,25 @@ int do_syslog(int type, char __user *buf, int len, bool from_file)
 			if (j + log_buf_len < log_end)
 				break;
 			c = LOG_BUF(j);
-			spin_unlock_irq(&logbuf_lock);
-			error = __put_user(c,&buf[count-1-i]);
-			cond_resched();
-			spin_lock_irq(&logbuf_lock);
+			/*
+			 * use the kernel buffer to avoid toggling the
+			 * spin-lock and irq for each byte
+			 */
+			k = i % sizeof(kbuf);
+			if (k == 0 && i > 0) {
+				spin_unlock_irq(&logbuf_lock);
+				if (copy_to_user(&buf[count-i], &kbuf[0], sizeof(kbuf)))
+					error = -EFAULT;
+				cond_resched();
+				spin_lock_irq(&logbuf_lock);
+			}
+			kbuf[sizeof(kbuf)-1-k] = c;
 		}
 		spin_unlock_irq(&logbuf_lock);
+		/* flush the kernel buffer */
+		if (copy_to_user(&buf[count-i], &kbuf[sizeof(kbuf)-1-k], k+1))
+			error = -EFAULT;
+		cond_resched();
 		if (error)
 			break;
 		error = i;

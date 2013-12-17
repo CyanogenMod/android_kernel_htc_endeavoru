@@ -104,6 +104,7 @@ static int endeavortd_s5k3h2y_power_on(void)
 	gpio_direction_output(CAM1_PWDN, 0);
 	gpio_direction_output(CAM1_VCM_PD, 0);
 #if RAWCHIP
+	rawchip_spi_clock_control(1);
 	gpio_direction_output(RAW_RSTN, 0);
 #endif
 	//ENR_msleep(1); //TODO
@@ -336,6 +337,7 @@ static int endeavortd_s5k3h2y_power_off(void)
 	/*RAW_1V8_EN */
 	gpio_direction_output(RAW_1V8_EN, 0);
 	ENR_msleep(1);
+	rawchip_spi_clock_control(0);
 #endif
 
 	/* analog */
@@ -370,6 +372,7 @@ struct s5k3h2yx_platform_data endeavortd_s5k3h2y_data =
 	.rawchip_need_powercycle = 1,
 	.mirror_flip = 0,
 	.use_rawchip = RAWCHIP_ENABLE,
+	.hardware = 0,
 };
 
 struct ad5823_platform_data endeavortd_ad5823_data =

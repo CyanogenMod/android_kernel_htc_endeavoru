@@ -31,6 +31,7 @@
 #define ATAG_CAM_AWB         0x59504550
 #define ATAG_GRYO_GSENSOR    0x54410020
 #define ATAG_PCBID           0x4d534D76
+#define ATAG_BOOT_DEBUG_LOG  0x54410021
 
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
@@ -40,6 +41,9 @@
 #include <linux/reboot.h>
 #include <linux/cpu.h>
 #include <linux/sched.h>
+#include <linux/seq_file.h>
+#include <linux/memblock.h>
+#include <linux/last_boot.h>
 
 #include <mach/dma.h>
 #include <mach/board_htc.h>
@@ -69,6 +73,36 @@ static unsigned char mfg_gpio_table[MFG_GPIO_TABLE_MAX_SIZE];
 #define EMMC_FREQ_533 533
 #define EMMC_FREQ_400 400
 
+static unsigned long boot_powerkey_debounce_ms;
+int __init boot_powerkey_debounce_time_init(char *s)
+{
+        int ret;
+        ret = strict_strtoul(s, 16, &boot_powerkey_debounce_ms);
+        if (ret != 0)
+                pr_err("%s: boot_powerkey_debounce_ms cannot be parsed from `%s'\r\n", __func__, s);
+        return 1;
+}
+__setup("bpht=", boot_powerkey_debounce_time_init);
+
+int sys_boot_powerkey_debounce_ms(char *page, char **start, off_t off,
+                           int count, int *eof, void *data)
+{
+        char *p = page;
+
+        p += sprintf(p, "%d\n", boot_powerkey_debounce_ms);
+        return p - page;
+}
+
+static int __init boot_powerkey_debounce_setting(void)
+{
+	struct proc_dir_entry* bpht_proc;
+        bpht_proc = create_proc_read_entry("powerkey_debounce_ms", 0, NULL, sys_boot_powerkey_debounce_ms, NULL);
+	if (!bpht_proc) {
+		printk(KERN_ERR "Unable to create /proc/powerkey_debounce_ms entry\n");
+        }
+}
+late_initcall(boot_powerkey_debounce_setting);
+
 /* setup calls mach->fixup, then parse_tags, parse_cmdline
  * We need to setup meminfo in mach->fixup, so this function
  * will need to traverse each tag to find smi tag.
@@ -93,75 +127,6 @@ int __init parse_tag_smi(const struct tag *tags)
 	return smi_sz;
 }
 __tagtable(ATAG_SMI, parse_tag_smi);
-
-/* +FIXME: workaround for imc radio secbin code not ready */
-static char IMEI[16];
-#define ATAG_IMEI  0x54410120
-int __init parse_tag_IMEI(const struct tag *tags)
-{
-	int find = 0;
-	struct tag *t = (struct tag *)tags;
-
-	for (; t->hdr.size; t = tag_next(t)) {
-		if (t->hdr.tag == ATAG_IMEI) {
-			printk(KERN_DEBUG "[IMEI] find the IMEI tag\n");
-			find = 1;
-			break;
-		}
-	}
-	if (!find) {
-		printk(KERN_ERR "[IMEI] parse_tag_IMEI(): error: IMEI ATAG not found\n", IMEI);
-		return -1;
-	}
-	else {
-		unsigned char *dptr = (unsigned char *)(&t->u);
-		memcpy(IMEI, dptr, 16);
-	}
-	printk(KERN_DEBUG "[IMEI] parse_tag_IMEI(): IMEI = %s\n", IMEI);
-	return 0;
-}
-__tagtable(ATAG_IMEI, parse_tag_IMEI);
-
-static ssize_t IMEI_read(struct file *file, char __user *buf, size_t len, loff_t *offset)
-{
-	loff_t pos = *offset;
-	ssize_t count;
-
-	int slen = strlen(IMEI);
-	if (pos >= slen)
-		return 0;
-
-	count = min(len, (size_t)(slen - pos));
-	if (copy_to_user(buf, IMEI + pos, count)) {
-		printk(KERN_ERR "[IMEI] IMEI_read(): error: copy_to_user() failed\n");
-		return -EFAULT;
-	}
-
-	*offset += count;
-	return count;
-}
-
-static const struct file_operations IMEI_file_ops = {
-	.owner = "system",
-	.read = IMEI_read,
-};
-
-static int __init IMEI_setting(void)
-{
-	struct proc_dir_entry *entry;
-	entry = create_proc_entry("IMEI", S_IFREG | S_IRUGO, NULL);
-	if (!entry) {
-		printk(KERN_ERR "[IMEI] IMEI_setting(): error: failed to create proc entry\n");
-		return 0;
-	}
-
-	entry->proc_fops = &IMEI_file_ops;
-	entry->size = 1;
-	return 0;
-}
-late_initcall(IMEI_setting);
-/* -FIXME: workaround for imc radio secbin code not ready */
-
 
 int __init parse_tag_hwid(const struct tag *tags)
 {
@@ -454,14 +419,13 @@ __setup("androidboot.mode=", board_mfg_mode_init);
 static int zchg_mode = 0;
 int __init board_zchg_mode_init(char *s)
 {
-	if (!strcmp(s, "1"))
-		zchg_mode = 1;
-	else if (!strcmp(s, "2"))
-		zchg_mode = 2;
-	else if (!strcmp(s, "3"))
-		zchg_mode = 3;
+	int ret = 0;
+	unsigned long value;
+	ret = strict_strtoul(s, 10, &value);
+	if (!ret)
+		zchg_mode = (int) value;
 
-	return 1;
+	return ret;
 }
 
 int board_zchg_mode(void)
@@ -589,14 +553,15 @@ int __init parse_tag_skuid(const struct tag *tags)
 
 	if (find) {
 		unsigned char *dptr = (unsigned char *)(&t->u);
-		memcpy(SKUID, dptr, 16);
-
 		unsigned int sku_id_int = 0;
 		char *ptr = SKUID + sizeof(SKUID) - 1;
 		int rate = 1;
 		int index= 0;
+
+		memcpy(SKUID, dptr, 16);
+
 		for (index = 0;index < sizeof(SKUID);index++) {
-			if (NULL == *ptr) {
+			if (0 == *ptr) {
 				ptr--;
 				continue;
 			}
@@ -636,7 +601,7 @@ static ssize_t SKUID_read(struct file *file, char __user *buf,
 }
 
 static const struct file_operations SKUID_file_ops = {
-	.owner = "system",
+	.owner = THIS_MODULE,
 	.read = SKUID_read,
 };
 
@@ -806,6 +771,89 @@ int __init parse_tag_memsize(const struct tag *tags)
 	return mem_size;
 }
 __tagtable(ATAG_MEMSIZE, parse_tag_memsize);
+
+/* using the same structure as in bootloader */
+struct boot_debug_log_header {
+	u32 magic;
+	u32 offset;
+	u32 size;
+	/* the log buf content is appended after header */
+};
+
+static char*  boot_debug_log_buf = NULL;
+static size_t boot_debug_log_len = 0;
+
+static void show_boot_debug_log(struct seq_file *s)
+{
+	seq_write(s, boot_debug_log_buf, boot_debug_log_len);
+}
+
+static int __init boot_debug_log_init(void)
+{
+	const u32    BOOT_DEBUG_MAGIC      = 0xAABBCCDD;
+	const size_t BOOT_DEBUG_LEN_MAX    = 0x100000;
+	const size_t BOOT_DEBUG_OUTPUT_MAX = 0x2000;
+
+	int ret = 0, i;
+	struct boot_debug_log_header* header;
+
+	phys_addr_t paddr = (phys_addr_t) boot_debug_log_buf;
+	size_t      bufmax = boot_debug_log_len - sizeof(*header);
+
+	if (!paddr) /* no ATAG_BOOT_DEBUG_LOG was found in atags */
+		return 0;
+
+	header = ioremap(paddr, min(boot_debug_log_len, BOOT_DEBUG_LEN_MAX));
+	if (!header) {
+		pr_err("%s: Failed to map %p\n", __func__, (void*) paddr);
+		return -EFAULT;
+	}
+
+	if (header->magic != BOOT_DEBUG_MAGIC) {
+		pr_err("%s: Invalid magic %08x\n", __func__, header->magic);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/*
+	 * re-using boot_debug_log_buf and boot_debug_log_len;
+	 * from now on, it points to the kernel buffer
+	 */
+	boot_debug_log_len = BOOT_DEBUG_OUTPUT_MAX;
+	boot_debug_log_buf = kmalloc(boot_debug_log_len, GFP_KERNEL);
+
+	if (!boot_debug_log_buf) {
+		pr_err("%s: fail to alloc size %u\n", __func__, boot_debug_log_len);
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < boot_debug_log_len; i++) {
+		char* c = ((char*) header) + sizeof(*header);
+		char* logend = ((char*) header) + ((u32) header->offset - (u32) paddr) - 1;
+		size_t off = bufmax + (size_t) logend - (size_t) c;
+
+		boot_debug_log_buf[boot_debug_log_len - 1 - i] = c[(off - i) % bufmax];
+	}
+
+	add_last_boot_info("Bootloader Log", show_boot_debug_log);
+
+out:
+	iounmap(header);
+	return ret;
+}
+late_initcall(boot_debug_log_init);
+
+static int __init parse_boot_debug_log_tag(const struct tag *tag)
+{
+	unsigned int* ptr = (unsigned int*) &tag->u;
+	boot_debug_log_buf = (char*) ptr[0];
+	boot_debug_log_len = (size_t) ptr[1];
+	pr_debug("%s: found boot debug log at %p, size %d\n", __func__,
+			(void*) boot_debug_log_buf, boot_debug_log_len);
+	return 0;
+}
+__tagtable(ATAG_BOOT_DEBUG_LOG, parse_boot_debug_log_tag);
 
 static unsigned long radio_flag = 0;
 int __init radio_flag_init(char *s)
@@ -1003,25 +1051,18 @@ static int reboot_callback(struct notifier_block *nb,
 	/*
 	 * NOTE: data is NULL when reboot w/o command or shutdown
 	 */
-	struct task_struct* t;
 	char* cmd;
 
 	cmd = (char*) (data ? data : "");
-	pr_info("kernel_restart(cmd=%s) - triggered with task: %s (%d:%d)\n",
-			data ? data : "<null>",
-			current->comm, current->tgid, current->pid);
-	pr_info("parents of %s:\n", current->comm);
-	t = current->parent;
-	do {
-		pr_info("    %s (%d:%d)\n", t->comm, t->tgid, t->pid);
-		t = t->parent;
-	} while (t->parent != t);
-	dump_stack();
+	pr_debug("restart command: %s\n", data ? cmd : "<null>");
 
 	switch (event)
 	{
 	case SYS_RESTART:
 		set_restart_command(cmd);
+		pr_info("reboot - triggered with task: %s (%d:%d)\n",
+				current->comm, current->tgid, current->pid);
+		dump_stack();
 		break;
 	case SYS_HALT:
 	case SYS_POWER_OFF:

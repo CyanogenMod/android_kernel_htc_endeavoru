@@ -425,8 +425,34 @@ int tegra_dvfs_set_rate(struct clk *c, unsigned long rate)
 	if (!c->dvfs)
 		return -EINVAL;
 
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (hsic_par_emc_clk == c && hsic_phy_tsk && hsic_phy_tsk == current) {
+		HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	mutex_lock(&dvfs_lock);
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (hsic_par_emc_clk == c && hsic_phy_tsk && hsic_phy_tsk == current) {
+		HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (htc_hsic_phy_power_debug_flag) {
+		trace_printk("%s dvfs_lock ++\n", c->name);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	ret = __tegra_dvfs_set_rate(c->dvfs, rate);
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (htc_hsic_phy_power_debug_flag) {
+		trace_printk("%s dvfs_lock --\n", c->name);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	mutex_unlock(&dvfs_lock);
 
 	return ret;

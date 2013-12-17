@@ -570,6 +570,7 @@ enum {
 	CONF_EWS_RECV,
 	CONF_LOC_CONF_PEND,
 	CONF_REM_CONF_PEND,
+	CONF_CHAN_DESTROYED,
 };
 
 #define L2CAP_CONF_MAX_CONF_REQ 2
@@ -596,6 +597,17 @@ enum {
 	FLAG_EXT_CTRL,
 	FLAG_EFS_ENABLE,
 };
+
+static inline void chan_hold(struct l2cap_chan *c)
+{
+	atomic_inc(&c->refcnt);
+}
+
+static inline void chan_put(struct l2cap_chan *c)
+{
+	if (atomic_dec_and_test(&c->refcnt))
+		kfree(c);
+}
 
 #define __set_chan_timer(c, t) l2cap_set_timer(c, &c->chan_timer, (t))
 #define __clear_chan_timer(c) l2cap_clear_timer(c, &c->chan_timer)

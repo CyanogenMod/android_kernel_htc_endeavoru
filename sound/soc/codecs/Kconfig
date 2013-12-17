@@ -425,3 +425,7 @@ config SND_SOC_WM2000
 
 config SND_SOC_WM9090
 	tristate
+
+config AUDIO_LISTEN_NOTIFICATION
+	bool "for ap33/ap37 identification"
+	default y

@@ -64,6 +64,7 @@ struct s5k3h2yx_platform_data {
 	int rawchip_need_powercycle;
 	int mirror_flip;
 	int use_rawchip;
+	int hardware; 		/* 0: ap33, 1: ap37 */
 };
 #endif /* __KERNEL__ */
 

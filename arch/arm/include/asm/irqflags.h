@@ -4,6 +4,7 @@
 #ifdef __KERNEL__
 
 #include <asm/ptrace.h>
+#include <mach/mfootprint.h>
 
 /*
  * CPU interrupt mask handling.
@@ -18,11 +19,15 @@ static inline unsigned long arch_local_irq_save(void)
 		"	mrs	%0, cpsr	@ arch_local_irq_save\n"
 		"	cpsid	i"
 		: "=r" (flags) : : "memory", "cc");
+
+	if (! (flags & PSR_I_BIT))
+		mf_irq_enter(__builtin_return_address(0));
 	return flags;
 }
 
 static inline void arch_local_irq_enable(void)
 {
+	mf_irq_leave(__builtin_return_address(0));
 	asm volatile(
 		"	cpsie i			@ arch_local_irq_enable"
 		:
@@ -37,6 +42,7 @@ static inline void arch_local_irq_disable(void)
 		:
 		:
 		: "memory", "cc");
+	mf_irq_enter(__builtin_return_address(0));
 }
 
 #define local_fiq_enable()  __asm__("cpsie f	@ __stf" : : : "memory", "cc")
@@ -139,6 +145,8 @@ static inline unsigned long arch_local_save_flags(void)
  */
 static inline void arch_local_irq_restore(unsigned long flags)
 {
+	if (! (flags & PSR_I_BIT))
+		mf_irq_leave(__builtin_return_address(0));
 	asm volatile(
 		"	msr	cpsr_c, %0	@ local_irq_restore"
 		:

@@ -140,6 +140,15 @@
 #define TRACE_PRINTKS()
 #endif
 
+#ifdef CONFIG_MEMORY_FOOTPRINT_DEBUGGING
+#define MFOOT_ENTRY() . = ALIGN(8);					\
+			 VMLINUX_SYMBOL(__start__mfoot_entries) = .; \
+			 *(__mfoot_entries) \
+			 VMLINUX_SYMBOL(__stop__mfoot_entries) = .;
+#else
+#define MFOOT_ENTRY()
+#endif
+
 #ifdef CONFIG_FTRACE_SYSCALLS
 #define TRACE_SYSCALLS() . = ALIGN(8);					\
 			 VMLINUX_SYMBOL(__start_syscalls_metadata) = .;	\
@@ -180,7 +189,8 @@
 	VMLINUX_SYMBOL(__stop___verbose) = .;				\
 	LIKELY_PROFILE()		       				\
 	BRANCH_PROFILE()						\
-	TRACE_PRINTKS()
+	TRACE_PRINTKS()						\
+	MFOOT_ENTRY()
 
 /*
  * Data section helpers

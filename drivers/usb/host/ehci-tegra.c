@@ -68,6 +68,15 @@ int debug_gpio_dump();
 int trigger_radio_fatal_get_coredump(char *reason);
 int Modem_is_IMC();
 
+//htc++
+#ifdef CONFIG_QCT_9K_MODEM
+extern bool Modem_is_QCT_MDM9K(void);
+struct usb_hcd *mdm_hsic_usb_hcd = NULL;
+struct ehci_hcd *mdm_hsic_ehci_hcd = NULL;
+struct tegra_usb_phy *mdm_hsic_phy = NULL;
+#endif //CONFIG_QCT_9K_MODEM
+//htc--
+
 //++SSD_RIL
 bool device_ehci_shutdown;
 //--SSD_RIL
@@ -262,7 +271,7 @@ static int tegra_ehci_hub_control(
 	}
 
 	if(ehci_id == MODEM_EHCI_ID){
-	printk(KERN_INFO"%s: typereq:0x%x wValue:0x%x wIndex:0x%x USBMODE:0x%x USBCMD:0x%x PORTSC:0x%x USBSTS:0x%x HOSTPC1:0x%x\n",
+	printk(KERN_INFO"%s: req:0x%x wV:0x%x wI:0x%x MODE:0x%x CMD:0x%x PORTSC:0x%x STS:0x%x HOSTPC1:0x%x\n",
         __func__, typeReq, wValue, wIndex,
 		readl(hcd->regs + 0x1f8),
 		readl(&ehci->regs->command),
@@ -270,7 +279,7 @@ static int tegra_ehci_hub_control(
 		readl(&ehci->regs->status),
 		readl(hcd->regs + 0x1b4));
 
-	printk(KERN_INFO"%s: USBINTR:0x%x UHSIC_STAT_CFG0:0x%x ASDBGREG:0x%x OBSCTRL:0x%x OBSDATA:0x%x port_resuming:%d\n",
+	printk(KERN_INFO"%s: INTR:0x%x STAT_CFG0:0x%x ASDBGREG:0x%x OBSCTRL:0x%x OBSDATA:0x%x port_resuming:%d\n",
 		__func__,
 		readl(hcd->regs + 0x138),
 		readl(hcd->regs + 0xc28),
@@ -490,6 +499,7 @@ static int tegra_ehci_probe(struct platform_device *pdev)
 	pr_info("%s: ehci.id = %d\n", __func__, pdev->id);
 
 	device_ehci_shutdown = false;
+
 	tegra = devm_kzalloc(&pdev->dev, sizeof(struct tegra_ehci_hcd),
 		GFP_KERNEL);
 	if (!tegra) {
@@ -587,20 +597,21 @@ static int tegra_ehci_probe(struct platform_device *pdev)
 	tegra->ehci = hcd_to_ehci(hcd);
 
 	//htc++
-	if (machine_is_evitareul())
+	#ifdef CONFIG_QCT_9K_MODEM
+	if (Modem_is_QCT_MDM9K())
 	{
 		extern struct platform_device tegra_ehci2_device;
-		extern struct usb_hcd *mdm_hsic_usb_hcd;
-		extern struct ehci_hcd *mdm_hsic_ehci_hcd;
 
 		if (&tegra_ehci2_device == pdev)
 		{
 			mdm_hsic_ehci_hcd = tegra->ehci;
 			mdm_hsic_usb_hcd = hcd;
-			pr_info("%s:: mdm_hsic_ehci_hcd = %x, mdm_hsic_usb_hcd = %x\n",
-				__func__, (unsigned int)mdm_hsic_ehci_hcd, (unsigned int)mdm_hsic_usb_hcd);
+			mdm_hsic_phy = tegra->phy;
+			pr_info("%s:: mdm_hsic_ehci_hcd = %x, mdm_hsic_usb_hcd = %x, mdm_hsic_phy = %x\n",
+				__func__, (unsigned int)mdm_hsic_ehci_hcd, (unsigned int)mdm_hsic_usb_hcd, (unsigned int)mdm_hsic_phy);
 		}
 	}
+	#endif //CONFIG_QCT_9K_MODEM
 	//htc--
 
 #ifdef CONFIG_USB_OTG_UTILS
@@ -686,6 +697,24 @@ static int tegra_ehci_remove(struct platform_device *pdev)
 	iounmap(hcd->regs);
 	platform_set_drvdata(pdev, NULL);
 
+	//htc++
+	#ifdef CONFIG_QCT_9K_MODEM
+	if (Modem_is_QCT_MDM9K())
+	{
+		extern struct platform_device tegra_ehci2_device;
+
+		if (&tegra_ehci2_device == pdev)
+		{
+			mdm_hsic_ehci_hcd = NULL;
+			mdm_hsic_usb_hcd = NULL;
+			mdm_hsic_phy = NULL;
+			pr_info("%s:: mdm_hsic_ehci_hcd = %x, mdm_hsic_usb_hcd = %x, mdm_hsic_phy = %x\n",
+				__func__, (unsigned int)mdm_hsic_ehci_hcd, (unsigned int)mdm_hsic_usb_hcd, (unsigned int)mdm_hsic_phy);
+		}
+	}
+	#endif	//CONFIG_QCT_9K_MODEM
+	//htc--
+
 	dev_info(&pdev->dev, "%s-\n", __func__);		//htc_dbg
 
 	return 0;
@@ -754,5 +783,6 @@ static struct platform_driver tegra_ehci_driver = {
 		.name	= driver_name,
 	}
 };
+
 
 EXPORT_SYMBOL_GPL(device_ehci_shutdown);

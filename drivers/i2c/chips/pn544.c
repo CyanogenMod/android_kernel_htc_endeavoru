@@ -16,8 +16,10 @@
 #include <linux/miscdevice.h>
 #include <linux/wakelock.h>
 #include <linux/pn544.h>
+#include <mach/board_htc.h>
 
 int is_debug = 0;
+int is_alive = 1;
 
 #define DBUF(buff,count) \
 	if (is_debug) \
@@ -51,6 +53,9 @@ struct pn544_dev	{
 	unsigned int 		firm_gpio;
 	void (*gpio_init) (void);
 	unsigned int 		ven_enable;
+	int boot_mode;
+	void (*gpio_deinit) (void);
+	int (*check_nfc_exist)(void);
 };
 
 struct pn544_dev *pn_info;
@@ -556,6 +561,16 @@ static ssize_t debug_enable_store(struct device *dev,
 
 static DEVICE_ATTR(debug_enable, 0664, debug_enable_show, debug_enable_store);
 
+static ssize_t nxp_chip_alive_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int ret = 0;
+	I("%s is %d\n", __func__, is_alive);
+	ret = sprintf(buf, "%d\n", is_alive);
+	return ret;
+}
+static DEVICE_ATTR(nxp_chip_alive, 0664, nxp_chip_alive_show, NULL);
+
 static int pn544_probe(struct i2c_client *client,
 		const struct i2c_device_id *id)
 {
@@ -616,8 +631,26 @@ static int pn544_probe(struct i2c_client *client,
 	pn_info = pni;
 
 	if (platform_data->gpio_init != NULL) {
-		D("%s: gpio_init\n", __func__);
-		platform_data->gpio_init();
+		I("%s: gpio_init\n", __func__);
+		pni->gpio_init = platform_data->gpio_init;
+		pni->gpio_init();
+	}
+
+	if (platform_data->gpio_deinit != NULL) {
+		I("%s: gpio_deinit\n", __func__);
+		pni->gpio_deinit = platform_data->gpio_deinit;
+	}
+
+	if (platform_data->check_nfc_exist != NULL) {
+		I("%s: check_nfc_exist\n", __func__);
+		pni->check_nfc_exist = platform_data->check_nfc_exist;
+		if (!pni->check_nfc_exist()) {
+			is_alive = 0;
+			if (pni->gpio_deinit != NULL) {
+				I("%s: gpio_deinit\n", __func__);
+				pni->gpio_deinit();
+			}
+		}
 	}
 
 	pni->irq_gpio = platform_data->irq_gpio;
@@ -626,6 +659,7 @@ static int pn544_probe(struct i2c_client *client,
 	pni->client   = client;
 	pni->gpio_init = platform_data->gpio_init;
 	pni->ven_enable = !platform_data->ven_isinvert;
+	pni->boot_mode = board_mfg_mode();
 
 	/*pn544_PowerOnSeq();*/
 
@@ -695,6 +729,27 @@ static int pn544_probe(struct i2c_client *client,
 		goto err_create_pn_file;
 	}
 
+	if (is_alive) {
+		/*Disable NFC if it is not off-mode charging*/
+		if (pni->boot_mode != 5) {
+			I("%s: disable NFC by default (bootmode = %d)\n", __func__, pni->boot_mode);
+			pn544_Disable();
+		} else {
+			I("%s: enable NFC becasue off-mode charging (bootmode = %d)\n", __func__, pni->boot_mode);
+			pn544_Enable();
+		}
+	}
+
+	if (is_alive == 0) {
+		I("%s: Without NFC, device_create_file dev_attr_nxp_chip_alive \n", __func__);
+		ret = device_create_file(pni->pn_dev, &dev_attr_nxp_chip_alive);
+		if (ret) {
+			E("pn544_probe device_create_file dev_attr_nxp_chip_alive failed\n");
+		}
+	}
+
+
+	I("%s: Probe success! is_alive : %d\n", __func__, is_alive);
 	return 0;
 
 err_create_pn_file:
@@ -743,7 +798,7 @@ static int pn544_suspend(struct i2c_client *client, pm_message_t state)
 {
 	struct pn544_dev *pni = pn_info;
 
-	if (pni->ven_value) {
+	if (pni->ven_value && is_alive) {
 		pni->irq_enabled = true;
 		enable_irq(pni->client->irq);
 		irq_set_irq_wake(pni->client->irq, 1);
@@ -755,7 +810,7 @@ static int pn544_resume(struct i2c_client *client)
 {
 	struct pn544_dev *pni = pn_info;
 
-	if (pni->ven_value) {
+	if (pni->ven_value && is_alive) {
 		pn544_disable_irq(pni);
 		irq_set_irq_wake(pni->client->irq, 0);
 	}

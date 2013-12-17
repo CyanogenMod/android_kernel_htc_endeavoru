@@ -95,6 +95,7 @@ static const u8 tegra_udc_test_packet[53] = {
 /* htc:remove static for cable_detect driver use */
 struct tegra_udc *the_udc;
 extern int USB_disabled;
+static int vbus_active_USB_disabled = 0;
 
 /* ++ htc ++ */
 static int reset_queues_mute(struct tegra_udc *udc);
@@ -683,10 +684,10 @@ static int tegra_ep_disable(struct usb_ep *_ep)
 		next_td = ep->last_td;
 		for (j = 0; j < ep->last_dtd_count; j++) {
 			curr_td = next_td;
-			dma_pool_free(udc->td_pool, curr_td, curr_td->td_dma);
-			if (j != ep->last_dtd_count - 1) {
+			if (j != ep->last_dtd_count) {
 				next_td = curr_td->next_td_virt;
 			}
+			dma_pool_free(udc->td_pool, curr_td, curr_td->td_dma);
 		}
 	}
 	ep->last_td = 0;
@@ -909,6 +910,9 @@ tegra_ep_queue(struct usb_ep *_ep, struct usb_request *_req, gfp_t gfp_flags)
 	unsigned long flags;
 	enum dma_data_direction dir;
 	int status;
+
+	if (udc->usb_state == USB_STATE_SUSPENDED)
+		return -ESHUTDOWN;
 
 	/* catch various bogus parameters */
 	if (!_req || !req->req.complete || !req->req.buf
@@ -1308,8 +1312,10 @@ static int tegra_vbus_session(struct usb_gadget *gadget, int is_active)
 		udc->connect_type = CONNECT_TYPE_NONE;
 		cancel_delayed_work_sync(&udc->ac_detect_work);
 		queue_work(udc->usb_wq, &udc->notifier_work);
+		vbus_active_USB_disabled = 0;
 		/* -- htc --*/
-	} else if (!udc->vbus_active && is_active) {
+	} else if ((!udc->vbus_active && is_active) ||
+			(udc->vbus_active && is_active && vbus_active_USB_disabled)) {
 		if (!USB_disabled) {
 			tegra_usb_phy_power_on(udc->phy);
 			/* setup the controller in the device mode */
@@ -1323,8 +1329,10 @@ static int tegra_vbus_session(struct usb_gadget *gadget, int is_active)
 			udc->vbus_active = 1;
 			/* start the controller */
 			dr_controller_run(udc);
+			vbus_active_USB_disabled = 0;
 		} else {
 			USB_INFO("%s (%d) USB_disable", __func__, is_active);
+			vbus_active_USB_disabled = 1;
 			tegra_usb_phy_power_on(udc->phy);
 			udc->vbus_active = 1;
 			udc->usb_state = USB_STATE_DEFAULT;
@@ -1383,13 +1391,26 @@ static int tegra_pullup(struct usb_gadget *gadget, int is_on)
 			OTG_STATE_B_PERIPHERAL)
 			return 0;
 
-	tmp = udc_readl(udc, USB_CMD_REG_OFFSET);
-	if (can_pullup(udc))
+	if (can_pullup(udc)) {
+		/* Enable DR irq reg */
+		tmp = USB_INTR_INT_EN | USB_INTR_ERR_INT_EN
+			| USB_INTR_PTC_DETECT_EN | USB_INTR_RESET_EN
+			| USB_INTR_DEVICE_SUSPEND | USB_INTR_SYS_ERR_EN;
+		udc_writel(udc, tmp, USB_INTR_REG_OFFSET);
+
+		/* set controller to Run  */
+		tmp = udc_readl(udc, USB_CMD_REG_OFFSET);
 		udc_writel(udc, tmp | USB_CMD_RUN_STOP,
 				USB_CMD_REG_OFFSET);
-	else
+	} else {
+		/* set controller to Stop */
+		tmp = udc_readl(udc, USB_CMD_REG_OFFSET);
 		udc_writel(udc, (tmp & ~USB_CMD_RUN_STOP),
 				USB_CMD_REG_OFFSET);
+
+		/* disable all INTR  */
+		udc_writel(udc, 0, USB_INTR_REG_OFFSET);
+	}
 
 	return 0;
 }
@@ -2258,6 +2279,15 @@ static irqreturn_t tegra_udc_irq(int irq, void *_udc)
 	irqreturn_t status = IRQ_NONE;
 	unsigned long flags;
 
+	/* somehow we got an IRQ while in the reset sequence: ignore it */
+	if (!udc->softconnect) {
+		USB_INFO("Warning: USB controller issue interrupt during disconnect\n");
+		irq_src = udc_readl(udc, USB_STS_REG_OFFSET) & udc_readl(udc, USB_INTR_REG_OFFSET);
+		/* Clear notification bits */
+		udc_writel(udc, irq_src, USB_STS_REG_OFFSET);
+		return IRQ_HANDLED;
+	}
+
 	spin_lock_irqsave(&udc->lock, flags);
 
 	if (!udc->transceiver) {
@@ -2894,6 +2924,23 @@ static int tegra_udc_resume(struct platform_device *pdev)
 	return 0;
 }
 
+static void tegra_udc_shutdown(struct platform_device *pdev)
+{
+	struct tegra_udc *udc = platform_get_drvdata(pdev);
+	u32 tmp;
+	if (udc == NULL || udc->transceiver == NULL) {
+		return;
+	}
+	dev_info(&pdev->dev, "%s\n", __func__);
+
+	if (can_pullup(udc)) {
+		dev_info(&pdev->dev, "%s: pull down D+\n", __func__);
+		tmp = udc_readl(udc, USB_CMD_REG_OFFSET);
+		udc_writel(udc, (tmp & ~USB_CMD_RUN_STOP),
+				USB_CMD_REG_OFFSET);
+	}
+}
+
 void tegra_udc_set_phy_clk(bool pull_up)
 {
 	struct tegra_udc *udc = the_udc;
@@ -2905,6 +2952,7 @@ static struct platform_driver tegra_udc_driver = {
 	.remove  = __exit_p(tegra_udc_remove),
 	.suspend = tegra_udc_suspend,
 	.resume  = tegra_udc_resume,
+	.shutdown = tegra_udc_shutdown,
 	.driver  = {
 		.name = (char *)driver_name,
 		.owner = THIS_MODULE,

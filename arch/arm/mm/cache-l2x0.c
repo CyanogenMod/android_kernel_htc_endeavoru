@@ -25,6 +25,20 @@
 
 #define CACHE_LINE_SIZE		32
 
+#if defined(CONFIG_MEMORY_FOOTPRINT_DEBUGGING)
+#include <mach/mfootprint.h>
+#ifdef spin_lock_irqsave
+#undef spin_lock_irqsave
+#endif
+#ifdef spin_unlock_irqrestore
+#undef spin_unlock_irqrestore
+#endif
+#define spin_lock_irqsave(lock, flags) \
+		notrace_spin_lock_irqsave(spinlock_check(lock), flags)
+#define spin_unlock_irqrestore(lock, flags) \
+		notrace_spin_unlock_irqrestore(spinlock_check(lock), flags)
+#endif
+
 static void __iomem *l2x0_base;
 static DEFINE_SPINLOCK(l2x0_lock);
 static uint32_t l2x0_way_mask;	/* Bitmask of active ways */

@@ -30,6 +30,7 @@
 #include <mach/powergate.h>
 #include <mach/clk.h>
 #include <mach/hardware.h>
+#include <trace/events/nvhost.h>
 
 #define ACM_SUSPEND_WAIT_FOR_IDLE_TIMEOUT	(2 * HZ)
 #define POWERGATE_DELAY 			10
@@ -101,8 +102,17 @@ void nvhost_module_reset(struct nvhost_device *dev)
 
 static void to_state_clockgated_locked(struct nvhost_device *dev)
 {
+	struct nvhost_driver *drv = to_nvhost_driver(dev->dev.driver);
+
 	if (dev->powerstate == NVHOST_POWER_STATE_RUNNING) {
-		int i;
+		int i, err;
+		if (drv->prepare_clockoff) {
+			err = drv->prepare_clockoff(dev);
+			if (err) {
+				dev_err(&dev->dev, "error clock gating");
+				return;
+			}
+		}
 		for (i = 0; i < dev->num_clks; i++)
 			clk_disable(dev->clk[i]);
 		if (dev->dev.parent)
@@ -141,6 +151,14 @@ static void to_state_running_locked(struct nvhost_device *dev)
 			}
 		}
 
+		/* Invoke callback after enabling clock. This is used for
+		 * re-enabling host1x interrupts. */
+		if (prev_state == NVHOST_POWER_STATE_CLOCKGATED
+				&& drv->finalize_clockon)
+			drv->finalize_clockon(dev);
+
+		/* Invoke callback after power un-gating. This is used for
+		 * restoring context. */
 		if (prev_state == NVHOST_POWER_STATE_POWERGATED
 				&& drv->finalize_poweron)
 			drv->finalize_poweron(dev);
@@ -195,6 +213,16 @@ void nvhost_module_busy(struct nvhost_device *dev)
 {
 	struct nvhost_driver *drv = to_nvhost_driver(dev->dev.driver);
 
+	if (dev->index == 1) {
+		long timediff;
+		ktime_t now;
+		now = ktime_get();
+		timediff = (long) ktime_us_delta(now, dev->last_idle_time);
+		//If GPU idle over 200 msec, set the GPU Freq to the minimum level
+		if(timediff > 200000)
+			nvhost_scale3d_set_idle_clock();
+	}
+
 	if (drv->busy)
 		drv->busy(dev);
 
@@ -237,6 +265,9 @@ void nvhost_module_idle_mult(struct nvhost_device *dev, int refs)
 {
 	struct nvhost_driver *drv = to_nvhost_driver(dev->dev.driver);
 	bool kick = false;
+
+	if (dev->index == 1)
+		dev->last_idle_time = ktime_get();
 
 	mutex_lock(&dev->lock);
 	dev->refcount -= refs;
@@ -480,6 +511,7 @@ int nvhost_module_init(struct nvhost_device *dev)
 		i++;
 	}
 	dev->num_clks = i;
+	dev->last_idle_time = ktime_get();
 
 	mutex_init(&dev->lock);
 	init_waitqueue_head(&dev->idle_wq);

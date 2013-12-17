@@ -144,6 +144,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	5,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 
 	/* 1280x720p 60hz: EIA/CEA-861-B Format 4 (Stereo)*/
@@ -164,6 +165,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 				 FB_VMODE_STEREO_LEFT_RIGHT,
 #endif
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 
 	/* 720x480p 59.94hz: EIA/CEA-861-B Formats 2 & 3 */
@@ -179,6 +181,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	9,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = 0,
+		.refresh = 60,
 	},
 
 	/* 640x480p 60hz: EIA/CEA-861-B Format 1 */
@@ -194,6 +197,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	10,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = 0,
+		.refresh = 60,
 	},
 
 	/* 720x576p 50hz EIA/CEA-861-B Formats 17 & 18 */
@@ -209,6 +213,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	5,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = 0,
+		.refresh = 50,
 	},
 
 	/* 1920x1080p 23.98/24hz: EIA/CEA-861-B Format 32 (Stereo)*/
@@ -229,6 +234,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 				 FB_VMODE_STEREO_LEFT_RIGHT,
 #endif
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 24,
 	},
 
 	/* 1920x1080p 30Hz EIA/CEA-861-B Format 34 */
@@ -244,6 +250,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	4,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 30,
 	},
 
 	/* 1920x1080p 59.94/60hz CVT */
@@ -259,6 +266,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	3,	/* v_front_porch */
 		.vmode = FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 
 	/* 1920x1080p 59.94/60hz EIA/CEA-861-B Format 16 */
@@ -274,6 +282,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	4,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 
 	/*
@@ -294,6 +303,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = 0,
+		.refresh = 75,
 	},
 	/* 720x400p 59hz */
 	{
@@ -308,6 +318,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync  = FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 	/* 800x600p 60hz */
 	{
@@ -322,6 +333,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 	/* 800x600p 75hz */
 	{
@@ -336,6 +348,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 75,
 	},
 	/* 1024x768p 60hz */
 	{
@@ -350,6 +363,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	3,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync =	0,
+		.refresh = 60,
 	},
 	/* 1024x768p 75hz */
 	{
@@ -364,6 +378,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = 0,
+		.refresh = 75,
 	},
 	/* 1152x864p 75hz */
 	{
@@ -378,6 +393,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 75,
 	},
 	/* 1280x800p 60hz */
 	{
@@ -392,6 +408,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync =		FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 	/* 1280x960p 60hz */
 	{
@@ -406,6 +423,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync =		FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 	/* 1280x1024p 60hz */
 	{
@@ -420,6 +438,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 	/* 1280x1024p 75hz */
 	{
@@ -434,6 +453,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 75,
 	},
 	/* 1368x768p 60hz */
 	{
@@ -448,6 +468,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync =		FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 	/* 1440x900p 60hz */
 	{
@@ -462,6 +483,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync =		FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 	/* 1600x1200p 60hz */
 	{
@@ -476,6 +498,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 	/* 1600x1200p 75hz */
 	{
@@ -490,6 +513,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 75,
 	},
 	/* 1680x1050p 59.94/60hz */
 	{
@@ -504,6 +528,7 @@ const struct fb_videomode tegra_dc_hdmi_supported_modes[] = {
 		.lower_margin =	1,	/* v_front_porch */
 		.vmode =	FB_VMODE_NONINTERLACED,
 		.sync =	FB_SYNC_VERT_HIGH_ACT,
+		.refresh = 60,
 	},
 };
 
@@ -1221,18 +1246,53 @@ static int tegra_dc_calc_clock_per_frame(const struct fb_videomode *mode)
 		mode->lower_margin + mode->vsync_len);
 }
 
+static bool tegra_dc_hdmi_pixclock_match_format(const struct fb_videomode *mode)
+{
+	int i;
+
+	for (i=0; i< ARRAY_SIZE(tegra_dc_hdmi_supported_modes); i++) {
+		struct fb_videomode *format = &tegra_dc_hdmi_supported_modes[i];
+		if (mode->xres == format->xres &&
+			mode->yres == format->yres &&
+			mode->refresh == format->refresh &&
+			mode->hsync_len == format->hsync_len &&
+			mode->left_margin== format->left_margin &&
+			mode->right_margin == format->right_margin &&
+			mode->vsync_len == format->vsync_len &&
+			mode->upper_margin == format->upper_margin &&
+			mode->lower_margin == format->lower_margin) {
+			/* this is very likely to match certain supported format,
+				now check if its pixclock is valid */
+			if (mode->pixclock < format->pixclock) {
+				pr_err("pixclock (%d) is higher than supported (%d)!(%dx%d@%d, %d %d %d, %d %d %d)",
+					mode->pixclock, format->pixclock,
+					mode->xres, mode->yres, mode->refresh,
+					mode->hsync_len, mode->left_margin, mode->right_margin,
+					mode->vsync_len, mode->upper_margin, mode->lower_margin);
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
 static bool tegra_dc_hdmi_valid_pixclock(const struct tegra_dc *dc,
 					const struct fb_videomode *mode)
 {
+	bool ret = true;
 	unsigned max_pixclock = tegra_dc_get_out_max_pixclock(dc);
 	if (max_pixclock) {
 		/* this might look counter-intuitive,
 		 * but pixclock's unit is picos(not Khz)
 		 */
-		return mode->pixclock >= max_pixclock;
-	} else {
-		return true;
+		if (mode->pixclock < max_pixclock)
+			ret = false;
 	}
+	if (!tegra_dc_hdmi_pixclock_match_format(mode))
+		ret = false;
+
+	return ret;
 }
 
 static bool tegra_dc_cvt_mode_equal(const struct fb_videomode *mode1,

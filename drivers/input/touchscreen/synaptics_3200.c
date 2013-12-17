@@ -991,7 +991,7 @@ static ssize_t syn_unlock_store(struct device *dev,
 {
 	struct synaptics_ts_data *ts;
 	int unlock = -1;
-	int ret;
+	int ret = 0;
 
 	ts = gl_ts;
 
@@ -1008,7 +1008,8 @@ static ssize_t syn_unlock_store(struct device *dev,
 				printk(KERN_INFO "[TP] %s: Disable P-sensor by Touch\n", __func__);
 				psensor_enable_by_touch_driver(0);
 				ts->psensor_resume_enable = 0;
-			} else if(ts->psensor_resume_enable == 2) {
+			}
+			else if(ts->psensor_resume_enable == 2) {
 				ts->psensor_resume_enable = 0;
 			}
 		}
@@ -1448,7 +1449,7 @@ static ssize_t syn_fake_event_show(struct device *dev,
 
 	if (dx_fake && dy_fake)
 		count += sprintf(buf + count, "dx_fake or dy_fake should one value need to be zero\n");
-	else if (dx_fake || dx_fake)
+	else if (dx_fake || dy_fake)
 		hrtimer_start(&ts->timer, ktime_set(1, 0), HRTIMER_MODE_REL);
 
 	return count;
@@ -2359,6 +2360,7 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 							if (finger_press_changed & BIT(i)) {
 								ts->pre_finger_data[i + 1][0] = finger_data[i][0];
 								ts->pre_finger_data[i + 1][1] = finger_data[i][1];
+
 								if (!ts->first_pressed)
 								printk(KERN_INFO "[TP] S%d@%d, %d\n", i + 1,
 									finger_data[i][0], finger_data[i][1]);
@@ -3310,7 +3312,7 @@ static int synaptics_ts_remove(struct i2c_client *client)
 
 static int synaptics_ts_suspend(struct i2c_client *client, pm_message_t mesg)
 {
-	int ret;
+	int ret = 0;
 	struct synaptics_ts_data *ts = i2c_get_clientdata(client);
 	printk(KERN_INFO "[TP] %s: enter\n", __func__);
 
@@ -3534,7 +3536,6 @@ static int synaptics_ts_resume(struct i2c_client *client)
 		input_report_abs(ts->input_dev, ABS_MT_AMPLITUDE, 0);
 		input_report_abs(ts->input_dev, ABS_MT_POSITION, 1 << 31);
 	}
-
 	if(ts->psensor_detection) {
 		if(ts->psensor_status == 0) {
 			ts->psensor_resume_enable = 1;
@@ -3620,4 +3621,3 @@ module_exit(synaptics_ts_exit);
 
 MODULE_DESCRIPTION("Synaptics Touchscreen Driver");
 MODULE_LICENSE("GPL");
-

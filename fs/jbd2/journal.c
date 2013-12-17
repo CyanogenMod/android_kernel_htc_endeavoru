@@ -671,7 +671,14 @@ int jbd2_journal_next_log_block(journal_t *journal, unsigned long long *retp)
 	unsigned long blocknr;
 
 	write_lock(&journal->j_state_lock);
+#ifdef DO_NOT_WORKAROUND_JBD2_RUN_OUT_OF_MEM
 	J_ASSERT(journal->j_free > 1);
+#else
+	if (journal->j_free <= 1) {
+		printk(KERN_EMERG "JBD: no memory for journal log buffer\n");
+		return -ENOMEM;
+	}
+#endif
 
 	blocknr = journal->j_head;
 	journal->j_head++;

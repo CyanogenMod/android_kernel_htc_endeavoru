@@ -303,7 +303,7 @@ int trigger_radio_fatal_get_coredump(char *reason)
 
 	pr_info("Trigger Modem Fatal!! reason <%s>", reason);
 
-#if 0
+#if 1
 	/*set BB2AP_SUSPEND_REQ Pin (TEGRA_GPIO_PV0) to OutPut High to trigger Modem fatal*/
 	int ret=gpio_direction_output(TEGRA_GPIO_PV0,1);
 

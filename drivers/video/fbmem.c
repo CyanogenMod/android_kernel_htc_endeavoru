@@ -729,7 +729,12 @@ static struct fb_info *file_fb_info(struct file *file)
 {
 	struct inode *inode = file->f_path.dentry->d_inode;
 	int fbidx = iminor(inode);
-	struct fb_info *info = registered_fb[fbidx];
+	struct fb_info *info;
+
+	if (fbidx >= FB_MAX)
+		return ERR_PTR(-ENODEV);
+
+	info = registered_fb[fbidx];
 
 	if (info != file->private_data)
 		info = NULL;
@@ -1051,6 +1056,19 @@ fb_blank(struct fb_info *info, int blank)
  	return ret;
 }
 
+#include <video/tegrafb.h>
+
+bool is_special_cmd(unsigned int cmd)
+{
+	switch(cmd) {
+	case FBIO_TEGRA_GET_USB_PROJECTOR_INFO:
+	case FBIO_TEGRA_SET_USB_PROJECTOR_INFO:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
 			unsigned long arg)
 {
@@ -1169,14 +1187,16 @@ static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		unlock_fb_info(info);
 		break;
 	default:
-		if (!lock_fb_info(info))
-			return -ENODEV;
+		if (!is_special_cmd(cmd))
+			if (!lock_fb_info(info))
+				return -ENODEV;
 		fb = info->fbops;
 		if (fb->fb_ioctl)
 			ret = fb->fb_ioctl(info, cmd, arg);
 		else
 			ret = -ENOTTY;
-		unlock_fb_info(info);
+		if (!is_special_cmd(cmd))
+			unlock_fb_info(info);
 	}
 	return ret;
 }
@@ -1371,6 +1391,15 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 	/* frame buffer memory */
 	start = info->fix.smem_start;
 	len = PAGE_ALIGN((start & ~PAGE_MASK) + info->fix.smem_len);
+
+	if (vma->vm_end <= vma->vm_start ||
+		off >= len ||
+		((vma->vm_end - vma->vm_start) > (len - off))) {
+		mutex_unlock(&info->mm_lock);
+		return -EINVAL;
+	}
+
+#if 0
 	if (off >= len) {
 		/* memory mapped io */
 		off -= len;
@@ -1381,11 +1410,15 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 		start = info->fix.mmio_start;
 		len = PAGE_ALIGN((start & ~PAGE_MASK) + info->fix.mmio_len);
 	}
+#endif
+
 	mutex_unlock(&info->mm_lock);
 	start &= PAGE_MASK;
-	if ((vma->vm_end - vma->vm_start + off) > len)
-		return -EINVAL;
+
 	off += start;
+	if (off < start)
+		return -EINVAL;
+
 	vma->vm_pgoff = off >> PAGE_SHIFT;
 	/* This is an IO map - tell maydump to skip this VMA */
 	vma->vm_flags |= VM_IO | VM_RESERVED;

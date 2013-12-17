@@ -36,6 +36,9 @@
 
 #include "pm-irq.h"
 
+#include <mach/board_htc.h>	//HTC
+#include "clock.h"
+
 #define MODULE_NAME "[USBPHY] "
 
 #define ERR(stuff...)		pr_err("usb_phy: " stuff)
@@ -50,7 +53,7 @@
 
 #define DEBUG
 #ifdef DEBUG
-#define DBG(stuff...)		pr_info("usb_phy: " stuff)
+#define DBG(stuff...)		if(get_radio_flag() & 0x0008){pr_info("usb_phy: " stuff);}
 #else
 #define DBG(stuff...)		do {} while (0)
 #endif
@@ -59,6 +62,51 @@
 extern void cable_detection_queue_vbus_work(int);
 #define DOCK_VBUS_DEBOUNCE 0.5*HZ
 #endif
+
+//htc ++
+#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+#define USB_PHY_ON_OFF_TIMEOUT	1000
+extern struct tegra_usb_phy *mdm_hsic_phy;
+unsigned int HTC_HSIC_PHY_FOOTPRINT = 0;
+struct task_struct *hsic_phy_tsk = NULL;
+struct clk *hsic_par_emc_clk = NULL;
+int htc_hsic_phy_power_debug_flag = 0;
+
+static void usb_phy_power_debug_switch(int on)
+{
+	#ifdef CONFIG_QCT_9K_MODEM
+	extern bool Modem_is_QCT_MDM9K(void);
+	extern bool mdm_in_fatal_handler;
+	extern bool is_in_subsystem_restart;
+	#endif	//CONFIG_QCT_9K_MODEM
+
+	if (htc_hsic_phy_power_debug_flag == on)
+		return;
+
+	#ifdef CONFIG_QCT_9K_MODEM
+	//don't change ftrace setting during modem restart
+	if (mdm_in_fatal_handler || is_in_subsystem_restart)
+		return;
+
+	if (Modem_is_QCT_MDM9K()) {
+		extern void ftrace_enable_sched_event(int on);
+		ftrace_enable_sched_event(on);
+	}
+	#endif	//CONFIG_QCT_9K_MODEM
+
+	pr_info("%s:(%d)\n", __func__, on);
+	htc_hsic_phy_power_debug_flag = on;
+}
+
+static void usb_phy_power_on_off_timer_expire_fn(unsigned long unused)
+{
+	pr_info("%s:HTC_HSIC_PHY_FOOTPRINT(%d)\n", __func__, HTC_HSIC_PHY_FOOTPRINT);
+	usb_phy_power_debug_switch(1);
+	trace_printk("[%s]\n", __func__);
+}
+static DEFINE_TIMER(usb_phy_power_on_off_timer, usb_phy_power_on_off_timer_expire_fn, 0, 0);
+#endif	//HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+//htc --
 
 static void print_usb_plat_data_info(struct tegra_usb_phy *phy)
 {
@@ -490,23 +538,83 @@ int tegra_usb_phy_power_off(struct tegra_usb_phy *phy)
 	if (!phy->phy_power_on)
 		return err;
 
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if ((mdm_hsic_phy == phy) && (get_radio_flag() & 0x0008)) {
+		hsic_phy_tsk = current;
+		hsic_par_emc_clk = phy->emc_clk->parent;
+		mod_timer(&usb_phy_power_on_off_timer, jiffies + msecs_to_jiffies(USB_PHY_ON_OFF_TIMEOUT));
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	if (phy->ops && phy->ops->power_off) {
+
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 		if (phy->pdata->ops && phy->pdata->ops->pre_phy_off)
 			phy->pdata->ops->pre_phy_off();
+
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 		err = phy->ops->power_off(phy);
+
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 		if (phy->pdata->ops && phy->pdata->ops->post_phy_off)
 			phy->pdata->ops->post_phy_off();
+
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
 	}
 
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	clk_disable(phy->emc_clk);
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	clk_disable(phy->sys_clk);
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	if (phy->pdata->op_mode == TEGRA_USB_OPMODE_HOST) {
 		if (!phy->pdata->u_data.host.hot_plug &&
 			!phy->pdata->u_data.host.remote_wakeup_supported) {
+			#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+			if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+			#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 			clk_disable(phy->ctrlr_clk);
+
+			#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+			if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+			#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 			phy->ctrl_clk_on = false;
 			if (phy->vdd_reg && phy->vdd_reg_on) {
+
+				#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+				if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+				#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 				regulator_disable(phy->vdd_reg);
+
+				#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+				if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+				#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 				phy->vdd_reg_on = false;
 			}
 		}
@@ -517,14 +625,46 @@ int tegra_usb_phy_power_off(struct tegra_usb_phy *phy)
 		 */
 		if (phy->pdata->u_data.dev.vbus_pmu_irq &&
 			phy->pdata->builtin_host_disabled) {
+
+			#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+			if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+			#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 			clk_disable(phy->ctrlr_clk);
+
+			#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+			if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+			#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 			phy->ctrl_clk_on = false;
 			if (phy->vdd_reg && phy->vdd_reg_on) {
+				#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+				if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+				#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 				regulator_disable(phy->vdd_reg);
+
+				#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+				if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+				#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 				phy->vdd_reg_on = false;
 			}
 		}
 	}
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if ((mdm_hsic_phy == phy) && (get_radio_flag() & 0x0008)) {
+		hsic_phy_tsk = NULL;
+		hsic_par_emc_clk = NULL;
+		usb_phy_power_debug_switch(0);
+		del_timer(&usb_phy_power_on_off_timer);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
 
 	phy->phy_power_on = false;
 
@@ -540,14 +680,35 @@ int tegra_usb_phy_power_on(struct tegra_usb_phy *phy)
 	if (phy->phy_power_on)
 		return status;
 
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if ((mdm_hsic_phy == phy) && (get_radio_flag() & 0x0008)) {
+		hsic_phy_tsk = current;
+		hsic_par_emc_clk = phy->emc_clk->parent;
+		mod_timer(&usb_phy_power_on_off_timer, jiffies + msecs_to_jiffies(USB_PHY_ON_OFF_TIMEOUT));
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	if (phy->vdd_reg && !phy->vdd_reg_on) {
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 		regulator_enable(phy->vdd_reg);
+
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 		phy->vdd_reg_on = true;
 	}
 
 	/* In device mode clock is turned on by pmu irq handler
 	 * if pmu irq is not available clocks will not be turned off/on
 	 */
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	if (phy->pdata->op_mode == TEGRA_USB_OPMODE_HOST) {
 		if (!phy->pdata->u_data.host.hot_plug &&
 			!phy->pdata->u_data.host.remote_wakeup_supported)
@@ -559,18 +720,63 @@ int tegra_usb_phy_power_on(struct tegra_usb_phy *phy)
 			phy->ctrl_clk_on = true;
 		}
 	}
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	clk_enable(phy->sys_clk);
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	clk_enable(phy->emc_clk);
 
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	if (phy->ops && phy->ops->power_on) {
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 		if (phy->pdata->ops && phy->pdata->ops->pre_phy_on)
 			phy->pdata->ops->pre_phy_on();
+
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 		status = phy->ops->power_on(phy);
+
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 		if (phy->pdata->ops && phy->pdata->ops->post_phy_on)
 			phy->pdata->ops->post_phy_on();
+
+		#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+		if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+		#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
 	}
 
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if (mdm_hsic_phy == phy) HTC_HSIC_PHY_FOOTPRINT = __LINE__;
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+
 	phy->phy_power_on = true;
+
+	#ifdef HTC_DEBUG_USB_PHY_POWER_ON_STUCK
+	if ((mdm_hsic_phy == phy) && (get_radio_flag() & 0x0008)) {
+		hsic_phy_tsk = NULL;
+		hsic_par_emc_clk = NULL;
+		usb_phy_power_debug_switch(0);
+		del_timer(&usb_phy_power_on_off_timer);
+	}
+	#endif //HTC_DEBUG_USB_PHY_POWER_ON_STUCK
 
 	return status;
 }
@@ -786,7 +992,7 @@ void tegra_usb_set_usb_clk(struct tegra_usb_phy *phy, bool pull_up)
 {
 	if (!phy)
 		return;
-	pr_info("%s pull_up:%d\n", __func__, pull_up);
+	DBG("%s pull_up:%d\n", __func__, pull_up);
 	if (pull_up) {
 		clk_set_rate(phy->sys_clk, 266000000);
 		clk_set_rate(phy->emc_clk, 533000000);

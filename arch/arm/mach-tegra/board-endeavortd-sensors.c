@@ -348,7 +348,6 @@ static void config_nfc_gpios(void)
     }
     tegra_gpio_enable(RUBY_GPIO_NFC_INT);
 
-    gpio_set_value(RUBY_GPIO_NFC_VEN, 1);
     pr_info("%s\n", __func__);
 
 }
@@ -516,12 +515,12 @@ struct endeavortd_battery_gpio {
 	const char *label;
 };
 
-static struct tps65200_platform_data tps65200_data = {
+static struct tps65200_platform_data __initdata tps65200_data = {
 	.gpio_chg_stat = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PW0),
 	.gpio_chg_int  = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PX5),
 };
 
-static struct i2c_board_info tps_65200_boardinfo[] = {
+static struct i2c_board_info __initdata tps_65200_boardinfo[] = {
 	{
 		I2C_BOARD_INFO("tps65200", 0xD4 >> 1),
 		.platform_data = &tps65200_data,
@@ -534,7 +533,7 @@ static struct i2c_board_info tps_65200_boardinfo[] = {
 		.label = _label,		\
 	}
 
-struct endeavortd_battery_gpio endeavortd_battery_gpio_data[] ={
+struct endeavortd_battery_gpio __initdata endeavortd_battery_gpio_data[] ={
 	[0] = TEGRA_BATTERY_GPIO(TEGRA_GPIO_PU4, "mbat_in"),
 	[1] = TEGRA_BATTERY_GPIO(TEGRA_GPIO_PW0, "chg_stat"),
 	[2] = TEGRA_BATTERY_GPIO(TEGRA_GPIO_PX5, "chg_int"),
@@ -549,9 +548,25 @@ static struct htc_battery_platform_data htc_battery_pdev_data = {
 	.volt_adc_offset = 0,
 	.power_off_by_id = 1,
 	.sw_temp_25 = TEGRA_GPIO_INVALID,
+	.adc2temp_map = {{  23,  1620},
+			 { 321,   677},
+			 { 406,   606},
+			 { 455,   572},
+			 { 625,   480},
+			 { 697,   449},
+			 { 766,   422},
+			 { 982,   350},
+			 {1375,   250},
+			 {1864,   150},
+			 {2132,   100},
+			 {2414,    50},
+			 {2689,     0},
+			 {3570,  -200},
+			 {4095,  -789},
+			},
 };
 
-static struct platform_device htc_battery_pdev = {
+static struct platform_device __initdata htc_battery_pdev = {
 	.name	= "htc_battery",
 	.id	= -1,
 	.dev	= {

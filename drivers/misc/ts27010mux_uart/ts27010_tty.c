@@ -405,7 +405,6 @@ static int tty_direct_push(struct tty_struct *tty, int line,
 {
 	int ret = -ENOMEM;
 	int count;
-	static long vt_count = 0;
 	u8 *buf;
 
 	FUNC_ENTER();
@@ -423,14 +422,6 @@ static int tty_direct_push(struct tty_struct *tty, int line,
 	count = ts27010_ringbuf_read(rbuf, data_idx, buf, len);
 	if (count != len)
 		mux_print(MSG_WARNING, "read size %d is not %d\n", count, len);
-	if(line == 9) {
-		vt_count++;
-		if(vt_count % 250 == 0) {
-			mux_print(MSG_ERROR, "[VT] VT RX count:%d\n",vt_count);
-		}
-		//Dump VT raw data will cause dealy possibility
-		//mux_uart_hexdump(MSG_ERROR, "dump tty_read", __func__, __LINE__, buf, len);
-	}
 #ifdef DUMP_FRAME
 	if (g_mux_uart_dump_user_data)
 		mux_uart_hexdump(MSG_ERROR, "dump tty_read",
@@ -759,8 +750,6 @@ static int ts27010_tty_write(struct tty_struct *tty,
 {
 	int ret;
 	int line = tty->index;
-	static long time1=0,time2=0,time3=0;
-	static long vt_count = 0;
 	FUNC_ENTER();
 #ifdef VT_WATERMARK
 	if(line == 9) {
@@ -774,14 +763,6 @@ static int ts27010_tty_write(struct tty_struct *tty,
 	if ((line < 0) || (line >= TS0710_MAX_MUX)) {
 		mux_print(MSG_ERROR, "tty index out of range: %d.\n", line);
 		return -ENODEV;
-	}
-	if(line == 9) {
-		time3 = ktime_to_us(ktime_get());
-		if(time3 - time1 > 40000) {
-			mux_print(MSG_ERROR, "[VT] AP write to /dev/mux9 done time:%d\n",((time3 - time1)/1000));
-		}
-		time1 = time3;
-		//mux_uart_hexdump(MSG_ERROR, "dump tty_write", __func__, __LINE__, buf, count);
 	}
 #ifdef DUMP_FRAME
 	if (g_mux_uart_dump_seq)
@@ -823,16 +804,6 @@ static int ts27010_tty_write(struct tty_struct *tty,
 		s_nWriteCount++;
 	}
 #endif
-	if(line == 9 ) {
-		vt_count++;
-		if(vt_count % 250 == 0) {
-			mux_print(MSG_ERROR, "[VT] VT TX count:%d\n",vt_count);
-		}
-		time2 = ktime_to_us(ktime_get());
-		if(time2-time1 >40000) {
-			mux_print(MSG_ERROR, "[VT] MUX handle VT write done time:%d\n",((time2-time1)/1000));
-		}
-	}
 	FUNC_EXIT();
 	return ret;
 }

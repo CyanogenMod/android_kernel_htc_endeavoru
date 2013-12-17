@@ -447,6 +447,7 @@ static void task_fd_install(
 	fdt = files_fdtable(files);
 	BUG_ON(fdt->fd[fd] != NULL);
 	rcu_assign_pointer(fdt->fd[fd], file);
+	fdt->user[fd].installer = proc->pid;
 	spin_unlock(&files->file_lock);
 }
 
@@ -482,6 +483,7 @@ static long task_close_fd(struct binder_proc *proc, unsigned int fd)
 	if (!filp)
 		goto out_unlock;
 	rcu_assign_pointer(fdt->fd[fd], NULL);
+	fdt->user[fd].remover = proc->pid;
 	FD_CLR(fd, fdt->close_on_exec);
 	__put_unused_fd(files, fd);
 	spin_unlock(&files->file_lock);

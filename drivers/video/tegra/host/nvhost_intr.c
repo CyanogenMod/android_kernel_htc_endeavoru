@@ -116,8 +116,6 @@ void reset_threshold_interrupt(struct nvhost_intr *intr,
 {
 	u32 thresh = list_first_entry(head,
 				struct nvhost_waitlist, list)->thresh;
-	BUG_ON(!(intr_op().set_syncpt_threshold &&
-		 intr_op().enable_syncpt_intr));
 
 	intr_op().set_syncpt_threshold(intr, id, thresh);
 	intr_op().enable_syncpt_intr(intr, id);
@@ -210,7 +208,9 @@ static int process_wait_list(struct nvhost_intr *intr,
 	remove_completed_waiters(&syncpt->wait_head, threshold, completed);
 
 	empty = list_empty(&syncpt->wait_head);
-	if (!empty)
+	if (empty)
+		intr_op().disable_syncpt_intr(intr, syncpt->id);
+	else
 		reset_threshold_interrupt(intr, &syncpt->wait_head,
 					  syncpt->id);
 
@@ -266,10 +266,10 @@ int nvhost_intr_add_action(struct nvhost_intr *intr, u32 id, u32 thresh,
 	int queue_was_empty;
 	int err;
 
-	BUG_ON(waiter == NULL);
-
-	BUG_ON(!(intr_op().set_syncpt_threshold &&
-		 intr_op().enable_syncpt_intr));
+	if (waiter == NULL) {
+		pr_warn("%s: NULL waiter\n", __func__);
+		return -EINVAL;
+	}
 
 	/* initialize a new waiter */
 	INIT_LIST_HEAD(&waiter->list);
@@ -327,13 +327,19 @@ void *nvhost_intr_alloc_waiter()
 			GFP_KERNEL|__GFP_REPEAT);
 }
 
-void nvhost_intr_put_ref(struct nvhost_intr *intr, void *ref)
+void nvhost_intr_put_ref(struct nvhost_intr *intr, u32 id, void *ref)
 {
 	struct nvhost_waitlist *waiter = ref;
+	struct nvhost_intr_syncpt *syncpt;
+	struct nvhost_master *host = intr_to_dev(intr);
 
 	while (atomic_cmpxchg(&waiter->state,
 				WLS_PENDING, WLS_CANCELLED) == WLS_REMOVED)
 		schedule();
+
+	syncpt = intr->syncpt + id;
+	(void)process_wait_list(intr, syncpt,
+				nvhost_syncpt_update_min(&host->syncpt, id));
 
 	kref_put(&waiter->refcount, waiter_release);
 }
@@ -379,10 +385,6 @@ void nvhost_intr_deinit(struct nvhost_intr *intr)
 
 void nvhost_intr_start(struct nvhost_intr *intr, u32 hz)
 {
-	BUG_ON(!(intr_op().init_host_sync &&
-		 intr_op().set_host_clocks_per_usec &&
-		 intr_op().request_host_general_irq));
-
 	mutex_lock(&intr->mutex);
 
 	intr_op().init_host_sync(intr);
@@ -399,9 +401,6 @@ void nvhost_intr_stop(struct nvhost_intr *intr)
 	unsigned int id;
 	struct nvhost_intr_syncpt *syncpt;
 	u32 nb_pts = nvhost_syncpt_nb_pts(&intr_to_dev(intr)->syncpt);
-
-	BUG_ON(!(intr_op().disable_all_syncpt_intrs &&
-		 intr_op().free_host_general_irq));
 
 	mutex_lock(&intr->mutex);
 
@@ -420,8 +419,10 @@ void nvhost_intr_stop(struct nvhost_intr *intr)
 		}
 
 		if (!list_empty(&syncpt->wait_head)) {  /* output diagnostics */
-			printk(KERN_DEBUG "%s id=%d\n", __func__, id);
-			BUG_ON(1);
+			mutex_unlock(&intr->mutex);
+			pr_warn("%s cannot stop syncpt intr id=%d\n",
+					 __func__, id);
+			return;
 		}
 
 		free_syncpt_irq(syncpt);

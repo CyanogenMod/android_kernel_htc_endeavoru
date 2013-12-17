@@ -1630,7 +1630,7 @@ void tegra_se_aes_cmac_cra_exit(struct crypto_tfm *tfm)
 
 static struct crypto_alg aes_algs[] = {
 	{
-		.cra_name = "cbc(aes)",
+		.cra_name = "disabled_cbc(aes)",
 		.cra_driver_name = "cbc-aes-tegra",
 		.cra_priority = 300,
 		.cra_flags = CRYPTO_ALG_TYPE_ABLKCIPHER | CRYPTO_ALG_ASYNC,
@@ -1650,7 +1650,7 @@ static struct crypto_alg aes_algs[] = {
 			.decrypt = tegra_se_aes_cbc_decrypt,
 		}
 	}, {
-		.cra_name = "ecb(aes)",
+		.cra_name = "disabled_ecb(aes)",
 		.cra_driver_name = "ecb-aes-tegra",
 		.cra_priority = 300,
 		.cra_flags = CRYPTO_ALG_TYPE_ABLKCIPHER | CRYPTO_ALG_ASYNC,
@@ -1670,7 +1670,7 @@ static struct crypto_alg aes_algs[] = {
 			.decrypt = tegra_se_aes_ecb_decrypt,
 		}
 	}, {
-		.cra_name = "ctr(aes)",
+		.cra_name = "disabled_ctr(aes)",
 		.cra_driver_name = "ctr-aes-tegra",
 		.cra_priority = 300,
 		.cra_flags = CRYPTO_ALG_TYPE_ABLKCIPHER | CRYPTO_ALG_ASYNC,
@@ -1691,7 +1691,7 @@ static struct crypto_alg aes_algs[] = {
 			.geniv = "eseqiv",
 		}
 	}, {
-		.cra_name = "ofb(aes)",
+		.cra_name = "disabled_ofb(aes)",
 		.cra_driver_name = "ofb-aes-tegra",
 		.cra_priority = 300,
 		.cra_flags = CRYPTO_ALG_TYPE_ABLKCIPHER | CRYPTO_ALG_ASYNC,
@@ -1760,7 +1760,7 @@ static struct ahash_alg hash_algs[] = {
 		.digest = tegra_se_sha_digest,
 		.halg.digestsize = SHA1_DIGEST_SIZE,
 		.halg.base = {
-			.cra_name = "sha1",
+			.cra_name = "disabled_sha1",
 			.cra_driver_name = "tegra-se-sha1",
 			.cra_priority = 100,
 			.cra_flags = CRYPTO_ALG_TYPE_AHASH,
@@ -1779,7 +1779,7 @@ static struct ahash_alg hash_algs[] = {
 		.digest = tegra_se_sha_digest,
 		.halg.digestsize = SHA224_DIGEST_SIZE,
 		.halg.base = {
-			.cra_name = "sha224",
+			.cra_name = "disabled_sha224",
 			.cra_driver_name = "tegra-se-sha224",
 			.cra_priority = 100,
 			.cra_flags = CRYPTO_ALG_TYPE_AHASH,
@@ -1798,7 +1798,7 @@ static struct ahash_alg hash_algs[] = {
 		.digest = tegra_se_sha_digest,
 		.halg.digestsize = SHA256_DIGEST_SIZE,
 		.halg.base = {
-			.cra_name = "sha256",
+			.cra_name = "disabled_sha256",
 			.cra_driver_name = "tegra-se-sha256",
 			.cra_priority = 100,
 			.cra_flags = CRYPTO_ALG_TYPE_AHASH,
@@ -1817,7 +1817,7 @@ static struct ahash_alg hash_algs[] = {
 		.digest = tegra_se_sha_digest,
 		.halg.digestsize = SHA384_DIGEST_SIZE,
 		.halg.base = {
-			.cra_name = "sha384",
+			.cra_name = "disabled_sha384",
 			.cra_driver_name = "tegra-se-sha384",
 			.cra_priority = 100,
 			.cra_flags = CRYPTO_ALG_TYPE_AHASH,
@@ -1836,7 +1836,7 @@ static struct ahash_alg hash_algs[] = {
 		.digest = tegra_se_sha_digest,
 		.halg.digestsize = SHA512_DIGEST_SIZE,
 		.halg.base = {
-			.cra_name = "sha512",
+			.cra_name = "disabled_sha512",
 			.cra_driver_name = "tegra-se-sha512",
 			.cra_priority = 100,
 			.cra_flags = CRYPTO_ALG_TYPE_AHASH,

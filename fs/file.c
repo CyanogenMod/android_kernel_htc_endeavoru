@@ -21,6 +21,7 @@
 #include <linux/spinlock.h>
 #include <linux/rcupdate.h>
 #include <linux/workqueue.h>
+#include <linux/crc32c.h>
 
 struct fdtable_defer {
 	spinlock_t lock;
@@ -63,6 +64,7 @@ static void __free_fdtable(struct fdtable *fdt)
 {
 	free_fdmem(fdt->fd);
 	free_fdmem(fdt->open_fds);
+	free_fdmem(fdt->user);
 	kfree(fdt);
 }
 
@@ -100,9 +102,11 @@ void free_fdtable_rcu(struct rcu_head *rcu)
 				container_of(fdt, struct files_struct, fdtab));
 		return;
 	}
-	if (!is_vmalloc_addr(fdt->fd) && !is_vmalloc_addr(fdt->open_fds)) {
+	if (!is_vmalloc_addr(fdt->fd) && !is_vmalloc_addr(fdt->open_fds)
+		    && !is_vmalloc_addr(fdt->user)) {
 		kfree(fdt->fd);
 		kfree(fdt->open_fds);
+		kfree(fdt->user);
 		kfree(fdt);
 	} else {
 		fddef = &get_cpu_var(fdtable_defer_list);
@@ -137,6 +141,10 @@ static void copy_fdtable(struct fdtable *nfdt, struct fdtable *ofdt)
 	memset((char *)(nfdt->open_fds) + cpy, 0, set);
 	memcpy(nfdt->close_on_exec, ofdt->close_on_exec, cpy);
 	memset((char *)(nfdt->close_on_exec) + cpy, 0, set);
+	memcpy(nfdt->user, ofdt->user,
+		ofdt->max_fds * sizeof(*nfdt->user));
+	memset(nfdt->user + ofdt->max_fds, 0,
+		(nfdt->max_fds - ofdt->max_fds) * sizeof(*nfdt->user));
 }
 
 static struct fdtable * alloc_fdtable(unsigned int nr)
@@ -181,9 +189,15 @@ static struct fdtable * alloc_fdtable(unsigned int nr)
 	data += nr / BITS_PER_BYTE;
 	fdt->close_on_exec = (fd_set *)data;
 	fdt->next = NULL;
+	data = alloc_fdmem(sizeof(*fdt->user) * nr);
+	if (!data)
+		goto out_open;
+	fdt->user = (struct fdt_user*) data;
 
 	return fdt;
 
+out_open:
+	free_fdmem(fdt->open_fds);
 out_arr:
 	free_fdmem(fdt->fd);
 out_fdt:
@@ -310,6 +324,7 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 	new_fdt->open_fds = (fd_set *)&newf->open_fds_init;
 	new_fdt->fd = &newf->fd_array[0];
 	new_fdt->next = NULL;
+	new_fdt->user = &newf->user_array[0];
 
 	spin_lock(&oldf->file_lock);
 	old_fdt = files_fdtable(oldf);
@@ -354,6 +369,8 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 		old_fdt->open_fds->fds_bits, open_files/8);
 	memcpy(new_fdt->close_on_exec->fds_bits,
 		old_fdt->close_on_exec->fds_bits, open_files/8);
+	memset(new_fdt->user, 0,
+		open_files * sizeof(*old_fdt->user));
 
 	for (i = open_files; i != 0; i--) {
 		struct file *f = *old_fds++;
@@ -384,6 +401,8 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 
 		memset(&new_fdt->open_fds->fds_bits[start], 0, left);
 		memset(&new_fdt->close_on_exec->fds_bits[start], 0, left);
+		memset(&new_fdt->user[open_files], 0,
+			(new_fdt->max_fds - open_files) * sizeof(*new_fdt->user));
 	}
 
 	rcu_assign_pointer(newf->fdt, new_fdt);
@@ -421,9 +440,66 @@ struct files_struct init_files = {
 		.fd		= &init_files.fd_array[0],
 		.close_on_exec	= (fd_set *)&init_files.close_on_exec_init,
 		.open_fds	= (fd_set *)&init_files.open_fds_init,
+		.user		= &init_files.user_array[0],
 	},
 	.file_lock	= __SPIN_LOCK_UNLOCKED(init_task.file_lock),
 };
+
+static void fdtable_usage_dump(struct fdtable *fdt)
+{
+	int i;
+	char* buf;
+
+	buf = (char*) kmalloc(PATH_MAX, GFP_ATOMIC);
+	if (!buf) {
+		pr_err("%s: fail to alloc buffer\n", __func__);
+		return;
+	}
+
+	for (i = 0; i < fdt->max_fds; i++) {
+		struct file* file;
+		u32 last_crc = 0;
+		unsigned int repeats = 0;
+		int pid;
+		struct task_struct* user;
+		char* path;
+		int this_crc;
+
+		file = fdt->fd[i];
+		if (!file)
+			continue;
+
+		pid = fdt->user[i].installer;
+		rcu_read_lock();
+		user = find_task_by_vpid(pid);
+		if (user)
+			get_task_struct(user);
+		rcu_read_unlock();
+		path = d_path(&file->f_path, buf, PATH_MAX);
+		if (IS_ERR(path))
+			path = "<unknown>";
+		this_crc = crc32c(pid, path, strlen(path));
+
+		if (this_crc != last_crc || i == fdt->max_fds - 1) {
+			if (repeats)
+				pr_warn("  < ... repeats %d time%s ... >\n", repeats,
+					   repeats > 1 ? "s" : "");
+			pr_warn("%d->fd[%d] file: %s, user: %d (%s %d:%d)\n",
+					current->tgid, i, path, pid,
+					user ? user->comm : "<unknown>",
+					user ? user->tgid : -1,
+					user ? user->pid  : -1);
+
+			last_crc = this_crc;
+			repeats = 0;
+		} else
+			repeats++;
+
+		if (user)
+			put_task_struct(user);
+	}
+	kfree(buf);
+}
 
 /*
  * allocate a file descriptor, mark it busy.
@@ -465,6 +541,7 @@ repeat:
 		FD_SET(fd, fdt->close_on_exec);
 	else
 		FD_CLR(fd, fdt->close_on_exec);
+	memset(&fdt->user[fd], 0, sizeof(*fdt->user));
 	error = fd;
 #if 1
 	/* Sanity check */
@@ -475,6 +552,22 @@ repeat:
 #endif
 
 out:
+	/*
+	 * debugging: dump all fd users if file table is full (EMFILE)
+	 */
+	if (unlikely(error == -EMFILE)) {
+		static unsigned long debugging_ratelimit = 0;
+		const unsigned long debugging_delay_ms = 5000;
+
+		if (jiffies > debugging_ratelimit) {
+			pr_warn("[%s] Too many open files (%d/%u), dump all fdt users:\n",
+					__func__, count_open_files(fdt), fdt->max_fds);
+			dump_stack();
+			fdtable_usage_dump(fdt);
+			debugging_ratelimit = jiffies + msecs_to_jiffies(debugging_delay_ms);
+			pr_warn("[%s] end of dump\n", __func__);
+		}
+	}
 	spin_unlock(&files->file_lock);
 	return error;
 }

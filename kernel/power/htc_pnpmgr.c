@@ -91,6 +91,7 @@ static int cpu3_online_value;
 static int cpu_user_cap_value;
 static int edp_ap_limit_value;
 static char ap_dvcs_value[MAX_BUF] = {0};
+static int data_throttling_value;
 
 define_int_show(perflock_scaling_min, perflock_scaling_min_value);
 define_int_store(perflock_scaling_min, perflock_scaling_min_value, null_cb);
@@ -124,7 +125,12 @@ power_attr(cpu_user_cap);
 define_int_show(edp_ap_limit, edp_ap_limit_value);
 define_int_store(edp_ap_limit, edp_ap_limit_value, null_cb);
 power_attr(edp_ap_limit);
+
+define_int_show(pause_dt, data_throttling_value);
+define_int_store(pause_dt, data_throttling_value, null_cb);
+power_attr(pause_dt);
 #endif
+
 
 #ifdef CONFIG_PERFLOCK
 extern ssize_t
@@ -192,6 +198,7 @@ static struct attribute *hotplug_g[] = {
 static struct attribute *thermal_g[] = {
 #ifdef CONFIG_ARCH_TEGRA
 	&edp_ap_limit_attr.attr,
+	&pause_dt_attr.attr,
 #endif
 	NULL,
 };

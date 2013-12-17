@@ -7,3 +7,9 @@ config HTC_DEBUG_FILE_NODE
 	default n
 	help
 	    add a file node for userspace to read / store debug flag
+
+config LAST_BOOT_DEBUG
+	bool "Last boot file node"
+	default n
+	help
+	    to expose the debug information of last booting

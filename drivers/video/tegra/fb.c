@@ -300,10 +300,16 @@ static void tegra_fb_flip_win(struct tegra_fb_info *tegra_fb)
 static int tegra_fb_blank(int blank, struct fb_info *info)
 {
 	struct tegra_fb_info *tegra_fb = info->par;
+	struct tegra_dc *dc = tegra_fb->win->dc;
+	struct tegra_dc_out *out = dc->out;
+	struct tegra_dsi_out *dsi = out->dsi;
 
 	switch (blank) {
 	case FB_BLANK_UNBLANK:
 		dev_dbg(&tegra_fb->ndev->dev, "unblank\n");
+		if ((dsi) && (dsi->dsi_cabc_dimming_on_cmd))
+			dc->request_dimming_on = true;
+
 		tegra_fb->win->flags = TEGRA_WIN_FLAG_ENABLED;
 		tegra_dc_enable(tegra_fb->win->dc);
 		return 0;
@@ -317,6 +323,11 @@ static int tegra_fb_blank(int blank, struct fb_info *info)
 	case FB_BLANK_HSYNC_SUSPEND:
 	case FB_BLANK_POWERDOWN:
 		dev_dbg(&tegra_fb->ndev->dev, "blank - powerdown\n");
+		if ((dsi) && (dsi->dsi_cabc_dimming_on_cmd)) {
+			del_timer_sync(&dc->dimming_update_timer);
+			flush_workqueue(dc->dimming_wq);
+		}
+
 		tegra_dc_disable(tegra_fb->win->dc);
 		return 0;
 
@@ -709,6 +720,7 @@ struct tegra_fb_info *tegra_fb_register(struct nvhost_device *ndev,
 
 	if (dc->mode.pclk > 1000) {
 		struct tegra_dc_mode *mode = &dc->mode;
+		struct fb_videomode vmode;
 
 		if (dc->out->flags & TEGRA_DC_OUT_ONE_SHOT_MODE)
 			info->var.pixclock = KHZ2PICOS(mode->rated_pclk / 1000);
@@ -720,6 +732,10 @@ struct tegra_fb_info *tegra_fb_register(struct nvhost_device *ndev,
 		info->var.lower_margin = mode->v_front_porch;
 		info->var.hsync_len = mode->h_sync_width;
 		info->var.vsync_len = mode->v_sync_width;
+
+		/* Keep info->var consistent with info->modelist. */
+		fb_var_to_videomode(&vmode, &info->var);
+		fb_add_videomode(&vmode, &info->modelist);
 	}
 
 	return tegra_fb;

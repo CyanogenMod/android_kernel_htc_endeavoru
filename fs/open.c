@@ -868,6 +868,7 @@ void fd_install(unsigned int fd, struct file *file)
 	fdt = files_fdtable(files);
 	BUG_ON(fdt->fd[fd] != NULL);
 	rcu_assign_pointer(fdt->fd[fd], file);
+	fdt->user[fd].installer = current->pid;
 	spin_unlock(&files->file_lock);
 }
 
@@ -1070,12 +1071,33 @@ SYSCALL_DEFINE1(close, unsigned int, fd)
 
 	spin_lock(&files->file_lock);
 	fdt = files_fdtable(files);
-	if (fd >= fdt->max_fds)
+	if (fd >= fdt->max_fds) {
+		pr_debug("[%s] fd %u exceeds max_fds %u (user: %s %d:%d)\n",
+				__func__, fd, fdt->max_fds,
+				current->comm, current->tgid, current->pid);
 		goto out_unlock;
+	}
 	filp = fdt->fd[fd];
-	if (!filp)
+	if (!filp) {
+		struct fdt_user* user = &fdt->user[fd];
+		/*
+		 * detecting the double closing that made by other thread
+		 */
+		if (unlikely(user->remover && user->remover != current->pid)) {
+			struct task_struct* task = find_task_by_vpid(user->remover);
+			pr_warn("[%s] fd %u of %s %d:%d is"
+					" already closed by thread %d (%s %d:%d)\n",
+					__func__, fd,
+					current->comm, current->tgid, current->pid,
+					user->remover,
+					task ? task->comm : "<unknown>",
+					task ? task->tgid : -1,
+					task ? task->pid  : -1);
+		}
 		goto out_unlock;
+	}
 	rcu_assign_pointer(fdt->fd[fd], NULL);
+	fdt->user[fd].remover = current->pid;
 	FD_CLR(fd, fdt->close_on_exec);
 	__put_unused_fd(files, fd);
 	spin_unlock(&files->file_lock);

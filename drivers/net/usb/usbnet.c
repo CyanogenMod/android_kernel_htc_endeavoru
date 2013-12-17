@@ -742,9 +742,6 @@ static void usbnet_terminate_urbs(struct usbnet *dev)
 	temp = unlink_urbs(dev, &dev->txq) +
 		unlink_urbs(dev, &dev->rxq);
 
-
-pr_info("%s+\n", __func__);
-
 	/* maybe wait for deletions to finish. */
 	while (!skb_queue_empty(&dev->rxq)
 		&& !skb_queue_empty(&dev->txq)
@@ -758,8 +755,6 @@ pr_info("%s+\n", __func__);
 	set_current_state(TASK_RUNNING);
 	dev->wait = NULL;
 	remove_wait_queue(&unlink_wakeup, &wait);
-
-	pr_info("%s-\n", __func__);
 }
 
 int usbnet_stop (struct net_device *net)
@@ -1632,8 +1627,6 @@ int usbnet_suspend (struct usb_interface *intf, pm_message_t message)
 {
 	struct usbnet		*dev = usb_get_intfdata(intf);
 
-	pr_info("%s+\n", __func__);
-
 	if (!dev->suspend_count++) {
 		spin_lock_irq(&dev->txq.lock);
 		/* don't autosuspend while transmitting */
@@ -1649,21 +1642,16 @@ int usbnet_suspend (struct usb_interface *intf, pm_message_t message)
 		 * accelerate emptying of the rx and queues, to avoid
 		 * having everything error out.
 		 */
-		pr_info("%s+:d\n", __func__);
 		netif_device_detach (dev->net);
-		pr_info("%s+:t\n", __func__);
 		usbnet_terminate_urbs(dev);
-		pr_info("%s+:k\n", __func__);
 		usb_kill_urb(dev->interrupt);
 
 		/*
 		 * reattach so runtime management can use and
 		 * wake the device
 		 */
-		pr_info("%s+:a\n", __func__);
 		netif_device_attach (dev->net);
 	}
-	pr_info("%s-\n", __func__);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usbnet_suspend);

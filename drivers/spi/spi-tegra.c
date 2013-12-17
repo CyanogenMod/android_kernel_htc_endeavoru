@@ -44,12 +44,6 @@
 
 #define SPI_RUN_TIME_ENABLE 0
 
-#ifdef CONFIG_SERIAL_SC8800G
-#define DEBUG_962049
-#define WORKAROUND_962049
-//#define WORKAROUND_949393_PRINT_LOG
-#endif
-
 #define SLINK_COMMAND		0x000
 #define   SLINK_BIT_LENGTH(x)		(((x) & 0x1f) << 0)
 #define   SLINK_WORD_SIZE(x)		(((x) & 0x1f) << 5)
@@ -256,31 +250,6 @@ struct spi_tegra_data {
 	struct work_struct spi_transfer_work;
 };
 
-#ifdef DEBUG_962049
-static int g_enable_debug_962049 = 0;
-static int g_spi_tegra_transfer_debug_flag = 0;
-static int g_tegra_spi_transfer_work_debug_flag = 0;
-static int g_spi_tegra_curr_transfer_complete_debug_flag = 0;
-static int g_spi_tegra_start_dma_based_transfer_debug_flag = 0;
-static int g_spi_tegra_start_cpu_based_transfer_debug_flag = 0;
-void spi_tegra_962049_debug_set(int enable)
-{
-	if ( g_enable_debug_962049 != enable ) {
-		g_enable_debug_962049 = enable;
-	}
-}
-void spi_tegra_962049_debug_get_info(void)
-{
-	pr_err("[%s] g_enable_debug_962049=[%d][%d][%d][%d][%d][%d]\n", __func__,
-		g_enable_debug_962049, g_spi_tegra_transfer_debug_flag,
-		g_tegra_spi_transfer_work_debug_flag, g_spi_tegra_curr_transfer_complete_debug_flag,
-		g_spi_tegra_start_dma_based_transfer_debug_flag, g_spi_tegra_start_cpu_based_transfer_debug_flag);
-}
-#else
-void spi_tegra_962049_debug_set(int enable){}
-void spi_tegra_962049_debug_get_info(void){}
-#endif
-
 static int tegra_spi_runtime_idle(struct device *dev);
 static int tegra_spi_runtime_resume(struct device *dev);
 
@@ -338,19 +307,6 @@ static int tegra_spi_clk_enable(struct spi_tegra_data *tspi)
 	tspi->clk_state++;
 	spin_unlock_irqrestore(&tspi->reg_lock, flags);
 	return 0;
-}
-
-static inline void print_registers(struct spi_tegra_data *tspi)
-{
-	unsigned addr = 0;
-	unsigned long data[0x20/4];
-	char line[256] = {0};
-	while (addr < 0x20) {
-		data[addr/4] = spi_tegra_readl(tspi, addr);
-		sprintf(line, "%s0x%08X ", line, (unsigned int)data[addr/4]);
-		addr += 4;
-	}
-	pr_err("[%s] %s\n", __func__, line);
 }
 
 static int spi_tegra_clock_control(struct spi_device *spi, int c_enable)
@@ -487,12 +443,6 @@ static unsigned spi_tegra_fill_tx_fifo_from_client_txbuf(
 	unsigned long x;
 	unsigned int written_words;
 
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0 ) {
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s+\n",  __func__);
-	}
-#endif
-
 	fifo_status = spi_tegra_readl(tspi, SLINK_STATUS2);
 	tx_empty_count = SLINK_TX_FIFO_EMPTY_COUNT(fifo_status);
 
@@ -520,11 +470,6 @@ static unsigned spi_tegra_fill_tx_fifo_from_client_txbuf(
 		written_words = max_n_32bit;
 	}
 	tspi->cur_tx_pos += written_words * tspi->bytes_per_word;
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0 ) {
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s-\n",  __func__);
-	}
-#endif
 	return written_words;
 }
 
@@ -573,11 +518,6 @@ static void spi_tegra_copy_client_txbuf_to_spi_txbuf(
 		struct spi_tegra_data *tspi, struct spi_transfer *t)
 {
 	unsigned len;
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0) {
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s+\n",  __func__);
-	}
-#endif
 
 	/* Make the dma buffer to read by cpu */
 	dma_sync_single_for_cpu(&tspi->pdev->dev, tspi->tx_buf_phys,
@@ -606,11 +546,6 @@ static void spi_tegra_copy_client_txbuf_to_spi_txbuf(
 	/* Make the dma buffer to read by dma */
 	dma_sync_single_for_device(&tspi->pdev->dev, tspi->tx_buf_phys,
 				tspi->dma_buf_size, DMA_TO_DEVICE);
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0) {
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s-\n",  __func__);
-	}
-#endif
 }
 
 static void spi_tegra_copy_spi_rxbuf_to_client_rxbuf(
@@ -657,16 +592,6 @@ static int spi_tegra_start_dma_based_transfer(
 	unsigned int len;
 	int ret = 0;
 
-#ifdef WORKAROUND_962049
-	u64 usec_start = 0;
-	u32 usec_total = 0;
-	int spi_tegra_readl_count = 0;
-	static int spi_962049_resend_count = 0;
-#endif
-
-#ifdef DEBUG_962049
-	g_spi_tegra_start_dma_based_transfer_debug_flag = 1;
-#endif
 	INIT_COMPLETION(tspi->rx_dma_complete);
 	INIT_COMPLETION(tspi->tx_dma_complete);
 
@@ -698,105 +623,33 @@ static int spi_tegra_start_dma_based_transfer(
 	if (tspi->cur_direction & DATA_DIR_RX)
 		val |= SLINK_IE_RXC;
 
-#ifdef DEBUG_962049
-	g_spi_tegra_start_dma_based_transfer_debug_flag = 2;
-#endif
-
 	spi_tegra_writel(tspi, val, SLINK_DMA_CTL);
 	tspi->dma_control_reg = val;
 
-#ifdef DEBUG_962049
-	g_spi_tegra_start_dma_based_transfer_debug_flag = 3;
-#endif
-
 	if (tspi->cur_direction & DATA_DIR_TX) {
 		spi_tegra_copy_client_txbuf_to_spi_txbuf(tspi, t);
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 4;
-#endif
 		wmb();
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 5;
-#endif
 		tspi->tx_dma_req.size = len;
 		ret = tegra_dma_enqueue_req(tspi->tx_dma, &tspi->tx_dma_req);
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 6;
-#endif
 		if (ret < 0) {
 			dev_err(&tspi->pdev->dev,
 				"Error in starting tx dma error = %d\n", ret);
 			return ret;
 		}
 
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 7;
-#endif
-
 		/* Wait for tx fifo to be fill before starting slink */
 		test_val = spi_tegra_readl(tspi, SLINK_STATUS);
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 8;
-#endif
-#ifdef WORKAROUND_962049
-		usec_start = cpu_clock(UINT_MAX);
-		while (!(test_val & SLINK_TX_FULL)) {
-			test_val = spi_tegra_readl(tspi, SLINK_STATUS);
-
-			usec_total = ((u32)(cpu_clock(UINT_MAX) - usec_start) / 1000);
-
-			if ( spi_tegra_readl_count > 1000 && usec_total > (500 * 1000) ) {
-				/*over 500ms, trigger workaround*/
-				pr_err("[%s] SLINK_TX_FULL debug message=[%d][%d][%d][%d]\n", __func__, usec_total, spi_tegra_readl_count, tspi->master->bus_num, tspi->status_reg);
-				print_registers(tspi);
-
-				tegra_dma_dequeue_req(tspi->tx_dma, &tspi->tx_dma_req);
-
-				tegra_periph_reset_assert(tspi->clk);
-				udelay(2);
-				tegra_periph_reset_deassert(tspi->clk);
-				WARN_ON(1);
-
-				if ( spi_962049_resend_count > 10 ) {
-					pr_err("[%s] SLINK_TX_FULL debug EIO=[%d]\n", __func__, spi_962049_resend_count);
-					return -EIO;
-				} else {
-					pr_err("[%s] SLINK_TX_FULL debug return EIO(%d)\n", __func__, spi_962049_resend_count);
-#if 0/*enable resend*/
-					spi_962049_resend_count++;
-					/*enable resend*/
-					return -EAGAIN;
-#else
-					return -EIO;
-#endif
-				}
-			}
-			spi_tegra_readl_count++;
-
-		}
-		spi_962049_resend_count = 0;
-#else
 		while (!(test_val & SLINK_TX_FULL))
 			test_val = spi_tegra_readl(tspi, SLINK_STATUS);
-#endif
-
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 9;
-#endif
 	}
 
 	if (tspi->cur_direction & DATA_DIR_RX) {
 		/* Make the dma buffer to read by dma */
 		dma_sync_single_for_device(&tspi->pdev->dev, tspi->rx_buf_phys,
 				tspi->dma_buf_size, DMA_FROM_DEVICE);
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 10;
-#endif
+
 		tspi->rx_dma_req.size = len;
 		ret = tegra_dma_enqueue_req(tspi->rx_dma, &tspi->rx_dma_req);
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 11;
-#endif
 		if (ret < 0) {
 			dev_err(&tspi->pdev->dev,
 				"Error in starting rx dma error = %d\n", ret);
@@ -805,32 +658,17 @@ static int spi_tegra_start_dma_based_transfer(
 			return ret;
 		}
 	}
-#ifdef DEBUG_962049
-	g_spi_tegra_start_dma_based_transfer_debug_flag = 12;
-#endif
 	tspi->is_curr_dma_xfer = true;
 	if (tspi->is_packed) {
 		val |= SLINK_PACKED;
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 13;
-#endif
 		spi_tegra_writel(tspi, val, SLINK_DMA_CTL);
 		udelay(1);
-#ifdef DEBUG_962049
-		g_spi_tegra_start_dma_based_transfer_debug_flag = 14;
-#endif
 		wmb();
 	}
-#ifdef DEBUG_962049
-	g_spi_tegra_start_dma_based_transfer_debug_flag = 15;
-#endif
 	tspi->dma_control_reg = val;
 
 	val |= SLINK_DMA_EN;
 	spi_tegra_writel(tspi, val, SLINK_DMA_CTL);
-#ifdef DEBUG_962049
-	g_spi_tegra_start_dma_based_transfer_debug_flag = 17;
-#endif
 	return ret;
 }
 
@@ -840,9 +678,6 @@ static int spi_tegra_start_cpu_based_transfer(
 	unsigned long val;
 	unsigned curr_words;
 
-#ifdef DEBUG_962049
-	g_spi_tegra_start_cpu_based_transfer_debug_flag = 1;
-#endif
 	val = tspi->packed_size;
 	if (tspi->cur_direction & DATA_DIR_TX)
 		val |= SLINK_IE_TXC;
@@ -852,56 +687,25 @@ static int spi_tegra_start_cpu_based_transfer(
 
 	spi_tegra_writel(tspi, val, SLINK_DMA_CTL);
 	tspi->dma_control_reg = val;
-#ifdef DEBUG_962049
-	g_spi_tegra_start_cpu_based_transfer_debug_flag = 2;
-#endif
 
-	if (tspi->cur_direction & DATA_DIR_TX) {
-#ifdef DEBUG_962049
-		g_spi_tegra_start_cpu_based_transfer_debug_flag = 3;
-#endif
+	if (tspi->cur_direction & DATA_DIR_TX)
 		curr_words = spi_tegra_fill_tx_fifo_from_client_txbuf(tspi, t);
-#ifdef DEBUG_962049
-		g_spi_tegra_start_cpu_based_transfer_debug_flag = 4;
-#endif
-	} else {
+	else
 		curr_words = tspi->curr_dma_words;
-	}
-#ifdef DEBUG_962049
-	g_spi_tegra_start_cpu_based_transfer_debug_flag = 5;
-#endif
 	val |= SLINK_DMA_BLOCK_SIZE(curr_words - 1);
 	spi_tegra_writel(tspi, val, SLINK_DMA_CTL);
 	tspi->dma_control_reg = val;
-#ifdef DEBUG_962049
-	g_spi_tegra_start_cpu_based_transfer_debug_flag = 6;
-#endif
 
 	tspi->is_curr_dma_xfer = false;
 	if (tspi->is_packed) {
 		val |= SLINK_PACKED;
-#ifdef DEBUG_962049
-		g_spi_tegra_start_cpu_based_transfer_debug_flag = 7;
-#endif
 		spi_tegra_writel(tspi, val, SLINK_DMA_CTL);
 		udelay(1);
-#ifdef DEBUG_962049
-		g_spi_tegra_start_cpu_based_transfer_debug_flag = 8;
-#endif
 		wmb();
 	}
-#ifdef DEBUG_962049
-	g_spi_tegra_start_cpu_based_transfer_debug_flag = 9;
-#endif
 	tspi->dma_control_reg = val;
 	val |= SLINK_DMA_EN;
-#ifdef DEBUG_962049
-	g_spi_tegra_start_cpu_based_transfer_debug_flag = 10;
-#endif
 	spi_tegra_writel(tspi, val, SLINK_DMA_CTL);
-#ifdef DEBUG_962049
-	g_spi_tegra_start_cpu_based_transfer_debug_flag = 11;
-#endif
 	return 0;
 }
 
@@ -962,10 +766,6 @@ static void set_best_clk_source(struct spi_tegra_data *tspi,
 			tspi->parent_clk_list[final_index].parent_clk);
 	}
 }
-
-#ifdef WORKAROUND_962049
-static void spi_tegra_curr_transfer_complete(struct spi_tegra_data *tspi, unsigned err, unsigned cur_xfer_size, unsigned long *irq_flags);
-#endif
 
 static void spi_tegra_start_transfer(struct spi_device *spi,
 		    struct spi_transfer *t, bool is_first_of_msg,
@@ -1091,22 +891,8 @@ static void spi_tegra_start_transfer(struct spi_device *spi,
 	spi_tegra_writel(tspi, command2, SLINK_COMMAND2);
 	tspi->command2_reg = command2;
 
-#ifdef WORKAROUND_962049
-	if (total_fifo_words > SLINK_FIFO_DEPTH) {
-		ret = spi_tegra_start_dma_based_transfer(tspi, t);
-
-		 if ( ret == -EIO ) {
-			unsigned long flags;
-			pr_err("[%s] SLINK_TX_FULL debug ret=[%d]\n", __func__, ret);
-			spin_lock_irqsave(&tspi->lock, flags);
-			spi_tegra_curr_transfer_complete(tspi, true, t->len, &flags);
-			spin_unlock_irqrestore(&tspi->lock, flags);
-		}
-	}
-#else
 	if (total_fifo_words > SLINK_FIFO_DEPTH)
 		ret = spi_tegra_start_dma_based_transfer(tspi, t);
-#endif
 	else
 		ret = spi_tegra_start_cpu_based_transfer(tspi, t);
 	WARN_ON(ret < 0);
@@ -1174,61 +960,27 @@ static void tegra_spi_transfer_work(struct work_struct *work)
 
 	tspi = container_of(work, struct spi_tegra_data, spi_transfer_work);
 
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s+\n",  __func__);
-
-	g_tegra_spi_transfer_work_debug_flag = 1;
-#endif
-
 	spin_lock_irqsave(&tspi->lock, flags);
-#ifdef DEBUG_962049
-	g_tegra_spi_transfer_work_debug_flag = 2;
-#endif
 
 	if (tspi->is_transfer_in_progress || tspi->is_suspended) {
 		spin_unlock_irqrestore(&tspi->lock, flags);
-#ifdef DEBUG_962049
-		if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-			dev_info(&tspi->pdev->dev, "[debug_962049]%s-, tspi->is_transfer_in_progress=[%d],tspi->is_suspended=[%d]\n",  __func__, tspi->is_transfer_in_progress, tspi->is_suspended);
-		g_tegra_spi_transfer_work_debug_flag = 3;
-#endif
 		return;
 	}
 	if (list_empty(&tspi->queue)) {
-#ifdef DEBUG_962049
-		if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-			dev_info(&tspi->pdev->dev, "[debug_962049]%s-, list_empty\n",  __func__);
-		g_tegra_spi_transfer_work_debug_flag = 4;
-#endif
 		spin_unlock_irqrestore(&tspi->lock, flags);
 		return;
 	}
 
 	m = list_first_entry(&tspi->queue, struct spi_message, queue);
-#ifdef DEBUG_962049
-	g_tegra_spi_transfer_work_debug_flag = 5;
-#endif
 	spi = m->state;
 	single_xfer = list_is_singular(&m->transfers);
 	m->actual_length = 0;
 	m->status = 0;
 	t = list_first_entry(&m->transfers, struct spi_transfer, transfer_list);
 	tspi->is_transfer_in_progress = true;
-#ifdef DEBUG_962049
-	g_tegra_spi_transfer_work_debug_flag = 6;
-#endif
 
 	spin_unlock_irqrestore(&tspi->lock, flags);
-#ifdef DEBUG_962049
-	g_tegra_spi_transfer_work_debug_flag = 7;
-#endif
 	spi_tegra_start_transfer(spi, t, true, single_xfer);
-#ifdef DEBUG_962049
-	g_tegra_spi_transfer_work_debug_flag = 8;
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s-\n",  __func__);
-#endif
 }
 
 static int spi_tegra_transfer(struct spi_device *spi, struct spi_message *m)
@@ -1238,19 +990,9 @@ static int spi_tegra_transfer(struct spi_device *spi, struct spi_message *m)
 	unsigned long flags;
 	int was_empty;
 	int bytes_per_word;
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s+\n",  __func__);
-
-	g_spi_tegra_transfer_debug_flag = 1;
-#endif
 
 	if (list_empty(&m->transfers) || !m->complete)
 		return -EINVAL;
-
-#ifdef DEBUG_962049
-	g_spi_tegra_transfer_debug_flag = 2;
-#endif
 
 	list_for_each_entry(t, &m->transfers, transfer_list) {
 		if (/*t->bits_per_word < 0 ||*/ t->bits_per_word > 32)
@@ -1272,50 +1014,20 @@ static int spi_tegra_transfer(struct spi_device *spi, struct spi_message *m)
 			return -EINVAL;
 	}
 
-#ifdef DEBUG_962049
-	g_spi_tegra_transfer_debug_flag = 3;
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s: lock\n",  __func__);
-#endif
-
 	spin_lock_irqsave(&tspi->lock, flags);
-
-#ifdef DEBUG_962049
-	g_spi_tegra_transfer_debug_flag = 4;
-#endif
 
 	if (WARN_ON(tspi->is_suspended)) {
 		spin_unlock_irqrestore(&tspi->lock, flags);
-#ifdef DEBUG_962049
-		if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-			dev_info(&tspi->pdev->dev, "[debug_962049]%s-, tspi->is_suspended\n",  __func__);
-
-		g_spi_tegra_transfer_debug_flag = 5;
-#endif
 		return -EBUSY;
 	}
 
 	m->state = spi;
 	was_empty = list_empty(&tspi->queue);
 	list_add_tail(&m->queue, &tspi->queue);
-
-#ifdef DEBUG_962049
-	g_spi_tegra_transfer_debug_flag = 6;
-#endif
-
 	if (was_empty)
 		queue_work(tspi->spi_workqueue, &tspi->spi_transfer_work);
 
-#ifdef DEBUG_962049
-	g_spi_tegra_transfer_debug_flag = 7;
-#endif
-
 	spin_unlock_irqrestore(&tspi->lock, flags);
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s-\n",  __func__);
-	g_spi_tegra_transfer_debug_flag = 8;
-#endif
 	return 0;
 }
 
@@ -1326,12 +1038,6 @@ static void spi_tegra_curr_transfer_complete(struct spi_tegra_data *tspi,
 	struct spi_device *spi;
 	struct spi_transfer *t;
 	int single_xfer = 0;
-
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s+\n",  __func__);
-	g_spi_tegra_curr_transfer_complete_debug_flag = 1;
-#endif
 
 	/* Check if CS need to be toggele here */
 	if (tspi->cur && tspi->cur->cs_change &&
@@ -1356,23 +1062,11 @@ static void spi_tegra_curr_transfer_complete(struct spi_tegra_data *tspi,
 		return;
 	}
 	if (!list_is_last(&tspi->cur->transfer_list, &m->transfers)) {
-#ifdef DEBUG_962049
-		g_spi_tegra_curr_transfer_complete_debug_flag = 2;
-#endif
 		tspi->cur = list_first_entry(&tspi->cur->transfer_list,
 			struct spi_transfer, transfer_list);
 		spin_unlock_irqrestore(&tspi->lock, *irq_flags);
-#ifdef DEBUG_962049
-		g_spi_tegra_curr_transfer_complete_debug_flag = 3;
-#endif
 		spi_tegra_start_transfer(spi, tspi->cur, false, 0);
-#ifdef DEBUG_962049
-		g_spi_tegra_curr_transfer_complete_debug_flag = 4;
-#endif
 		spin_lock_irqsave(&tspi->lock, *irq_flags);
-#ifdef DEBUG_962049
-		g_spi_tegra_curr_transfer_complete_debug_flag = 5;
-#endif
 	} else {
 		list_del(&m->queue);
 		m->complete(m->context);
@@ -1383,12 +1077,6 @@ static void spi_tegra_curr_transfer_complete(struct spi_tegra_data *tspi,
 				spi_tegra_writel(tspi, tspi->def_command2_reg,
 						SLINK_COMMAND2);
 				tspi->is_transfer_in_progress = false;
-#ifdef DEBUG_962049
-				if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-					dev_info(&tspi->pdev->dev, "[debug_962049]%s-, tspi->is_suspended\n",  __func__);
-
-				g_spi_tegra_curr_transfer_complete_debug_flag = 6;
-#endif
 				return;
 			}
 			m = list_first_entry(&tspi->queue, struct spi_message,
@@ -1400,82 +1088,39 @@ static void spi_tegra_curr_transfer_complete(struct spi_tegra_data *tspi,
 
 			t = list_first_entry(&m->transfers, struct spi_transfer,
 						transfer_list);
-#ifdef DEBUG_962049
-			g_spi_tegra_curr_transfer_complete_debug_flag = 7;
-#endif
 			spin_unlock_irqrestore(&tspi->lock, *irq_flags);
-#ifdef DEBUG_962049
-			g_spi_tegra_curr_transfer_complete_debug_flag = 8;
-#endif
 			spi_tegra_start_transfer(spi, t, true, single_xfer);
-#ifdef DEBUG_962049
-			g_spi_tegra_curr_transfer_complete_debug_flag = 9;
-#endif
 			spin_lock_irqsave(&tspi->lock, *irq_flags);
-#ifdef DEBUG_962049
-			g_spi_tegra_curr_transfer_complete_debug_flag = 10;
-#endif
 		} else {
 			spi_tegra_writel(tspi, tspi->def_command_reg,
 								SLINK_COMMAND);
 			spi_tegra_writel(tspi, tspi->def_command2_reg,
 								SLINK_COMMAND2);
-#ifdef DEBUG_962049
-			g_spi_tegra_curr_transfer_complete_debug_flag = 11;
-#endif
 			/* Provide delay to stablize the signal state */
 			spin_unlock_irqrestore(&tspi->lock, *irq_flags);
 			udelay(10);
-#ifdef DEBUG_962049
-				g_spi_tegra_curr_transfer_complete_debug_flag = 13;
-#endif
 			if(!tspi->disable_runtime_pm)
 				spi_pm_runtime_put_sync(&tspi->pdev->dev);
-
-#ifdef DEBUG_962049
-			g_spi_tegra_curr_transfer_complete_debug_flag = 14;
-#endif
 			spin_lock_irqsave(&tspi->lock, *irq_flags);
-#ifdef DEBUG_962049
-			g_spi_tegra_curr_transfer_complete_debug_flag = 15;
-#endif
 			tspi->is_transfer_in_progress = false;
-
-#ifdef DEBUG_962049
-			g_spi_tegra_curr_transfer_complete_debug_flag = 16;
-#endif
-
 			/* Check if any new request has come between
 			 * clock disable */
 			queue_work(tspi->spi_workqueue,
 					&tspi->spi_transfer_work);
 		}
 	}
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s-\n",  __func__);
-	g_spi_tegra_curr_transfer_complete_debug_flag = 17;
-#endif
 	return;
 }
 
 static void tegra_spi_tx_dma_complete(struct tegra_dma_req *req)
 {
 	struct spi_tegra_data *tspi = req->dev;
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s\n",  __func__);
-#endif
 	complete(&tspi->tx_dma_complete);
 }
 
 static void tegra_spi_rx_dma_complete(struct tegra_dma_req *req)
 {
 	struct spi_tegra_data *tspi = req->dev;
-#ifdef DEBUG_962049
-	if ( g_enable_debug_962049 && tspi->pdev->id == 0)
-		dev_info(&tspi->pdev->dev, "[debug_962049]%s\n",  __func__);
-#endif
 	complete(&tspi->rx_dma_complete);
 }
 
