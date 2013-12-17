@@ -218,7 +218,7 @@ void sweep2wake_pwrtrigger(void) {
 
 static bool touchDebug = false;
 
-static bool calibration_control = false;
+static bool calibration_control = true;
 
 static void syn_page_select(struct i2c_client *client, uint8_t page)
 {
