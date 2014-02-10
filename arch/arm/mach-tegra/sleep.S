@@ -449,6 +449,7 @@ ENDPROC(tegra_cpu_pllp)
  * r2 = argument passed to smc
  */
 .macro smc_issue_smc tmp
+        .arch_extension sec
 	cpu_id	\tmp
 	cmp	\tmp, #0
 	bne	.
