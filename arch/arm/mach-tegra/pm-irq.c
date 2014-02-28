@@ -25,6 +25,7 @@
 #include <linux/moduleparam.h>
 #include <linux/seq_file.h>
 #include <linux/syscore_ops.h>
+#include <linux/wakeup_reason.h>
 
 #include <mach/iomap.h>
 
@@ -221,6 +222,7 @@ static void tegra_pm_irq_syscore_resume_helper(
 			continue;
 		}
 
+		log_wakeup_reason(irq);
 		desc = irq_to_desc(irq);
 		if (!desc || !desc->action || !desc->action->name) {
 			pr_info("[WAKEUP] Resume caused by WAKE%d, irq %d\n",
