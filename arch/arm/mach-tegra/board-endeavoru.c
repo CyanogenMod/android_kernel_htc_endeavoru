@@ -318,6 +318,9 @@ int plat_kim_resume(struct platform_device *pdev)
 }
 
 static struct wake_lock st_wk_lock;
+extern void blue_pincfg_uartc_suspend(void);
+extern void blue_pincfg_uartc_resume(void);
+extern void blue_pincfg_uartc_gpio_request(void);
 
 /* Release the wakelock when chip is asleep */
 static int plat_chip_asleep(struct kim_data_s * data)
@@ -336,6 +339,22 @@ static int plat_chip_awake(struct kim_data_s * data)
 	return 1;
 }
 
+static int plat_chip_disable(struct kim_data_s * data)
+{
+	pr_info("plat_chip_disable\n");
+	blue_pincfg_uartc_suspend();
+	wake_unlock(&st_wk_lock);
+	return 0;
+}
+
+static int plat_chip_enable(struct kim_data_s * data)
+{
+	pr_info("plat_chip_enable\n");
+	wake_lock(&st_wk_lock);
+	blue_pincfg_uartc_resume();
+	return 0;
+}
+
 struct ti_st_plat_data wilink_pdata = {
                 .nshutdown_gpio = 160,
                 .dev_name = "/dev/ttyHS2",
@@ -346,8 +365,8 @@ struct ti_st_plat_data wilink_pdata = {
                 .resume = plat_kim_resume,
 		.chip_asleep = plat_chip_asleep,
 		.chip_awake  = plat_chip_awake,
-		.chip_enable = plat_chip_awake,
-		.chip_disable = plat_chip_asleep,
+		.chip_enable = plat_chip_enable,
+		.chip_disable = plat_chip_disable,
 };
 
 static struct platform_device btwilink_device = {
@@ -363,11 +382,13 @@ static struct platform_device wl128x_device = {
 
 static noinline void __init endeavor_bt_wl128x(void)
 {
+	pr_info("%s\n", __func__);
 	wake_lock_init(&st_wk_lock, WAKE_LOCK_SUSPEND, "st_wake_lock");
 
         platform_device_register(&wl128x_device);
 	platform_device_register(&btwilink_device);
         tegra_gpio_enable(TEGRA_GPIO_PU0);
+	blue_pincfg_uartc_gpio_request();
 
         return;
 }
