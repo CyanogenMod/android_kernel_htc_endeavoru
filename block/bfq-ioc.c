@@ -353,7 +353,7 @@ static int bfq_cic_link(struct bfq_data *bfqd, struct io_context *ioc,
  */
 static inline void bfq_ioc_set_ioprio(struct io_context *ioc)
 {
-	call_for_each_cic(ioc, bfq_changed_ioprio);
+	call_for_each_cic(ioc, bfq_check_ioprio_change);
 }
 
 /**
