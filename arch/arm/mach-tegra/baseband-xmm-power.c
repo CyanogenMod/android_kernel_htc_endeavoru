@@ -1468,11 +1468,12 @@ static void baseband_xmm_power_L2_resume_work(struct work_struct *work)
 static void baseband_xmm_power_reset_on(void)
 {
 	/* reset / power on sequence */
+	gpio_set_value(baseband_power_driver_data->modem.xmm.bb_rst, 0);
 	msleep(40);
 	gpio_set_value(baseband_power_driver_data->modem.xmm.bb_rst, 1);
-	msleep(1);
+	mdelay(1);
 	gpio_set_value(baseband_power_driver_data->modem.xmm.bb_on, 1);
-	udelay(40);
+	udelay(70);
 	gpio_set_value(baseband_power_driver_data->modem.xmm.bb_on, 0);
 }
 
