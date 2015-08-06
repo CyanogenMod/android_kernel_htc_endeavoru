@@ -133,16 +133,16 @@ static void baseband_phy_init(void)
 	pr_info("%s\n", __func__);
 }
 
-static void baseband_phy_off(void)
-{
-	/* set AP2MDM_ACK2 high */
-	gpio_set_value(AP2MDM_ACK2, 1);
-}
-
 static void baseband_phy_on(void)
 {
 	/* set AP2MDM_ACK2 low */
 	gpio_set_value(AP2MDM_ACK2, 0);
+}
+
+static void baseband_phy_off(void)
+{
+	/* set AP2MDM_ACK2 high */
+	gpio_set_value(AP2MDM_ACK2, 1);
 }
 
 static void baseband_start(void)
@@ -162,6 +162,14 @@ static void baseband_reset(void)
 	gpio_set_value(MODEM_PWR_ON, 0);
 	mdelay(200);
 	gpio_set_value(MODEM_PWR_ON, 1);
+}
+
+static void baseband_stop(void)
+{
+	/* Baseband power off */
+	pr_info("%s\n", __func__);
+	gpio_set_value(MODEM_PWR_ON, 0);
+	mdelay(1);
 }
 
 static int baseband_init(void)
@@ -214,6 +222,7 @@ static const struct tegra_modem_operations baseband_operations = {
 	.init = baseband_init,
 	.start = baseband_start,
 	.reset = baseband_reset,
+	.stop = baseband_stop,
 };
 
 static struct tegra_usb_modem_power_platform_data baseband_pdata = {
