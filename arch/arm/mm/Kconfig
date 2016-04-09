@@ -676,7 +676,12 @@ config SWP_EMULATE
 	  perform SWP operations to uncached memory to deadlock.
 
 	  If unsure, say Y.
-
+config DIV_EMALUATE
+	bool "Emulate SDIV/UDIV instructions"
+	default y
+	help
+		Emulate SDIV/UDIV that are not present in some ARMv7-A CPUs
+		if unsure, say y
 config CPU_BIG_ENDIAN
 	bool "Build big-endian kernel"
 	depends on ARCH_SUPPORTS_BIG_ENDIAN
