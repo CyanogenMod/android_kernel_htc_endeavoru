@@ -34,7 +34,7 @@
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
 #include <linux/security.h>
-
+#include <linux/slab.h>
 #include "binder.h"
 
 static DEFINE_MUTEX(binder_lock);
